@@ -232,6 +232,35 @@ class AIMO3Solver:
                 )
 
     @staticmethod
+    def _has_verification_marker(text: str | None, marker: str) -> bool:
+        if not marker:
+            return False
+        return marker in (text or "")
+
+    def _should_early_stop(self, detailed: list[AttemptResult]) -> bool:
+        """Quality-aware early stop.
+
+        Default behavior requires at least one clean tool run for the leading candidate
+        before early stopping. This reduces the "wrong but popular" failure mode.
+        """
+
+        need = max(0, int(self.cfg.early_stop_min_verified))
+        target_votes = max(1, int(self.cfg.early_stop))
+        ranked_all = rank_candidates(detailed, filter_to_verified_if_any=False)
+        if not ranked_all:
+            return False
+
+        top_ans, top_d = ranked_all[0]
+        _ = top_ans
+        votes = int(top_d.get("votes", 0))
+        verified = int(top_d.get("verified", 0))
+        if votes < target_votes:
+            return False
+        if need <= 0:
+            return True
+        return verified >= need
+
+    @staticmethod
     def _probe_server_ready(client, attempts: int, sleep_s: float = 0.5) -> bool:
         """Return True if an OpenAI-compatible server responds to models.list()."""
 
@@ -307,15 +336,20 @@ class AIMO3Solver:
     def _initialize_kernels(self) -> None:
         self.sandbox_pool: queue.Queue[AIMO3Sandbox] = queue.Queue()
 
+        pool_size = max(1, min(int(self.cfg.sandbox_pool_size), int(self.cfg.workers)))
+
+        # Keep track of how many kernels we created for the pool.
+        self._sandbox_pool_target_size = pool_size
+
         def _create():
             return AIMO3Sandbox(timeout=self.cfg.jupyter_timeout)
 
-        init_workers = max(1, min(int(self.cfg.kernel_init_workers), int(self.cfg.workers)))
+        init_workers = max(1, min(int(self.cfg.kernel_init_workers), pool_size))
 
         # Creating many kernels in parallel can trigger port selection races in notebook runtimes.
         # Limit concurrency during initialization, while still creating the full pool size.
         with ThreadPoolExecutor(max_workers=init_workers) as ex:
-            futures = [ex.submit(_create) for _ in range(int(self.cfg.workers))]
+            futures = [ex.submit(_create) for _ in range(pool_size)]
             for f in as_completed(futures):
                 self.sandbox_pool.put(f.result())
 
@@ -342,6 +376,7 @@ class AIMO3Solver:
 
         local_tool: AIMO3Tool | None = None
         sandbox: AIMO3Sandbox | None = None
+        borrowed_from_pool = False
         python_calls = 0
         python_errors = 0
         total_tokens = 0
@@ -353,7 +388,16 @@ class AIMO3Solver:
         attempt_seed = int(math.pow(self.cfg.seed + attempt_index, 2))
 
         try:
-            sandbox = self.sandbox_pool.get(timeout=self.cfg.sandbox_timeout)
+            try:
+                sandbox = self.sandbox_pool.get(timeout=self.cfg.sandbox_timeout)
+                borrowed_from_pool = True
+            except queue.Empty:
+                if bool(getattr(self.cfg, "sandbox_create_on_exhaustion", True)):
+                    sandbox = AIMO3Sandbox(timeout=self.cfg.jupyter_timeout)
+                    borrowed_from_pool = False
+                else:
+                    raise
+
             local_tool = AIMO3Tool(local_jupyter_timeout=self.cfg.jupyter_timeout, tool_prompt=self.cfg.tool_prompt, sandbox=sandbox)
 
             messages = self.template.apply_chat_template(system_prompt, problem, local_tool.tool_config)
@@ -442,9 +486,13 @@ class AIMO3Solver:
             if local_tool is not None:
                 local_tool.close()
             if sandbox is not None:
-                with contextlib.suppress(Exception):
-                    sandbox.reset()
-                self.sandbox_pool.put(sandbox)
+                if borrowed_from_pool:
+                    with contextlib.suppress(Exception):
+                        sandbox.reset()
+                    self.sandbox_pool.put(sandbox)
+                else:
+                    with contextlib.suppress(Exception):
+                        sandbox.close()
 
         return AttemptResult(
             attempt=attempt_index + 1,
@@ -475,12 +523,16 @@ class AIMO3Solver:
 
         tasks: list[tuple[str, int, int]] = []
         base = int(self.cfg.second_stage_verify_attempt_base)
+        marker = str(getattr(self.cfg, "second_stage_verify_marker", "VERIFIED_OK"))
+        require_marker = bool(getattr(self.cfg, "second_stage_verify_require_marker", True))
         for ci, cand in enumerate(candidates):
             verify_problem = (
                 f"{user_input}\n\n"
                 f"Second-stage verification. Candidate answer: {cand}.\n"
                 "Task: verify the candidate using rigorous reasoning and the Python tool if needed.\n"
-                f"If and ONLY if you are fully convinced the correct final answer equals {cand}, output \\boxed{{{cand}}}.\n"
+                f"If and ONLY if you are fully convinced the correct final answer equals {cand}, do BOTH:\n"
+                f"- include the marker line: {marker}\n"
+                f"- then output exactly one boxed line: \\boxed{{{cand}}}\n"
                 "Otherwise output NOBOX (do NOT output any \\boxed{...})."
             )
             for rep in range(repeats):
@@ -497,7 +549,9 @@ class AIMO3Solver:
                     break
                 with contextlib.suppress(Exception):
                     r: AttemptResult = fut.result(timeout=max(0.0, verify_deadline - time.time()))
-                    if r.answer == cand:
+                    if r.answer == cand and r.stats.tool_verified:
+                        if require_marker and not self._has_verification_marker(r.output_text, marker):
+                            continue
                         supports[cand] = supports.get(cand, 0) + 1
 
         winners = sorted(supports.items(), key=lambda kv: kv[1], reverse=True)
@@ -565,8 +619,7 @@ class AIMO3Solver:
                     if r.answer is not None and isinstance(r.answer, int):
                         valid.append(r.answer)
 
-                    counts = Counter(valid).most_common(1)
-                    if counts and counts[0][1] >= int(self.cfg.early_stop):
+                    if self._should_early_stop(detailed):
                         stop_event.set()
                         break
 

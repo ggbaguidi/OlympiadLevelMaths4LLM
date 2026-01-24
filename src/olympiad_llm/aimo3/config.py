@@ -70,10 +70,20 @@ class AIMO3Config:
     buffer_tokens: int = 512
     batch_size: int = 256
     early_stop: int = 3
+    # Early-stop quality guardrails
+    # Require at least this many "clean tool" attempts (python_calls>0 and python_errors==0)
+    # for the leading candidate before we stop early.
+    # Set to 0 to revert to vote-only early stopping.
+    early_stop_min_verified: int = 1
     attempts: int = 8
     workers: int = 16
     # Concurrency used only during *kernel creation*. High values can cause port races.
     kernel_init_workers: int = 4
+    # How many sandbox kernels to keep warm in the pool.
+    # Creating `workers` kernels up-front can be expensive/unreliable in notebook runtimes.
+    sandbox_pool_size: int = 4
+    # If the pool is exhausted, allow creating an ephemeral sandbox for that attempt.
+    sandbox_create_on_exhaustion: bool = True
     turns: int = 128
     seed: int = 3
 
@@ -89,6 +99,11 @@ class AIMO3Config:
     # Second-stage verification
     second_stage_verify_enabled: bool = True
     second_stage_verify_top_k: int = 2
+    # Second-stage verification strength
+    # Require the model to include a marker in its assistant text when it has actually run checks.
+    # This is an internal protocol (not the final Kaggle answer), so adding a marker is safe.
+    second_stage_verify_marker: str = "VERIFIED_OK"
+    second_stage_verify_require_marker: bool = True
 
     # Reserve part of the per-problem time budget for verification.
     # This prevents the common failure mode: spending the entire budget on generation,
@@ -143,6 +158,7 @@ class AIMO3Config:
         attempts = _env_int("AIMO3_ATTEMPTS", AIMO3Config.attempts)
         workers = _env_int("AIMO3_WORKERS", AIMO3Config.workers)
         early_stop = _env_int("AIMO3_EARLY_STOP", AIMO3Config.early_stop)
+        early_stop_min_verified = _env_int("AIMO3_EARLY_STOP_MIN_VERIFIED", AIMO3Config.early_stop_min_verified)
 
         # Time budgets
         base_problem_timeout = _env_float("AIMO3_BASE_PROBLEM_TIMEOUT", AIMO3Config.base_problem_timeout)
@@ -183,6 +199,17 @@ class AIMO3Config:
         batch_size = _env_int("AIMO3_BATCH_SIZE", AIMO3Config.batch_size)
         gpu_mem = _env_float("AIMO3_GPU_MEMORY_UTILIZATION", AIMO3Config.gpu_memory_utilization)
         kernel_init_workers = _env_int("AIMO3_KERNEL_INIT_WORKERS", AIMO3Config.kernel_init_workers)
+        sandbox_pool_size = _env_int("AIMO3_SANDBOX_POOL_SIZE", AIMO3Config.sandbox_pool_size)
+        sandbox_create_on_exhaustion = (
+            os.getenv("AIMO3_SANDBOX_CREATE_ON_EXHAUSTION", "1").strip().lower() not in {"0", "false", "no"}
+        )
+
+        second_stage_verify_marker = os.getenv(
+            "AIMO3_SECOND_STAGE_MARKER", AIMO3Config.second_stage_verify_marker
+        ).strip() or AIMO3Config.second_stage_verify_marker
+        second_stage_verify_require_marker = (
+            os.getenv("AIMO3_SECOND_STAGE_REQUIRE_MARKER", "1").strip().lower() not in {"0", "false", "no"}
+        )
 
         return AIMO3Config(
             model_path=model_path,
@@ -197,9 +224,12 @@ class AIMO3Config:
             batch_size=batch_size,
             gpu_memory_utilization=gpu_mem,
             kernel_init_workers=kernel_init_workers,
+            sandbox_pool_size=sandbox_pool_size,
+            sandbox_create_on_exhaustion=sandbox_create_on_exhaustion,
             attempts=attempts,
             workers=workers,
             early_stop=early_stop,
+            early_stop_min_verified=early_stop_min_verified,
             base_problem_timeout=base_problem_timeout,
             high_problem_timeout=high_problem_timeout,
             notebook_limit=notebook_limit,
@@ -208,6 +238,8 @@ class AIMO3Config:
             second_stage_verify_top_k=second_stage_top_k,
             second_stage_verify_budget_cap=second_stage_cap,
             second_stage_verify_budget_fraction=second_stage_fraction,
+            second_stage_verify_marker=second_stage_verify_marker,
+            second_stage_verify_require_marker=second_stage_verify_require_marker,
             verification_reserve_fraction=verify_reserve_fraction,
             verification_reserve_cap=verify_reserve_cap,
             verification_reserve_min=verify_reserve_min,
