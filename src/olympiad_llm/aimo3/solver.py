@@ -27,7 +27,7 @@ from .vllm_server import VLLMServer
 from .wickelgren import augment_system_prompt
 from .protocol import with_protocol
 from .ranking import rank_candidates
-from .budget import compute_attempt_and_verify_deadlines
+from .budget import adaptive_verify_budget, compute_attempt_and_verify_deadlines, reserve_fraction_for_budget
 
 from .answer_extraction import AnswerExtractor
 from .attempts import AttemptResult, AttemptStats
@@ -363,6 +363,7 @@ class AIMO3Solver:
         problem: str,
         system_prompt: str,
         attempt_index: int,
+        attempt_tag: str | None,
         stop_event: threading.Event,
         deadline: float,
     ) -> AttemptResult:
@@ -499,6 +500,7 @@ class AIMO3Solver:
             answer=final_answer,
             stats=AttemptStats(token_count=total_tokens, python_calls=python_calls, python_errors=python_errors),
             output_text=text_tail,
+            tag=attempt_tag,
         )
 
     @staticmethod
@@ -540,7 +542,15 @@ class AIMO3Solver:
 
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futures = [
-                ex.submit(self._process_attempt, vp, TIR_PROMPT_VERIFICATION, attempt_idx, stop_event, verify_deadline)
+                ex.submit(
+                    self._process_attempt,
+                    vp,
+                    TIR_PROMPT_VERIFICATION,
+                    attempt_idx,
+                    f"second_stage_verify:cand={_cand}",
+                    stop_event,
+                    verify_deadline,
+                )
                 for (vp, _cand, attempt_idx) in tasks
             ]
 
@@ -583,17 +593,23 @@ class AIMO3Solver:
         overall_deadline = now + budget
 
         # Keep time for verification by using an earlier deadline for attempt generation.
+        reserve_fraction_eff = reserve_fraction_for_budget(
+            budget_s=budget,
+            base_fraction=float(self.cfg.verification_reserve_fraction),
+        )
         attempt_deadline, deadline = compute_attempt_and_verify_deadlines(
             now=now,
             overall_deadline=overall_deadline,
-            reserve_fraction=float(self.cfg.verification_reserve_fraction),
+            reserve_fraction=float(reserve_fraction_eff),
             reserve_cap_s=float(self.cfg.verification_reserve_cap),
             reserve_min_s=float(self.cfg.verification_reserve_min),
         )
 
-        tasks: list[tuple[str, int]] = []
+        prompt_names = ["standard", "code_first", "analytic", "verification"]
+        tasks: list[tuple[str, int, str]] = []
         for attempt_index in range(int(self.cfg.attempts)):
             base = TIR_PROMPTS[attempt_index % len(TIR_PROMPTS)]
+            base_name = prompt_names[attempt_index % len(prompt_names)]
             sys_prompt = (
                 augment_system_prompt(base, attempt_index=attempt_index)
                 if bool(self.cfg.wickelgren_strategies_enabled)
@@ -601,7 +617,7 @@ class AIMO3Solver:
             )
             if bool(self.cfg.protocol_enabled):
                 sys_prompt = with_protocol(sys_prompt)
-            tasks.append((sys_prompt, attempt_index))
+            tasks.append((sys_prompt, attempt_index, base_name))
 
         detailed: list[AttemptResult] = []
         valid: list[int] = []
@@ -609,8 +625,8 @@ class AIMO3Solver:
 
         with ThreadPoolExecutor(max_workers=int(self.cfg.workers)) as ex:
             futures = [
-                ex.submit(self._process_attempt, user_input, sys_prompt, attempt_idx, stop_event, attempt_deadline)
-                for (sys_prompt, attempt_idx) in tasks
+                ex.submit(self._process_attempt, user_input, sys_prompt, attempt_idx, attempt_tag, stop_event, attempt_deadline)
+                for (sys_prompt, attempt_idx, attempt_tag) in tasks
             ]
             for fut in as_completed(futures):
                 with contextlib.suppress(Exception):
@@ -635,35 +651,39 @@ class AIMO3Solver:
                     if bool(self.cfg.wickelgren_strategies_enabled)
                     else TIR_PROMPT_VERIFICATION,
                     int(self.cfg.attempts) + 0,
+                    "verification",
                 ),
                 (
                     augment_system_prompt(TIR_PROMPT_ANALYTIC, attempt_index=int(self.cfg.attempts) + 1)
                     if bool(self.cfg.wickelgren_strategies_enabled)
                     else TIR_PROMPT_ANALYTIC,
                     int(self.cfg.attempts) + 1,
+                    "analytic",
                 ),
                 (
                     augment_system_prompt(TIR_PROMPT_CODE_FIRST, attempt_index=int(self.cfg.attempts) + 2)
                     if bool(self.cfg.wickelgren_strategies_enabled)
                     else TIR_PROMPT_CODE_FIRST,
                     int(self.cfg.attempts) + 2,
+                    "code_first",
                 ),
                 (
                     augment_system_prompt(TIR_PROMPT_STANDARD, attempt_index=int(self.cfg.attempts) + 3)
                     if bool(self.cfg.wickelgren_strategies_enabled)
                     else TIR_PROMPT_STANDARD,
                     int(self.cfg.attempts) + 3,
+                    "standard",
                 ),
             ]
 
             # Apply protocol to retry prompts too.
             if bool(self.cfg.protocol_enabled):
-                retry_tasks = [(with_protocol(p), idx) for (p, idx) in retry_tasks]
+                retry_tasks = [(with_protocol(p), idx, tag) for (p, idx, tag) in retry_tasks]
 
             with ThreadPoolExecutor(max_workers=min(4, int(self.cfg.workers))) as ex:
                 futures = [
-                    ex.submit(self._process_attempt, user_input, sys_prompt, attempt_idx, stop_event, retry_deadline)
-                    for (sys_prompt, attempt_idx) in retry_tasks
+                    ex.submit(self._process_attempt, user_input, sys_prompt, attempt_idx, attempt_tag, stop_event, retry_deadline)
+                    for (sys_prompt, attempt_idx, attempt_tag) in retry_tasks
                 ]
                 for fut in as_completed(futures):
                     with contextlib.suppress(Exception):
@@ -697,9 +717,20 @@ class AIMO3Solver:
 
             remaining = deadline - time.time()
             if need_verify and remaining >= float(self.cfg.second_stage_verify_min_remaining):
-                verify_budget = min(
-                    float(self.cfg.second_stage_verify_budget_cap),
-                    remaining * float(self.cfg.second_stage_verify_budget_fraction),
+                mult = 1.0
+                if int(top_d.get("verified", 0)) <= 0:
+                    mult *= 1.50
+                if votes_gap <= int(self.cfg.second_stage_verify_trigger_votes_gap):
+                    mult *= 1.25
+                if int(top_d.get("verified", 0)) > 0 and votes_gap >= 3:
+                    mult *= 0.80
+
+                verify_budget = adaptive_verify_budget(
+                    remaining_s=remaining,
+                    base_fraction=float(self.cfg.second_stage_verify_budget_fraction),
+                    cap_s=float(self.cfg.second_stage_verify_budget_cap),
+                    multiplier=mult,
+                    min_s=float(self.cfg.second_stage_verify_min_effective_time),
                 )
                 verify_deadline = time.time() + verify_budget
                 top_k = max(2, int(self.cfg.second_stage_verify_top_k))

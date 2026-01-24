@@ -30,3 +30,5 @@ class AttemptResult:
     stats: AttemptStats = AttemptStats()
     # Optional: final assistant text (or last chunk) for auditing.
     output_text: str | None = None
+    # Optional: label for the attempt (e.g., which prompt family / strategy pack).
+    tag: str | None = None

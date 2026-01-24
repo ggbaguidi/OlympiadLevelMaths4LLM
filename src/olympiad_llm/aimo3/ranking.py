@@ -19,6 +19,9 @@ class CandidateStats:
     answer: int
     votes: int
     verified: int
+    tool_attempts: int
+    tool_error_attempts: int
+    tag_diversity: int
     calls: int
     errors: int
     len_sum: int
@@ -32,6 +35,9 @@ class CandidateStats:
         return {
             "votes": int(self.votes),
             "verified": int(self.verified),
+            "tool_attempts": int(self.tool_attempts),
+            "tool_error_attempts": int(self.tool_error_attempts),
+            "tag_diversity": int(self.tag_diversity),
             "calls": int(self.calls),
             "errors": int(self.errors),
             "avg_len": float(self.avg_len),
@@ -69,6 +75,7 @@ def aggregate_candidates(detailed_results: list[Any]) -> list[CandidateStats]:
     """Aggregate per-attempt results into per-answer candidate stats."""
 
     stats: dict[int, dict[str, int]] = {}
+    tags: dict[int, set[str]] = {}
 
     for rec in detailed_results:
         ar = _coerce_attempt(rec)
@@ -84,16 +91,33 @@ def aggregate_candidates(detailed_results: list[Any]) -> list[CandidateStats]:
 
         a = int(ar.answer)
         if a not in stats:
-            stats[a] = {"votes": 0, "verified": 0, "calls": 0, "errors": 0, "len_sum": 0, "n": 0}
+            stats[a] = {
+                "votes": 0,
+                "verified": 0,
+                "tool_attempts": 0,
+                "tool_error_attempts": 0,
+                "calls": 0,
+                "errors": 0,
+                "len_sum": 0,
+                "n": 0,
+            }
+            tags[a] = set()
 
         s = stats[a]
         s["votes"] += 1
         s["calls"] += int(ar.stats.python_calls)
         s["errors"] += int(ar.stats.python_errors)
+        if int(ar.stats.python_calls) > 0:
+            s["tool_attempts"] += 1
+        if int(ar.stats.python_errors) > 0:
+            s["tool_error_attempts"] += 1
         s["len_sum"] += int(ar.stats.token_count)
         s["n"] += 1
         if ar.stats.tool_verified:
             s["verified"] += 1
+
+        if getattr(ar, "tag", None):
+            tags[a].add(str(ar.tag))
 
     out: list[CandidateStats] = []
     for a, s in stats.items():
@@ -102,6 +126,9 @@ def aggregate_candidates(detailed_results: list[Any]) -> list[CandidateStats]:
                 answer=a,
                 votes=int(s["votes"]),
                 verified=int(s["verified"]),
+                tool_attempts=int(s["tool_attempts"]),
+                tool_error_attempts=int(s["tool_error_attempts"]),
+                tag_diversity=len(tags.get(a, set())),
                 calls=int(s["calls"]),
                 errors=int(s["errors"]),
                 len_sum=int(s["len_sum"]),
@@ -133,13 +160,17 @@ def rank_candidates(
 
     # Verified-first, then votes.
     # Penalize errors strongly; prefer candidates that used Python (calls) and have shorter completions on average.
+    # Prefer candidates that appear across different prompt/strategy tags (robustness signal).
     candidates_sorted = sorted(
         candidates,
         key=lambda c: (
             int(c.verified > 0),
             c.verified,
+            c.tag_diversity,
             c.votes,
             -c.errors,
+            -c.tool_error_attempts,
+            c.tool_attempts,
             c.calls,
             -c.avg_len,
         ),
