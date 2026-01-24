@@ -1,0 +1,2 @@
+"""Olympiad LLM solving scaffold."""
+
