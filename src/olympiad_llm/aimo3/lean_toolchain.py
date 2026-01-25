@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -34,6 +35,31 @@ class LeanSmokeTestResult:
     stdout: str
     stderr: str
     elapsed_s: float
+
+
+_LEAN_CALL_RE = re.compile(
+    r"(?is)"  # ignorecase + dotall
+    r"(" 
+    r"subprocess\.(run|call|check_output|check_call|Popen)"  # common subprocess entrypoints
+    r"|os\.system"
+    r")"
+)
+
+_LEAN_WORD_RE = re.compile(r"(?i)\b(lean|lake)\b")
+
+
+def detect_lean_invocation(python_code: str | None) -> bool:
+    """Best-effort heuristic: does this python tool call likely invoke lean/lake?"""
+
+    s = (python_code or "")
+    if not s.strip():
+        return False
+    if _LEAN_WORD_RE.search(s) is None:
+        return False
+    # Require some indication it's a shell/subprocess invocation.
+    if _LEAN_CALL_RE.search(s) is None and "!lean" not in s and "!lake" not in s:
+        return False
+    return True
 
 
 def _is_truthy(v: str | None) -> bool:

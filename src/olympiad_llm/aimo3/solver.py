@@ -249,6 +249,7 @@ class AIMO3Solver:
             "ToolVerified": bool(r.stats.tool_verified),
             "PyCalls": int(r.stats.python_calls),
             "PyErrors": int(r.stats.python_errors),
+            "LeanCalls": int(getattr(r.stats, "lean_calls", 0) or 0),
             "Tokens": int(r.stats.token_count),
             "Snippet": snippet,
         }
@@ -466,7 +467,7 @@ class AIMO3Solver:
             return AttemptResult(
                 attempt=attempt_index + 1,
                 answer=None,
-                stats=AttemptStats(token_count=0, python_calls=0, python_errors=0),
+                stats=AttemptStats(token_count=0, python_calls=0, python_errors=0, lean_calls=0),
                 output_text=None,
             )
 
@@ -475,6 +476,7 @@ class AIMO3Solver:
         borrowed_from_pool = False
         python_calls = 0
         python_errors = 0
+        lean_calls = 0
         consecutive_python_errors = 0
         total_tokens = 0
         final_answer: int | None = None
@@ -627,6 +629,13 @@ class AIMO3Solver:
                     if call.text:
                         transcript_python_calls.append(str(call.text))
 
+                    # Best-effort: count tool calls that likely invoke Lean/Lake.
+                    with contextlib.suppress(Exception):
+                        from .lean_toolchain import detect_lean_invocation
+
+                        if detect_lean_invocation(call.text):
+                            lean_calls += 1
+
                     python_calls += 1
                     tool_responses = local_tool.process_sync_plus(call.message)
                     # tool_responses is typically a list[Message]
@@ -757,7 +766,12 @@ class AIMO3Solver:
         result = AttemptResult(
             attempt=attempt_index + 1,
             answer=final_answer,
-            stats=AttemptStats(token_count=total_tokens, python_calls=python_calls, python_errors=python_errors),
+            stats=AttemptStats(
+                token_count=total_tokens,
+                python_calls=python_calls,
+                python_errors=python_errors,
+                lean_calls=lean_calls,
+            ),
             output_text=text_tail,
             tag=(
                 (str(attempt_tag) + "|tool_abort")
@@ -788,6 +802,7 @@ class AIMO3Solver:
                 "answer": (int(result.answer) if isinstance(result.answer, int) else None),
                 "token_count": int(result.stats.token_count),
                 "python_calls": int(result.stats.python_calls),
+                "lean_calls": int(getattr(result.stats, "lean_calls", 0) or 0),
                 "python_errors": int(result.stats.python_errors),
                 "aborted_for_tool_errors": bool(aborted_for_tool_errors),
                 "had_exception": bool(had_exception),

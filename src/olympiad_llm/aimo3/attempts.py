@@ -10,6 +10,8 @@ class AttemptStats:
     token_count: int = 0
     python_calls: int = 0
     python_errors: int = 0
+    # Heuristic count of python tool calls that likely invoked Lean/Lake.
+    lean_calls: int = 0
 
     @property
     def tool_verified(self) -> bool:

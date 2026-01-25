@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from olympiad_llm.aimo3.lean_toolchain import ensure_lean_toolchain, lean_smoke_test
+from olympiad_llm.aimo3.lean_toolchain import ensure_lean_toolchain, lean_smoke_test, detect_lean_invocation
 
 
 def _make_dummy_lean_archive(tmp_path: Path) -> Path:
@@ -216,3 +216,19 @@ def test_lean_smoke_test_nonzero_exit(tmp_path: Path, monkeypatch: pytest.Monkey
     r = lean_smoke_test(work_dir=str(tmp_path / "smoke"), timeout_s=2.0, verbose=False)
     assert r.ok is False
     assert r.exit_code == 7
+
+
+def test_detect_lean_invocation_subprocess_list() -> None:
+    code = "import subprocess\nsubprocess.run(['lean','Foo.lean'])\n"
+    assert detect_lean_invocation(code) is True
+
+
+def test_detect_lean_invocation_os_system() -> None:
+    code = "import os\nos.system('lake --version')\n"
+    assert detect_lean_invocation(code) is True
+
+
+def test_detect_lean_invocation_false_positive_guard() -> None:
+    # Mentioning the word without a subprocess/system call shouldn't count.
+    code = "# we will use lean later\nprint('lean')\n"
+    assert detect_lean_invocation(code) is False
