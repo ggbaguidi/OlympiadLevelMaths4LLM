@@ -18,7 +18,7 @@ class AIMO3Config:
     system_prompt: str = TIR_PROMPT_STANDARD
     tool_prompt: str = ENHANCED_TOOL_INSTRUCTION
     preference_prompt: str = (
-        "You have access to `math`, `numpy`, `sympy`, `mpmath`, `scipy`, `itertools`, and `collections` for:\n\n"
+        "You have access to `math`, `numpy`, `sympy`, `mpmath`, `scipy`, `ortools`, `itertools`, and `collections` for:\n\n"
         "# Symbolic Computation (sympy):\n"
         "- Algebraic manipulation and simplification\n"
         "- Solving equations and systems of equations\n"
@@ -40,6 +40,12 @@ class AIMO3Config:
         "# Scientific computing (scipy) (import explicitly if needed):\n"
         "- Optimization, root finding, numerical integration\n"
         "- Linear algebra routines, statistics, special functions\n\n"
+
+        "# Optimization / CP-SAT (ortools) (import explicitly if needed):\n"
+        "- Constraint programming (CP-SAT) for discrete optimization / feasibility\n"
+        "- Useful for small/medium combinatorics, scheduling, exact search with pruning\n"
+        "- Typical entrypoint: from ortools.sat.python import cp_model\n"
+        "- Keep models small; add bounds/constraints; print solver status and solution\n\n"
 
         "# Discrete / combinatorics helpers (itertools, collections):\n"
         "- Efficient iteration over combinations/permutations/products\n"

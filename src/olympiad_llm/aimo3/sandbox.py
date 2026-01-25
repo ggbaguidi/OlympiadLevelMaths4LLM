@@ -66,6 +66,11 @@ class AIMO3Sandbox:
             "from fractions import Fraction\n"
             'import mpmath\n'
             'mpmath.mp.dps = 128\n'
+            "try:\n"
+            "    import ortools  # noqa: F401\n"
+            "    from ortools.sat.python import cp_model  # noqa: F401\n"
+            "except Exception:\n"
+            "    pass\n"
         )
 
     @staticmethod
@@ -155,6 +160,11 @@ class AIMO3Sandbox:
             "from fractions import Fraction\n"
             'import mpmath\n'
             'mpmath.mp.dps = 128\n'
+            "try:\n"
+            "    import ortools  # noqa: F401\n"
+            "    from ortools.sat.python import cp_model  # noqa: F401\n"
+            "except Exception:\n"
+            "    pass\n"
         )
 
     def close(self) -> None:

@@ -83,7 +83,7 @@ ENHANCED_TOOL_INSTRUCTION = """Use this tool to execute Python code for mathemat
 **CAPABILITIES:**
 - Stateful Jupyter notebook (variables persist across calls)
 - Pre-loaded: math, itertools, collections, numpy as np, sympy as sp, mpmath as mp, Fraction
-    (Other libraries like scipy may be available but you should import them explicitly.)
+    (Other libraries like scipy/ortools may be available but you should import them explicitly.)
 
 **BEST PRACTICES:**
 1. Use print() to see results
@@ -93,6 +93,8 @@ ENHANCED_TOOL_INSTRUCTION = """Use this tool to execute Python code for mathemat
 3. For large numbers: use modular arithmetic
 4. For symbolic: use sp.solve, sp.simplify, sp.factor
 5. For numerical (high precision): use mp.mpf / mp.nsum / mp.quad and set mp.mp.dps
+5b. For discrete optimization/feasibility: consider OR-Tools CP-SAT:
+    - from ortools.sat.python import cp_model
 6. Wrap fragile computations in try/except and print intermediate checkpoints
 7. Verify answer is integer in [0, 99999] before boxing
 """.strip()
