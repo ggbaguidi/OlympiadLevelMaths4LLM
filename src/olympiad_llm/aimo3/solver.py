@@ -32,7 +32,12 @@ from .budget import adaptive_verify_budget, compute_attempt_and_verify_deadlines
 from .answer_extraction import AnswerExtractor
 from .attempts import AttemptResult, AttemptStats
 from .trace import TraceRecorder, stable_problem_id
-from .recovery import ToolRecoveryPolicy, should_abort_attempt, should_recycle_sandbox
+from .recovery import (
+    ToolRecoveryPolicy,
+    should_abort_attempt,
+    should_recycle_sandbox,
+    should_schedule_recovery_attempt,
+)
 
 
 def _require_openai():
@@ -406,6 +411,7 @@ class AIMO3Solver:
         )
 
         had_exception = False
+        aborted_for_tool_errors = False
 
         try:
             try:
@@ -511,6 +517,7 @@ class AIMO3Solver:
                         consecutive_python_errors=consecutive_python_errors,
                         policy=policy,
                     ):
+                        aborted_for_tool_errors = True
                         break
 
         except Exception:
@@ -552,7 +559,11 @@ class AIMO3Solver:
             answer=final_answer,
             stats=AttemptStats(token_count=total_tokens, python_calls=python_calls, python_errors=python_errors),
             output_text=text_tail,
-            tag=attempt_tag,
+            tag=(
+                (str(attempt_tag) + "|tool_abort")
+                if (attempt_tag and aborted_for_tool_errors and "tool_abort" not in str(attempt_tag))
+                else attempt_tag
+            ),
         )
 
     @staticmethod
@@ -702,13 +713,39 @@ class AIMO3Solver:
         )
 
         with ThreadPoolExecutor(max_workers=int(self.cfg.workers)) as ex:
-            futures = [
-                ex.submit(self._process_attempt, user_input, sys_prompt, attempt_idx, attempt_tag, stop_event, attempt_deadline)
-                for (sys_prompt, attempt_idx, attempt_tag) in tasks
-            ]
-            for fut in as_completed(futures):
+            # Dynamic scheduling allows recovery attempts to reuse freed worker capacity.
+            base_tasks = list(tasks)
+            next_i = 0
+            futures = set()
+
+            def _submit_one(sys_prompt: str, attempt_idx: int, attempt_tag: str) -> None:
+                futures.add(
+                    ex.submit(
+                        self._process_attempt,
+                        user_input,
+                        sys_prompt,
+                        attempt_idx,
+                        attempt_tag,
+                        stop_event,
+                        attempt_deadline,
+                    )
+                )
+
+            # Seed the executor.
+            warm = min(int(self.cfg.workers), len(base_tasks))
+            for _ in range(warm):
+                sys_prompt, attempt_idx, attempt_tag = base_tasks[next_i]
+                next_i += 1
+                _submit_one(sys_prompt, attempt_idx, attempt_tag)
+
+            recovery_left = int(getattr(self.cfg, "recovery_attempts_cap", 0) or 0)
+
+            while futures:
                 with contextlib.suppress(Exception):
-                    r: AttemptResult = fut.result()
+                    # Wait for one future to complete.
+                    done = next(as_completed(futures))
+                    futures.remove(done)
+                    r: AttemptResult = done.result()
                     detailed.append(r)
                     if r.answer is not None and isinstance(r.answer, int):
                         valid.append(r.answer)
@@ -716,6 +753,38 @@ class AIMO3Solver:
                     if self._should_early_stop(detailed):
                         stop_event.set()
                         break
+
+                    # Schedule next base task (if any).
+                    if (not stop_event.is_set()) and time.time() <= attempt_deadline and next_i < len(base_tasks):
+                        sys_prompt, attempt_idx, attempt_tag = base_tasks[next_i]
+                        next_i += 1
+                        _submit_one(sys_prompt, attempt_idx, attempt_tag)
+
+                    # If we saw tool instability, spend a little extra budget on a recovery attempt.
+                    if (
+                        bool(getattr(self.cfg, "recovery_attempts_enabled", True))
+                        and recovery_left > 0
+                        and (not stop_event.is_set())
+                    ):
+                        remaining_s = float(attempt_deadline - time.time())
+                        if should_schedule_recovery_attempt(
+                            result=r,
+                            remaining_s=remaining_s,
+                            recovery_trigger_python_errors=int(getattr(self.cfg, "recovery_trigger_python_errors", 0) or 0),
+                            recovery_min_remaining_s=float(getattr(self.cfg, "recovery_min_remaining_s", 0.0) or 0.0),
+                        ):
+                            recovery_left -= 1
+                            # Use a conservative system prompt: discourage long tool sessions.
+                            recovery_prompt = (
+                                TIR_PROMPT_ANALYTIC
+                                + "\n\nRecovery mode: The python tool seems unstable. Prefer reasoning-first. "
+                                "If you use python, run very small snippets and restart from scratch if errors persist."
+                            )
+                            if bool(self.cfg.protocol_enabled):
+                                recovery_prompt = with_protocol(recovery_prompt)
+                            attempt_idx = int(self.cfg.attempts) + (int(self.cfg.recovery_attempts_cap) - recovery_left)
+                            attempt_tag = "recovery|pack=recovery|card=tool_instability"
+                            _submit_one(recovery_prompt, attempt_idx, attempt_tag)
 
         self.problems_remaining = max(0, int(self.problems_remaining) - 1)
 

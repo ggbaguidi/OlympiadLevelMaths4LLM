@@ -9,6 +9,8 @@ or recycle a sandbox.
 
 from dataclasses import dataclass
 
+from .attempts import AttemptResult
+
 
 @dataclass(frozen=True)
 class ToolRecoveryPolicy:
@@ -41,4 +43,34 @@ def should_recycle_sandbox(*, python_errors: int, had_exception: bool, policy: T
     pe = int(python_errors)
     if int(policy.recycle_sandbox_after_python_errors) > 0 and pe >= int(policy.recycle_sandbox_after_python_errors):
         return True
+    return False
+
+
+def should_schedule_recovery_attempt(
+    *,
+    result: AttemptResult,
+    remaining_s: float,
+    recovery_trigger_python_errors: int,
+    recovery_min_remaining_s: float,
+) -> bool:
+    """Return True if we should schedule a follow-up recovery attempt.
+
+    This is intentionally problem-agnostic.
+    """
+
+    if float(remaining_s) < float(recovery_min_remaining_s):
+        return False
+
+    # If we already got a valid answer, don't schedule a recovery.
+    if isinstance(result.answer, int):
+        return False
+
+    tag = str(getattr(result, "tag", "") or "")
+    if "tool_abort" in tag:
+        return True
+
+    pe = int(result.stats.python_errors)
+    if int(recovery_trigger_python_errors) > 0 and pe >= int(recovery_trigger_python_errors):
+        return True
+
     return False

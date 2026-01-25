@@ -1,4 +1,6 @@
 from olympiad_llm.aimo3.recovery import ToolRecoveryPolicy, should_abort_attempt, should_recycle_sandbox
+from olympiad_llm.aimo3.recovery import should_schedule_recovery_attempt
+from olympiad_llm.aimo3.attempts import AttemptResult, AttemptStats
 
 
 def test_should_abort_attempt_total_errors():
@@ -22,3 +24,43 @@ def test_should_recycle_sandbox_on_many_errors():
     policy = ToolRecoveryPolicy(recycle_sandbox_after_python_errors=4)
     assert not should_recycle_sandbox(python_errors=3, had_exception=False, policy=policy)
     assert should_recycle_sandbox(python_errors=4, had_exception=False, policy=policy)
+
+
+def test_should_schedule_recovery_attempt_requires_time_and_no_answer():
+    r = AttemptResult(attempt=1, answer=None, stats=AttemptStats(token_count=0, python_calls=1, python_errors=3), tag="x")
+    assert not should_schedule_recovery_attempt(
+        result=r,
+        remaining_s=5.0,
+        recovery_trigger_python_errors=3,
+        recovery_min_remaining_s=10.0,
+    )
+
+
+def test_should_schedule_recovery_attempt_triggers_on_tool_abort_tag():
+    r = AttemptResult(attempt=1, answer=None, stats=AttemptStats(token_count=0, python_calls=1, python_errors=1), tag="x|tool_abort")
+    assert should_schedule_recovery_attempt(
+        result=r,
+        remaining_s=30.0,
+        recovery_trigger_python_errors=10,
+        recovery_min_remaining_s=10.0,
+    )
+
+
+def test_should_schedule_recovery_attempt_triggers_on_error_count():
+    r = AttemptResult(attempt=1, answer=None, stats=AttemptStats(token_count=0, python_calls=3, python_errors=4), tag="x")
+    assert should_schedule_recovery_attempt(
+        result=r,
+        remaining_s=30.0,
+        recovery_trigger_python_errors=3,
+        recovery_min_remaining_s=10.0,
+    )
+
+
+def test_should_schedule_recovery_attempt_not_when_answer_present():
+    r = AttemptResult(attempt=1, answer=123, stats=AttemptStats(token_count=0, python_calls=0, python_errors=0), tag="x|tool_abort")
+    assert not should_schedule_recovery_attempt(
+        result=r,
+        remaining_s=30.0,
+        recovery_trigger_python_errors=1,
+        recovery_min_remaining_s=10.0,
+    )

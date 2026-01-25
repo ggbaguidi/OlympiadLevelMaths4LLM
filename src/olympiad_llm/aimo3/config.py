@@ -109,6 +109,14 @@ class AIMO3Config:
     # If a sandbox produced many tool errors, consider it "poisoned" and recycle it.
     # Recycling means closing it and creating a fresh sandbox to keep the pool healthy.
     recycle_sandbox_after_python_errors: int = 4
+
+    # Recovery attempts (general robustness)
+    # If an attempt aborts due to tool errors (or is very error-heavy), optionally schedule
+    # an extra "recovery" attempt to salvage a valid answer.
+    recovery_attempts_enabled: bool = True
+    recovery_attempts_cap: int = 2
+    recovery_trigger_python_errors: int = 3
+    recovery_min_remaining_s: float = 15.0
     turns: int = 128
     seed: int = 3
 
@@ -252,6 +260,17 @@ class AIMO3Config:
             "AIMO3_RECYCLE_SANDBOX_AFTER_PYTHON_ERRORS", AIMO3Config.recycle_sandbox_after_python_errors
         )
 
+        recovery_attempts_enabled = (
+            os.getenv("AIMO3_RECOVERY_ATTEMPTS_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+        )
+        recovery_attempts_cap = _env_int("AIMO3_RECOVERY_ATTEMPTS_CAP", AIMO3Config.recovery_attempts_cap)
+        recovery_trigger_python_errors = _env_int(
+            "AIMO3_RECOVERY_TRIGGER_PYTHON_ERRORS", AIMO3Config.recovery_trigger_python_errors
+        )
+        recovery_min_remaining_s = _env_float(
+            "AIMO3_RECOVERY_MIN_REMAINING_S", AIMO3Config.recovery_min_remaining_s
+        )
+
         second_stage_verify_marker = os.getenv(
             "AIMO3_SECOND_STAGE_MARKER", AIMO3Config.second_stage_verify_marker
         ).strip() or AIMO3Config.second_stage_verify_marker
@@ -282,6 +301,10 @@ class AIMO3Config:
             abort_attempt_after_python_errors=abort_attempt_after_python_errors,
             abort_attempt_after_consecutive_python_errors=abort_attempt_after_consecutive_python_errors,
             recycle_sandbox_after_python_errors=recycle_sandbox_after_python_errors,
+            recovery_attempts_enabled=recovery_attempts_enabled,
+            recovery_attempts_cap=recovery_attempts_cap,
+            recovery_trigger_python_errors=recovery_trigger_python_errors,
+            recovery_min_remaining_s=recovery_min_remaining_s,
             attempts=attempts,
             workers=workers,
             early_stop=early_stop,
