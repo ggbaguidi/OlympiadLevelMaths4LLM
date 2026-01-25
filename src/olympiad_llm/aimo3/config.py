@@ -262,6 +262,10 @@ class AIMO3Config:
 
     @staticmethod
     def from_env() -> "AIMO3Config":
+        def _env_present(name: str) -> bool:
+            raw = os.getenv(name)
+            return raw is not None and bool(raw.strip())
+
         def _env_float(name: str, default: float) -> float:
             raw = os.getenv(name)
             if raw is None or not raw.strip():
@@ -279,6 +283,12 @@ class AIMO3Config:
                 return int(float(raw))
             except Exception:  # noqa: BLE001
                 return int(default)
+
+        # Profile presets (apply only when the corresponding env var is NOT explicitly set).
+        # This makes it easy to reduce orchestration steps without rewriting many env vars.
+        profile = (os.getenv("AIMO3_PROFILE", "") or "").strip().lower()
+        if profile not in {"", "default", "full", "lean"}:
+            profile = ""
 
         model_path = os.getenv("AIMO3_MODEL_PATH", "")
         served_model_name = os.getenv("AIMO3_SERVED_MODEL_NAME", "gpt-oss")
@@ -310,6 +320,8 @@ class AIMO3Config:
         workers = _env_int("AIMO3_WORKERS", AIMO3Config.workers)
         early_stop = _env_int("AIMO3_EARLY_STOP", AIMO3Config.early_stop)
         early_stop_min_verified = _env_int("AIMO3_EARLY_STOP_MIN_VERIFIED", AIMO3Config.early_stop_min_verified)
+
+        turns = _env_int("AIMO3_TURNS", AIMO3Config.turns)
 
         # Time budgets
         base_problem_timeout = _env_float("AIMO3_BASE_PROBLEM_TIMEOUT", AIMO3Config.base_problem_timeout)
@@ -446,6 +458,28 @@ class AIMO3Config:
             os.getenv("AIMO3_SECOND_STAGE_REQUIRE_MARKER", "1").strip().lower() not in {"0", "false", "no"}
         )
 
+        # Apply lean defaults if requested.
+        # Only override knobs if the user didn't explicitly set them.
+        if profile == "lean":
+            if not _env_present("AIMO3_ATTEMPTS"):
+                attempts = 4
+            if not _env_present("AIMO3_WORKERS"):
+                workers = max(4, min(8, attempts))
+            if not _env_present("AIMO3_TURNS"):
+                turns = 64
+
+            if not _env_present("AIMO3_WICKELGREN"):
+                wick = False
+            if not _env_present("AIMO3_STRATEGY_PACKS"):
+                strategy_packs = "generic"
+            if not _env_present("AIMO3_STRATEGY_PACK_MODE"):
+                strategy_pack_mode = "off"
+
+            if not _env_present("AIMO3_RECOVERY_ATTEMPTS_CAP"):
+                recovery_attempts_cap = 1
+            if not _env_present("AIMO3_TIEBREAK_ENABLED"):
+                tiebreak_enabled = False
+
         return AIMO3Config(
             model_path=model_path,
             served_model_name=served_model_name,
@@ -497,6 +531,7 @@ class AIMO3Config:
             workers=workers,
             early_stop=early_stop,
             early_stop_min_verified=early_stop_min_verified,
+            turns=turns,
             base_problem_timeout=base_problem_timeout,
             high_problem_timeout=high_problem_timeout,
             notebook_limit=notebook_limit,

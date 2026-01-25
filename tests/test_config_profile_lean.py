@@ -1,0 +1,39 @@
+import os
+
+
+def test_profile_lean_overrides_defaults(monkeypatch):
+    from olympiad_llm.aimo3.config import AIMO3Config
+
+    monkeypatch.setenv("AIMO3_PROFILE", "lean")
+    # Ensure not explicitly set
+    monkeypatch.delenv("AIMO3_ATTEMPTS", raising=False)
+    monkeypatch.delenv("AIMO3_WORKERS", raising=False)
+    monkeypatch.delenv("AIMO3_TURNS", raising=False)
+
+    cfg = AIMO3Config.from_env()
+    assert cfg.attempts == 4
+    assert cfg.turns == 64
+    assert cfg.workers >= 4
+
+
+def test_profile_lean_does_not_override_explicit_env(monkeypatch):
+    from olympiad_llm.aimo3.config import AIMO3Config
+
+    monkeypatch.setenv("AIMO3_PROFILE", "lean")
+    monkeypatch.setenv("AIMO3_ATTEMPTS", "7")
+    monkeypatch.setenv("AIMO3_TURNS", "10")
+    monkeypatch.setenv("AIMO3_WORKERS", "9")
+
+    cfg = AIMO3Config.from_env()
+    assert cfg.attempts == 7
+    assert cfg.turns == 10
+    assert cfg.workers == 9
+
+
+def test_turns_env_var(monkeypatch):
+    from olympiad_llm.aimo3.config import AIMO3Config
+
+    monkeypatch.delenv("AIMO3_PROFILE", raising=False)
+    monkeypatch.setenv("AIMO3_TURNS", "33")
+    cfg = AIMO3Config.from_env()
+    assert cfg.turns == 33
