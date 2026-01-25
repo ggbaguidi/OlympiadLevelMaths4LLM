@@ -31,6 +31,7 @@ from .budget import adaptive_verify_budget, compute_attempt_and_verify_deadlines
 
 from .answer_extraction import AnswerExtractor
 from .attempts import AttemptResult, AttemptStats
+from .trace import TraceRecorder, stable_problem_id
 
 
 def _require_openai():
@@ -320,6 +321,12 @@ class AIMO3Solver:
         self.notebook_start_time = time.time()
         self.problems_remaining = int(self.cfg.problems_total)
 
+        self._trace = TraceRecorder(
+            enabled=bool(getattr(self.cfg, "trace_enabled", False)),
+            path=str(getattr(self.cfg, "trace_path", "aimo3_trace.jsonl")),
+            include_problem_text=bool(getattr(self.cfg, "trace_include_problem_text", False)),
+        )
+
     def close(self) -> None:
         if hasattr(self, "sandbox_pool"):
             while not self.sandbox_pool.empty():
@@ -578,6 +585,8 @@ class AIMO3Solver:
         problem_start_time = time.time()
         user_input = f"{problem} {self.cfg.preference_prompt}"
 
+        pid = stable_problem_id(problem)
+
         elapsed_global = time.time() - self.notebook_start_time
         time_left = float(self.cfg.notebook_limit) - elapsed_global
         problems_left_others = max(0, int(self.problems_remaining) - 1)
@@ -622,6 +631,21 @@ class AIMO3Solver:
         detailed: list[AttemptResult] = []
         valid: list[int] = []
         stop_event = threading.Event()
+
+        self._trace.record(
+            {
+                "event": "solve_start",
+                "problem_id": pid,
+                "problem_len": len(problem or ""),
+                "problem": (problem if self._trace.include_problem_text else None),
+                "budget_s": float(budget),
+                "attempt_deadline_in_s": float(max(0.0, attempt_deadline - time.time())),
+                "overall_deadline_in_s": float(max(0.0, deadline - time.time())),
+                "attempts": int(self.cfg.attempts),
+                "workers": int(self.cfg.workers),
+                "sandbox_pool_size": int(getattr(self.cfg, "sandbox_pool_size", 0) or 0),
+            }
+        )
 
         with ThreadPoolExecutor(max_workers=int(self.cfg.workers)) as ex:
             futures = [
@@ -693,6 +717,16 @@ class AIMO3Solver:
                             valid.append(r.answer)
 
         if not valid:
+            self._trace.record(
+                {
+                    "event": "solve_end",
+                    "problem_id": pid,
+                    "status": "no_valid",
+                    "elapsed_s": float(time.time() - problem_start_time),
+                    "chosen": 0,
+                    "n_attempts": len(detailed),
+                }
+            )
             return 0
 
         # Show candidate attempts (best-effort, notebook-friendly).
@@ -700,10 +734,25 @@ class AIMO3Solver:
 
         ranked = self._rank_answers(detailed)
         if not ranked:
+            self._trace.record(
+                {
+                    "event": "solve_end",
+                    "problem_id": pid,
+                    "status": "no_ranked",
+                    "elapsed_s": float(time.time() - problem_start_time),
+                    "chosen": 0,
+                    "n_attempts": len(detailed),
+                }
+            )
             return 0
 
         top_ans, top_d = ranked[0]
         chosen = top_ans
+
+        decision: dict[str, object] = {
+            "ranked": [{"answer": int(a), **d} for (a, d) in ranked[:10]],
+            "second_stage": None,
+        }
         if len(ranked) >= 2:
             runner_ans, runner_d = ranked[1]
             votes_gap = int(top_d["votes"]) - int(runner_d["votes"])
@@ -738,6 +787,37 @@ class AIMO3Solver:
                 verified_choice = self._second_stage_verify(user_input, candidates, verify_deadline)
                 if verified_choice is not None:
                     chosen = verified_choice
+
+                decision["second_stage"] = {
+                    "need_verify": bool(need_verify),
+                    "votes_gap": int(votes_gap),
+                    "budget_s": float(verify_budget),
+                    "candidates": [int(c) for c in candidates],
+                    "choice": (int(verified_choice) if verified_choice is not None else None),
+                }
+
+        self._trace.record(
+            {
+                "event": "solve_end",
+                "problem_id": pid,
+                "status": "ok",
+                "elapsed_s": float(time.time() - problem_start_time),
+                "chosen": int(chosen),
+                "n_attempts": len(detailed),
+                "attempts": [
+                    {
+                        "attempt": int(r.attempt),
+                        "answer": (int(r.answer) if isinstance(r.answer, int) else None),
+                        "tag": r.tag,
+                        "token_count": int(r.stats.token_count),
+                        "python_calls": int(r.stats.python_calls),
+                        "python_errors": int(r.stats.python_errors),
+                    }
+                    for r in detailed
+                ],
+                "decision": decision,
+            }
+        )
 
         _ = time.time() - problem_start_time  # for optional logging
         return int(chosen)

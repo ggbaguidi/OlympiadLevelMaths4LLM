@@ -37,6 +37,13 @@ class AIMO3Config:
     # Max number of attempts rows to display (after all attempts are done).
     display_max_rows: int = 12
 
+    # Observability / tracing
+    # If enabled, append a JSON line per solved problem to trace_path.
+    trace_enabled: bool = False
+    trace_path: str = "aimo3_trace.jsonl"
+    # If True, include the full problem text in the trace. Off by default to avoid leakage.
+    trace_include_problem_text: bool = False
+
     # Model/server
     served_model_name: str = "gpt-oss"
     model_path: str = ""  # set via env AIMO3_MODEL_PATH in Kaggle
@@ -154,6 +161,12 @@ class AIMO3Config:
         disp = os.getenv("AIMO3_DISPLAY_CANDIDATES", "1").strip().lower() not in {"0", "false", "no"}
         require_cuda = os.getenv("AIMO3_REQUIRE_CUDA", "1").strip().lower() not in {"0", "false", "no"}
 
+        trace_enabled = os.getenv("AIMO3_TRACE", "0").strip().lower() not in {"0", "false", "no"}
+        trace_path = os.getenv("AIMO3_TRACE_PATH", AIMO3Config.trace_path)
+        trace_include_problem_text = (
+            os.getenv("AIMO3_TRACE_INCLUDE_PROBLEM", "0").strip().lower() not in {"0", "false", "no"}
+        )
+
         # Core solver knobs
         attempts = _env_int("AIMO3_ATTEMPTS", AIMO3Config.attempts)
         workers = _env_int("AIMO3_WORKERS", AIMO3Config.workers)
@@ -218,6 +231,9 @@ class AIMO3Config:
             wickelgren_strategies_enabled=wick,
             protocol_enabled=proto,
             display_candidates=disp,
+            trace_enabled=trace_enabled,
+            trace_path=trace_path,
+            trace_include_problem_text=trace_include_problem_text,
             require_cuda=require_cuda,
             server_timeout=server_timeout,
             context_tokens=context_tokens,
