@@ -131,6 +131,12 @@ class AIMO3Config:
     python_tool_timeout_retry_multiplier: float = 2.0
     python_tool_timeout_retry_min_remaining_s: float = 5.0
 
+    # Timeout handling policy
+    # If a python tool call times out, it's often a sign of a "wedged" kernel or an overly heavy computation.
+    # These toggles let us fail fast and keep the pool healthy.
+    abort_attempt_on_python_timeout: bool = True
+    recycle_sandbox_on_python_timeout: bool = True
+
     # Budget allocator assumes a fixed number of remaining problems.
     # Set to 1 when debugging a single hard problem locally.
     problems_total: int = 50
@@ -328,6 +334,13 @@ class AIMO3Config:
             AIMO3Config.python_tool_timeout_retry_min_remaining_s,
         )
 
+        abort_attempt_on_python_timeout = (
+            os.getenv("AIMO3_ABORT_ATTEMPT_ON_PYTHON_TIMEOUT", "1").strip().lower() not in {"0", "false", "no"}
+        )
+        recycle_sandbox_on_python_timeout = (
+            os.getenv("AIMO3_RECYCLE_SANDBOX_ON_PYTHON_TIMEOUT", "1").strip().lower() not in {"0", "false", "no"}
+        )
+
         # Verification knobs
         second_stage_top_k = _env_int("AIMO3_SECOND_STAGE_TOP_K", AIMO3Config.second_stage_verify_top_k)
         second_stage_cap = _env_float("AIMO3_SECOND_STAGE_BUDGET_CAP", AIMO3Config.second_stage_verify_budget_cap)
@@ -493,6 +506,8 @@ class AIMO3Config:
             python_tool_timeout_retry_enabled=python_tool_timeout_retry_enabled,
             python_tool_timeout_retry_multiplier=python_tool_timeout_retry_multiplier,
             python_tool_timeout_retry_min_remaining_s=python_tool_timeout_retry_min_remaining_s,
+            abort_attempt_on_python_timeout=abort_attempt_on_python_timeout,
+            recycle_sandbox_on_python_timeout=recycle_sandbox_on_python_timeout,
             second_stage_verify_top_k=second_stage_top_k,
             second_stage_verify_budget_cap=second_stage_cap,
             second_stage_verify_budget_fraction=second_stage_fraction,

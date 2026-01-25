@@ -480,6 +480,7 @@ class AIMO3Solver:
         )
 
         had_exception = False
+        had_timeout = False
         aborted_for_tool_errors = False
 
         tool_call_cap = tool_call_cap_for_attempt(
@@ -645,6 +646,17 @@ class AIMO3Solver:
                                     # Replace tool_responses to reflect what we append.
                                     tool_responses = tool_responses_retry
 
+                                    # Update timeout detection based on the retry output.
+                                    timed_out_s = parse_timeout_error(str(resp_text))
+
+                        # If we still timed out after any retry, fail fast and optionally recycle.
+                        if timed_out_s is not None:
+                            had_timeout = True
+                            if bool(getattr(self.cfg, "abort_attempt_on_python_timeout", True)):
+                                aborted_for_tool_errors = True
+                            if bool(getattr(self.cfg, "recycle_sandbox_on_python_timeout", True)):
+                                had_exception = True
+
                         if str(resp_text).startswith("[ERROR]") or "Traceback" in str(resp_text) or "Error:" in str(resp_text):
                             python_errors += 1
                             consecutive_python_errors += 1
@@ -652,6 +664,9 @@ class AIMO3Solver:
                             consecutive_python_errors = 0
 
                     conversation.messages.extend(tool_responses)
+
+                    if aborted_for_tool_errors:
+                        break
 
                     if should_abort_attempt(
                         python_errors=python_errors,
