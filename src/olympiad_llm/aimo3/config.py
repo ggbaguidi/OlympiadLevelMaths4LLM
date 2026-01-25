@@ -100,6 +100,15 @@ class AIMO3Config:
     sandbox_pool_size: int = 4
     # If the pool is exhausted, allow creating an ephemeral sandbox for that attempt.
     sandbox_create_on_exhaustion: bool = True
+
+    # Tool-error recovery (general robustness)
+    # Abort an attempt early if it is repeatedly failing tool calls, to avoid wasting tokens/time.
+    abort_attempt_after_python_errors: int = 4
+    abort_attempt_after_consecutive_python_errors: int = 3
+
+    # If a sandbox produced many tool errors, consider it "poisoned" and recycle it.
+    # Recycling means closing it and creating a fresh sandbox to keep the pool healthy.
+    recycle_sandbox_after_python_errors: int = 4
     turns: int = 128
     seed: int = 3
 
@@ -232,6 +241,17 @@ class AIMO3Config:
             os.getenv("AIMO3_SANDBOX_CREATE_ON_EXHAUSTION", "1").strip().lower() not in {"0", "false", "no"}
         )
 
+        abort_attempt_after_python_errors = _env_int(
+            "AIMO3_ABORT_ATTEMPT_AFTER_PYTHON_ERRORS", AIMO3Config.abort_attempt_after_python_errors
+        )
+        abort_attempt_after_consecutive_python_errors = _env_int(
+            "AIMO3_ABORT_ATTEMPT_AFTER_CONSECUTIVE_PYTHON_ERRORS",
+            AIMO3Config.abort_attempt_after_consecutive_python_errors,
+        )
+        recycle_sandbox_after_python_errors = _env_int(
+            "AIMO3_RECYCLE_SANDBOX_AFTER_PYTHON_ERRORS", AIMO3Config.recycle_sandbox_after_python_errors
+        )
+
         second_stage_verify_marker = os.getenv(
             "AIMO3_SECOND_STAGE_MARKER", AIMO3Config.second_stage_verify_marker
         ).strip() or AIMO3Config.second_stage_verify_marker
@@ -259,6 +279,9 @@ class AIMO3Config:
             kernel_init_workers=kernel_init_workers,
             sandbox_pool_size=sandbox_pool_size,
             sandbox_create_on_exhaustion=sandbox_create_on_exhaustion,
+            abort_attempt_after_python_errors=abort_attempt_after_python_errors,
+            abort_attempt_after_consecutive_python_errors=abort_attempt_after_consecutive_python_errors,
+            recycle_sandbox_after_python_errors=recycle_sandbox_after_python_errors,
             attempts=attempts,
             workers=workers,
             early_stop=early_stop,

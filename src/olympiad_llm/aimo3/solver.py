@@ -32,6 +32,7 @@ from .budget import adaptive_verify_budget, compute_attempt_and_verify_deadlines
 from .answer_extraction import AnswerExtractor
 from .attempts import AttemptResult, AttemptStats
 from .trace import TraceRecorder, stable_problem_id
+from .recovery import ToolRecoveryPolicy, should_abort_attempt, should_recycle_sandbox
 
 
 def _require_openai():
@@ -387,6 +388,7 @@ class AIMO3Solver:
         borrowed_from_pool = False
         python_calls = 0
         python_errors = 0
+        consecutive_python_errors = 0
         total_tokens = 0
         final_answer: int | None = None
         # Keep a tail buffer of the assistant text so we can display candidate solutions.
@@ -394,6 +396,16 @@ class AIMO3Solver:
         cap = int(self.cfg.capture_attempt_text_chars)
 
         attempt_seed = int(math.pow(self.cfg.seed + attempt_index, 2))
+
+        policy = ToolRecoveryPolicy(
+            abort_after_python_errors=int(getattr(self.cfg, "abort_attempt_after_python_errors", 0) or 0),
+            abort_after_consecutive_python_errors=int(
+                getattr(self.cfg, "abort_attempt_after_consecutive_python_errors", 0) or 0
+            ),
+            recycle_sandbox_after_python_errors=int(getattr(self.cfg, "recycle_sandbox_after_python_errors", 0) or 0),
+        )
+
+        had_exception = False
 
         try:
             try:
@@ -488,18 +500,49 @@ class AIMO3Solver:
                     resp_text = tool_responses[0].content[0].text
                     if resp_text.startswith("[ERROR]") or "Traceback" in resp_text or "Error:" in resp_text:
                         python_errors += 1
+                        consecutive_python_errors += 1
+                    else:
+                        consecutive_python_errors = 0
                     conversation.messages.extend(tool_responses)
 
+                    # Tool-error recovery: if the tool is repeatedly failing, stop this attempt early.
+                    if should_abort_attempt(
+                        python_errors=python_errors,
+                        consecutive_python_errors=consecutive_python_errors,
+                        policy=policy,
+                    ):
+                        break
+
         except Exception:
+            had_exception = True
             python_errors += 1
         finally:
             if local_tool is not None:
                 local_tool.close()
             if sandbox is not None:
                 if borrowed_from_pool:
-                    with contextlib.suppress(Exception):
-                        sandbox.reset()
-                    self.sandbox_pool.put(sandbox)
+                    # If the sandbox appears poisoned (many tool errors / exceptions), recycle it.
+                    recycle = should_recycle_sandbox(
+                        python_errors=python_errors,
+                        had_exception=had_exception,
+                        policy=policy,
+                    )
+                    if recycle:
+                        with contextlib.suppress(Exception):
+                            sandbox.close()
+                        # Replace with a fresh sandbox to keep the pool healthy.
+                        with contextlib.suppress(Exception):
+                            self.sandbox_pool.put(AIMO3Sandbox(timeout=self.cfg.jupyter_timeout))
+                    else:
+                        try:
+                            sandbox.reset()
+                            self.sandbox_pool.put(sandbox)
+                        except Exception:  # noqa: BLE001
+                            # If reset fails, recycle.
+                            with contextlib.suppress(Exception):
+                                sandbox.close()
+                            with contextlib.suppress(Exception):
+                                self.sandbox_pool.put(AIMO3Sandbox(timeout=self.cfg.jupyter_timeout))
                 else:
                     with contextlib.suppress(Exception):
                         sandbox.close()
