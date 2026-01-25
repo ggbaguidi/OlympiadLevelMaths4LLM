@@ -15,3 +15,15 @@ def test_extract_boxed_int_out_of_range_none():
 def test_normalize_final_answer_prefers_boxed_content():
     ex = AnswerExtractor()
     assert ex.normalize_final_answer_text("Answer is \\boxed{x^2+1}.") == "x^2+1"
+
+
+def test_extract_int_fallback_prefers_answer_hint():
+    ex = AnswerExtractor(aimo_lo=0, aimo_hi=99999)
+    txt = "We found 3 lemmas. Final answer: 1234."
+    assert ex.extract_int_fallback(txt) == 1234
+
+
+def test_extract_int_fallback_last_int_in_range():
+    ex = AnswerExtractor(aimo_lo=0, aimo_hi=99999)
+    txt = "Some numbers 12 99 100000 and then 777"
+    assert ex.extract_int_fallback(txt) == 777

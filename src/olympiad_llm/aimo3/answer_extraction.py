@@ -7,6 +7,13 @@ from dataclasses import dataclass
 _BOXED_RE = re.compile(r"\\boxed\s*\{\s*([^}]*)\s*\}")
 _BOXED_INT_RE = re.compile(r"\\boxed\s*\{\s*([0-9][0-9,]*)\s*\}")
 
+# Fallback patterns when the model forgets boxing.
+_FINAL_INT_HINT_RE = re.compile(
+    r"(?:final\s+answer|answer|ans)\s*(?:is|=|:)?\s*([0-9][0-9,]*)",
+    flags=re.IGNORECASE,
+)
+_ANY_INT_RE = re.compile(r"\b([0-9][0-9,]*)\b")
+
 
 @dataclass(frozen=True)
 class AnswerExtractor:
@@ -31,6 +38,33 @@ class AnswerExtractor:
             return None
         if self.aimo_lo <= val <= self.aimo_hi:
             return val
+        return None
+
+    def extract_int_fallback(self, text: str) -> int | None:
+        """Return a likely final integer answer even if unboxed.
+
+        Strategy (general, conservative):
+        1) Prefer integers that appear near an "answer" hint.
+        2) Otherwise fall back to the last integer in-range in the text.
+
+        This helps recover from formatting failures without changing the model prompt.
+        """
+
+        t = text or ""
+        hinted = list(_FINAL_INT_HINT_RE.findall(t))
+        candidates = hinted if hinted else list(_ANY_INT_RE.findall(t))
+        if not candidates:
+            return None
+
+        # Choose the *last* in-range integer (closest to the end of the response).
+        for raw in reversed(candidates):
+            raw2 = raw.replace(",", "")
+            try:
+                val = int(raw2)
+            except ValueError:
+                continue
+            if self.aimo_lo <= val <= self.aimo_hi:
+                return val
         return None
 
     def extract_boxed_content(self, text: str) -> str | None:
