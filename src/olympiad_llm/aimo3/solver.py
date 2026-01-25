@@ -70,10 +70,18 @@ def _require_harmony():
             "AIMO3Solver requires 'openai_harmony'. Install it from your offline wheels or pip (package may be named openai-harmony)."
         ) from e
 
+    # DeveloperContent was introduced in newer openai_harmony releases.
+    DeveloperContent = None
+    with contextlib.suppress(Exception):
+        from openai_harmony import DeveloperContent as _DeveloperContent  # type: ignore
+
+        DeveloperContent = _DeveloperContent
+
     return {
         "HarmonyEncodingName": HarmonyEncodingName,
         "load_harmony_encoding": load_harmony_encoding,
         "SystemContent": SystemContent,
+        "DeveloperContent": DeveloperContent,
         "ReasoningEffort": ReasoningEffort,
         "ToolNamespaceConfig": ToolNamespaceConfig,
         "Author": Author,
@@ -88,23 +96,43 @@ class AIMO3Template:
     def __init__(self):
         self._h = _require_harmony()
 
-    def get_system_content(self, system_prompt: str, tool_config):
+    @staticmethod
+    def _default_model_identity() -> str:
+        # Per the Harmony prompt-format guidance, the system message identity should remain stable.
+        return "You are ChatGPT, a large language model trained by OpenAI."
+
+    def get_system_content(self, tool_config):
         SystemContent = self._h["SystemContent"]
         ReasoningEffort = self._h["ReasoningEffort"]
         return (
             SystemContent.new()
-            .with_model_identity(system_prompt)
+            .with_model_identity(self._default_model_identity())
             .with_reasoning_effort(reasoning_effort=ReasoningEffort.HIGH)
             .with_tools(tool_config)
         )
 
-    def apply_chat_template(self, system_prompt: str, user_prompt: str, tool_config):
+    def apply_chat_template(self, developer_prompt: str, user_prompt: str, tool_config):
         Message = self._h["Message"]
         Role = self._h["Role"]
-        system_content = self.get_system_content(system_prompt, tool_config)
+        system_content = self.get_system_content(tool_config)
         system_message = Message.from_role_and_content(Role.SYSTEM, system_content)
+
+        # The project prompts ("system prompts" in older code) are the DEVELOPER instructions
+        # in Harmony terms.
+        developer_content = None
+        if "DeveloperContent" in self._h:
+            DeveloperContent = self._h["DeveloperContent"]
+            with contextlib.suppress(Exception):
+                developer_content = DeveloperContent.new().with_instructions(developer_prompt)
+
+        if developer_content is not None:
+            developer_message = Message.from_role_and_content(Role.DEVELOPER, developer_content)
+        else:
+            # Compatibility fallback for older openai_harmony builds.
+            developer_message = Message.from_role_and_content(Role.DEVELOPER, developer_prompt)
+
         user_message = Message.from_role_and_content(Role.USER, user_prompt)
-        return [system_message, user_message]
+        return [system_message, developer_message, user_message]
 
 
 class AIMO3Tool:
@@ -377,7 +405,7 @@ class AIMO3Solver:
     def _process_attempt(
         self,
         problem: str,
-        system_prompt: str,
+        developer_prompt: str,
         attempt_index: int,
         attempt_tag: str | None,
         stop_event: threading.Event,
@@ -434,7 +462,7 @@ class AIMO3Solver:
 
             local_tool = AIMO3Tool(local_jupyter_timeout=self.cfg.jupyter_timeout, tool_prompt=self.cfg.tool_prompt, sandbox=sandbox)
 
-            messages = self.template.apply_chat_template(system_prompt, problem, local_tool.tool_config)
+            messages = self.template.apply_chat_template(developer_prompt, problem, local_tool.tool_config)
             Conversation = _require_harmony()["Conversation"]
             conversation = Conversation.from_messages(messages)
 
