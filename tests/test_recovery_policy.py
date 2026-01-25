@@ -1,6 +1,7 @@
 from olympiad_llm.aimo3.recovery import ToolRecoveryPolicy, should_abort_attempt, should_recycle_sandbox
 from olympiad_llm.aimo3.recovery import should_schedule_recovery_attempt
 from olympiad_llm.aimo3.recovery import tool_call_cap_for_attempt
+from olympiad_llm.aimo3.recovery import should_schedule_format_recovery_attempt
 from olympiad_llm.aimo3.attempts import AttemptResult, AttemptStats
 
 
@@ -71,3 +72,16 @@ def test_tool_call_cap_for_attempt_variants():
     assert tool_call_cap_for_attempt(attempt_tag=None, recovery_micro_cap=2) is None
     assert tool_call_cap_for_attempt(attempt_tag="recovery|variant=no_tool", recovery_micro_cap=2) == 0
     assert tool_call_cap_for_attempt(attempt_tag="recovery|variant=micro_tool", recovery_micro_cap=2) == 2
+
+
+def test_should_schedule_format_recovery_attempt():
+    r = AttemptResult(attempt=1, answer=None, stats=AttemptStats(token_count=2500, python_calls=0, python_errors=0), tag="x")
+    assert should_schedule_format_recovery_attempt(result=r, remaining_s=30.0, trigger_tokens=2000, min_remaining_s=10.0)
+
+    # Too few tokens => don't schedule
+    r2 = AttemptResult(attempt=1, answer=None, stats=AttemptStats(token_count=500, python_calls=0, python_errors=0), tag="x")
+    assert not should_schedule_format_recovery_attempt(result=r2, remaining_s=30.0, trigger_tokens=2000, min_remaining_s=10.0)
+
+    # If there were tool errors, don't schedule format recovery (it's probably a tool instability case)
+    r3 = AttemptResult(attempt=1, answer=None, stats=AttemptStats(token_count=2500, python_calls=2, python_errors=1), tag="x")
+    assert not should_schedule_format_recovery_attempt(result=r3, remaining_s=30.0, trigger_tokens=2000, min_remaining_s=10.0)

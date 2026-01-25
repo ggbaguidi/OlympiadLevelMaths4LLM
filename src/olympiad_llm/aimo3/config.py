@@ -124,6 +124,20 @@ class AIMO3Config:
     # - "micro_tool": allow a small number of tool calls (cap > 0)
     recovery_mode: str = "auto"
     recovery_micro_tool_call_cap: int = 2
+
+    # Extraction/format recovery (general): if the model produced lots of tokens but we couldn't
+    # extract an integer answer, schedule a short attempt focused purely on producing the final
+    # boxed integer.
+    format_recovery_enabled: bool = True
+    format_recovery_cap: int = 1
+    format_recovery_trigger_tokens: int = 2000
+    format_recovery_min_remaining_s: float = 20.0
+
+    # Tie-break verification (general): if ranking/second-stage verification is inconclusive,
+    # run one short discriminating attempt comparing top candidates.
+    tiebreak_enabled: bool = True
+    tiebreak_min_remaining_s: float = 25.0
+    tiebreak_budget_cap_s: float = 35.0
     turns: int = 128
     seed: int = 3
 
@@ -284,6 +298,23 @@ class AIMO3Config:
             "AIMO3_RECOVERY_MICRO_TOOL_CALL_CAP", AIMO3Config.recovery_micro_tool_call_cap
         )
 
+        format_recovery_enabled = (
+            os.getenv("AIMO3_FORMAT_RECOVERY_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+        )
+        format_recovery_cap = _env_int("AIMO3_FORMAT_RECOVERY_CAP", AIMO3Config.format_recovery_cap)
+        format_recovery_trigger_tokens = _env_int(
+            "AIMO3_FORMAT_RECOVERY_TRIGGER_TOKENS", AIMO3Config.format_recovery_trigger_tokens
+        )
+        format_recovery_min_remaining_s = _env_float(
+            "AIMO3_FORMAT_RECOVERY_MIN_REMAINING_S", AIMO3Config.format_recovery_min_remaining_s
+        )
+
+        tiebreak_enabled = os.getenv("AIMO3_TIEBREAK_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+        tiebreak_min_remaining_s = _env_float(
+            "AIMO3_TIEBREAK_MIN_REMAINING_S", AIMO3Config.tiebreak_min_remaining_s
+        )
+        tiebreak_budget_cap_s = _env_float("AIMO3_TIEBREAK_BUDGET_CAP_S", AIMO3Config.tiebreak_budget_cap_s)
+
         second_stage_verify_marker = os.getenv(
             "AIMO3_SECOND_STAGE_MARKER", AIMO3Config.second_stage_verify_marker
         ).strip() or AIMO3Config.second_stage_verify_marker
@@ -320,6 +351,13 @@ class AIMO3Config:
             recovery_min_remaining_s=recovery_min_remaining_s,
             recovery_mode=recovery_mode,
             recovery_micro_tool_call_cap=recovery_micro_tool_call_cap,
+            format_recovery_enabled=format_recovery_enabled,
+            format_recovery_cap=format_recovery_cap,
+            format_recovery_trigger_tokens=format_recovery_trigger_tokens,
+            format_recovery_min_remaining_s=format_recovery_min_remaining_s,
+            tiebreak_enabled=tiebreak_enabled,
+            tiebreak_min_remaining_s=tiebreak_min_remaining_s,
+            tiebreak_budget_cap_s=tiebreak_budget_cap_s,
             attempts=attempts,
             workers=workers,
             early_stop=early_stop,

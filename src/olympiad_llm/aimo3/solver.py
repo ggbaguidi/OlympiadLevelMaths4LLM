@@ -38,6 +38,7 @@ from .recovery import (
     should_recycle_sandbox,
     should_schedule_recovery_attempt,
     tool_call_cap_for_attempt,
+    should_schedule_format_recovery_attempt,
 )
 
 
@@ -751,6 +752,7 @@ class AIMO3Solver:
                 _submit_one(sys_prompt, attempt_idx, attempt_tag)
 
             recovery_left = int(getattr(self.cfg, "recovery_attempts_cap", 0) or 0)
+            format_recovery_left = int(getattr(self.cfg, "format_recovery_cap", 0) or 0)
 
             while futures:
                 with contextlib.suppress(Exception):
@@ -813,6 +815,32 @@ class AIMO3Solver:
                             attempt_idx = int(self.cfg.attempts) + (int(self.cfg.recovery_attempts_cap) - recovery_left)
                             attempt_tag = f"recovery|variant={variant}|pack=recovery|card=tool_instability"
                             _submit_one(recovery_prompt, attempt_idx, attempt_tag)
+
+                    # If extraction failed (many tokens but no extracted answer), schedule a tiny
+                    # formatting-focused attempt that outputs ONLY the boxed integer.
+                    if (
+                        bool(getattr(self.cfg, "format_recovery_enabled", True))
+                        and format_recovery_left > 0
+                        and (not stop_event.is_set())
+                    ):
+                        remaining_s = float(attempt_deadline - time.time())
+                        if should_schedule_format_recovery_attempt(
+                            result=r,
+                            remaining_s=remaining_s,
+                            trigger_tokens=int(getattr(self.cfg, "format_recovery_trigger_tokens", 0) or 0),
+                            min_remaining_s=float(getattr(self.cfg, "format_recovery_min_remaining_s", 0.0) or 0.0),
+                        ):
+                            format_recovery_left -= 1
+                            fmt_prompt = (
+                                TIR_PROMPT_STANDARD
+                                + "\n\nFormatting recovery: Your job is to output ONLY the final integer answer as a single line \\boxed{N}. "
+                                "No extra text. If unsure, output NOBOX."
+                            )
+                            if bool(self.cfg.protocol_enabled):
+                                fmt_prompt = with_protocol(fmt_prompt)
+                            attempt_idx = int(self.cfg.attempts) + 50_000 + (int(self.cfg.format_recovery_cap) - format_recovery_left)
+                            attempt_tag = "recovery|variant=no_tool|pack=recovery|card=format_only"
+                            _submit_one(fmt_prompt, attempt_idx, attempt_tag)
 
         self.problems_remaining = max(0, int(self.problems_remaining) - 1)
 
@@ -937,7 +965,9 @@ class AIMO3Solver:
         decision: dict[str, object] = {
             "ranked": [{"answer": int(a), **d} for (a, d) in ranked[:10]],
             "second_stage": None,
+            "tiebreak": None,
         }
+        tiebreak_used = False
         if len(ranked) >= 2:
             runner_ans, runner_d = ranked[1]
             votes_gap = int(top_d["votes"]) - int(runner_d["votes"])
@@ -980,6 +1010,61 @@ class AIMO3Solver:
                     "candidates": [int(c) for c in candidates],
                     "choice": (int(verified_choice) if verified_choice is not None else None),
                 }
+
+                # If verification ran but couldn't choose, and the top candidate lacks verified support,
+                # run a single short tie-break attempt.
+                remaining2 = deadline - time.time()
+                if (
+                    bool(getattr(self.cfg, "tiebreak_enabled", True))
+                    and verified_choice is None
+                    and int(top_d.get("verified", 0)) <= 0
+                    and remaining2 >= float(getattr(self.cfg, "tiebreak_min_remaining_s", 0.0) or 0.0)
+                ):
+                    tb_budget = min(float(getattr(self.cfg, "tiebreak_budget_cap_s", 35.0) or 35.0), remaining2 * 0.60)
+                    tb_deadline = time.time() + max(3.0, tb_budget)
+
+                    mode = str(getattr(self.cfg, "recovery_mode", "auto") or "auto").strip().lower()
+                    # Auto: avoid tool if we already saw many errors overall.
+                    total_errs = sum(int(r.stats.python_errors) for r in detailed)
+                    if mode == "auto":
+                        mode = "no_tool" if total_errs >= 8 else "micro_tool"
+
+                    variant = "no_tool" if mode == "no_tool" else "micro_tool"
+                    tb_prompt = (
+                        TIR_PROMPT_VERIFICATION
+                        + "\n\nTie-break task: Only choose between the candidate answers below. "
+                        "Do quick consistency checks. Output EXACTLY one line: \\boxed{CAND}. "
+                        "If you cannot decide, output NOBOX (do not output any boxed answer).\n"
+                        f"Candidates: {int(top_ans)}, {int(runner_ans)}."
+                    )
+                    if variant == "no_tool":
+                        tb_prompt += "\nDo NOT use the python tool."
+                    else:
+                        tb_prompt += "\nIf you use python, use at most a couple short snippets."
+                    if bool(self.cfg.protocol_enabled):
+                        tb_prompt = with_protocol(tb_prompt)
+
+                    tb_res = self._process_attempt(
+                        user_input,
+                        tb_prompt,
+                        attempt_index=99_999,
+                        attempt_tag=f"tiebreak|variant={variant}|pack=recovery|card=top2",
+                        stop_event=threading.Event(),
+                        deadline=min(tb_deadline, deadline),
+                    )
+                    detailed.append(tb_res)
+                    if isinstance(tb_res.answer, int) and tb_res.answer in {int(top_ans), int(runner_ans)}:
+                        chosen = int(tb_res.answer)
+                        tiebreak_used = True
+
+                    decision["tiebreak"] = {
+                        "enabled": True,
+                        "variant": variant,
+                        "budget_s": float(tb_budget),
+                        "candidates": [int(top_ans), int(runner_ans)],
+                        "choice": (int(tb_res.answer) if isinstance(tb_res.answer, int) else None),
+                        "used": bool(tiebreak_used),
+                    }
 
         self._trace.record(
             {

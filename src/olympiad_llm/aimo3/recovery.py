@@ -92,3 +92,27 @@ def tool_call_cap_for_attempt(*, attempt_tag: str | None, recovery_micro_cap: in
     if "variant=micro_tool" in tag:
         return max(0, int(recovery_micro_cap))
     return None
+
+
+def should_schedule_format_recovery_attempt(
+    *,
+    result: AttemptResult,
+    remaining_s: float,
+    trigger_tokens: int,
+    min_remaining_s: float,
+) -> bool:
+    """Return True if we should schedule a formatting/extraction recovery attempt."""
+
+    if float(remaining_s) < float(min_remaining_s):
+        return False
+
+    # Already have an extracted answer => no need.
+    if isinstance(result.answer, int):
+        return False
+
+    # If the attempt produced a substantial amount of text but no extracted answer,
+    # a short "final answer only" follow-up can salvage the output.
+    if int(result.stats.token_count) >= int(trigger_tokens) and int(result.stats.python_errors) == 0:
+        return True
+
+    return False
