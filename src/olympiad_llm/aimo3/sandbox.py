@@ -55,13 +55,17 @@ class AIMO3Sandbox:
 
         # Preload common math stack.
         self.execute(
-            "import math\n"
-            "import itertools\n"
-            "import collections\n"
+            'import math\n'
+            'import numpy\n'
+            'import sympy\n'
+            'import itertools\n'
+            'import collections\n'
             "import sympy as sp\n"
             "import numpy as np\n"
             "import mpmath as mp\n"
             "from fractions import Fraction\n"
+            'import mpmath\n'
+            'mpmath.mp.dps = 128\n'
         )
 
     @staticmethod
@@ -140,13 +144,17 @@ class AIMO3Sandbox:
         self.execute("%reset -f")
         self.execute("import gc; gc.collect()")
         self.execute(
-            "import math\n"
-            "import itertools\n"
-            "import collections\n"
+            'import math\n'
+            'import numpy\n'
+            'import sympy\n'
+            'import itertools\n'
+            'import collections\n'
             "import sympy as sp\n"
             "import numpy as np\n"
             "import mpmath as mp\n"
             "from fractions import Fraction\n"
+            'import mpmath\n'
+            'mpmath.mp.dps = 128\n'
         )
 
     def close(self) -> None:
