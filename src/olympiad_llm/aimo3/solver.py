@@ -42,6 +42,7 @@ from .recovery import (
     should_schedule_format_recovery_attempt,
 )
 from .tool_drain import iter_tool_calls
+from .python_timeouts import parse_timeout_directive, parse_timeout_error
 
 
 def _require_openai():
@@ -139,10 +140,17 @@ class AIMO3Template:
 class AIMO3Tool:
     """Bridges Harmony tool-call messages to a sandboxed Jupyter kernel."""
 
-    def __init__(self, local_jupyter_timeout: float, tool_prompt: str, sandbox: AIMO3Sandbox | None = None):
+    def __init__(
+        self,
+        local_jupyter_timeout: float,
+        tool_prompt: str,
+        sandbox: AIMO3Sandbox | None = None,
+        tool_timeout_cap_s: float | None = None,
+    ):
         self._h = _require_harmony()
         self._local_jupyter_timeout = float(local_jupyter_timeout)
         self._tool_prompt = tool_prompt
+        self._tool_timeout_cap_s = None if tool_timeout_cap_s is None else float(tool_timeout_cap_s)
         self._jupyter_session = sandbox
         self._owns_session = sandbox is None
         self._execution_lock = threading.Lock()
@@ -188,12 +196,24 @@ class AIMO3Tool:
             msg = msg.with_channel(channel)
         return msg
 
-    def process_sync_plus(self, message):
+    def process_sync_plus(self, message, timeout_override_s: float | None = None):
         self._ensure_session()
         raw_script = message.content[0].text
         final_script = self._ensure_last_print(raw_script)
+
+        timeout_s: float | None = None
+        if timeout_override_s is not None:
+            timeout_s = float(timeout_override_s)
+        else:
+            # Optional per-call directive: first non-empty line '# timeout: N'
+            with contextlib.suppress(Exception):
+                timeout_s = parse_timeout_directive(str(raw_script or ""))
+
+        if timeout_s is not None and self._tool_timeout_cap_s is not None:
+            timeout_s = min(float(timeout_s), float(self._tool_timeout_cap_s))
+
         with self._execution_lock:
-            output = self._jupyter_session.execute(final_script)
+            output = self._jupyter_session.execute(final_script, timeout=timeout_s)
         return [self._make_response(output, channel=getattr(message, "channel", None))]
 
     def close(self) -> None:
@@ -478,7 +498,12 @@ class AIMO3Solver:
                 else:
                     raise
 
-            local_tool = AIMO3Tool(local_jupyter_timeout=self.cfg.jupyter_timeout, tool_prompt=self.cfg.tool_prompt, sandbox=sandbox)
+            local_tool = AIMO3Tool(
+                local_jupyter_timeout=self.cfg.jupyter_timeout,
+                tool_prompt=self.cfg.tool_prompt,
+                sandbox=sandbox,
+                tool_timeout_cap_s=float(getattr(self.cfg, "python_tool_timeout_cap_s", 0.0) or 0.0) or None,
+            )
 
             messages = self.template.apply_chat_template(developer_prompt, problem, local_tool.tool_config)
             Conversation = _require_harmony()["Conversation"]
@@ -586,6 +611,40 @@ class AIMO3Solver:
                         resp_text = tool_responses[0].content[0].text
                         if resp_text:
                             transcript_python_outputs.append(str(resp_text))
+
+                        # If we timed out, optionally retry once with a longer timeout.
+                        timed_out_s = parse_timeout_error(str(resp_text))
+                        if (
+                            timed_out_s is not None
+                            and bool(getattr(self.cfg, "python_tool_timeout_retry_enabled", True))
+                            and (deadline - time.time()) >= float(
+                                getattr(self.cfg, "python_tool_timeout_retry_min_remaining_s", 0.0) or 0.0
+                            )
+                        ):
+                            mult = float(getattr(self.cfg, "python_tool_timeout_retry_multiplier", 2.0) or 2.0)
+                            cap_s = float(getattr(self.cfg, "python_tool_timeout_cap_s", 0.0) or 0.0) or None
+                            new_timeout = float(timed_out_s) * max(1.0, mult)
+                            if cap_s is not None:
+                                new_timeout = min(new_timeout, float(cap_s))
+
+                            # Only retry if it meaningfully increases the timeout.
+                            if new_timeout > float(timed_out_s) + 1e-6:
+                                # Ensure retry doesn't violate the tool-call cap.
+                                if tool_call_cap is not None and (python_calls + 1) > int(tool_call_cap):
+                                    pass
+                                else:
+                                    python_calls += 1
+                                    tool_responses_retry = local_tool.process_sync_plus(
+                                        call.message, timeout_override_s=new_timeout
+                                    )
+                                    with contextlib.suppress(Exception):
+                                        resp_text2 = tool_responses_retry[0].content[0].text
+                                        if resp_text2:
+                                            transcript_python_outputs.append(str(resp_text2))
+                                        resp_text = resp_text2
+                                    # Replace tool_responses to reflect what we append.
+                                    tool_responses = tool_responses_retry
+
                         if str(resp_text).startswith("[ERROR]") or "Traceback" in str(resp_text) or "Error:" in str(resp_text):
                             python_errors += 1
                             consecutive_python_errors += 1

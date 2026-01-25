@@ -117,6 +117,14 @@ class AIMO3Config:
     jupyter_timeout: float = 10.0
     sandbox_timeout: float = 5.0
 
+    # Python tool execution timeout handling
+    # The sandbox has a default timeout (`jupyter_timeout`). If a tool call times out,
+    # the solver can optionally retry once with a longer timeout (bounded by a cap).
+    python_tool_timeout_cap_s: float = 180.0
+    python_tool_timeout_retry_enabled: bool = True
+    python_tool_timeout_retry_multiplier: float = 2.0
+    python_tool_timeout_retry_min_remaining_s: float = 5.0
+
     # Budget allocator assumes a fixed number of remaining problems.
     # Set to 1 when debugging a single hard problem locally.
     problems_total: int = 50
@@ -300,6 +308,20 @@ class AIMO3Config:
         jupyter_timeout = _env_float("AIMO3_JUPYTER_TIMEOUT", AIMO3Config.jupyter_timeout)
         sandbox_timeout = _env_float("AIMO3_SANDBOX_TIMEOUT", AIMO3Config.sandbox_timeout)
 
+        python_tool_timeout_cap_s = _env_float(
+            "AIMO3_PYTHON_TOOL_TIMEOUT_CAP_S", AIMO3Config.python_tool_timeout_cap_s
+        )
+        python_tool_timeout_retry_enabled = (
+            os.getenv("AIMO3_PYTHON_TOOL_TIMEOUT_RETRY_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+        )
+        python_tool_timeout_retry_multiplier = _env_float(
+            "AIMO3_PYTHON_TOOL_TIMEOUT_RETRY_MULT", AIMO3Config.python_tool_timeout_retry_multiplier
+        )
+        python_tool_timeout_retry_min_remaining_s = _env_float(
+            "AIMO3_PYTHON_TOOL_TIMEOUT_RETRY_MIN_REMAINING_S",
+            AIMO3Config.python_tool_timeout_retry_min_remaining_s,
+        )
+
         # Verification knobs
         second_stage_top_k = _env_int("AIMO3_SECOND_STAGE_TOP_K", AIMO3Config.second_stage_verify_top_k)
         second_stage_cap = _env_float("AIMO3_SECOND_STAGE_BUDGET_CAP", AIMO3Config.second_stage_verify_budget_cap)
@@ -461,6 +483,10 @@ class AIMO3Config:
             notebook_limit=notebook_limit,
             jupyter_timeout=jupyter_timeout,
             sandbox_timeout=sandbox_timeout,
+            python_tool_timeout_cap_s=python_tool_timeout_cap_s,
+            python_tool_timeout_retry_enabled=python_tool_timeout_retry_enabled,
+            python_tool_timeout_retry_multiplier=python_tool_timeout_retry_multiplier,
+            python_tool_timeout_retry_min_remaining_s=python_tool_timeout_retry_min_remaining_s,
             second_stage_verify_top_k=second_stage_top_k,
             second_stage_verify_budget_cap=second_stage_cap,
             second_stage_verify_budget_fraction=second_stage_fraction,

@@ -88,6 +88,8 @@ ENHANCED_TOOL_INSTRUCTION = """Use this tool to execute Python code for mathemat
 **BEST PRACTICES:**
 1. Use print() to see results
 2. Always start tool code with the imports you rely on (even if preloaded)
+2b. If you truly need a longer-running computation, start the code with a timeout directive:
+    - # timeout: 120
 3. For large numbers: use modular arithmetic
 4. For symbolic: use sp.solve, sp.simplify, sp.factor
 5. For numerical (high precision): use mp.mpf / mp.nsum / mp.quad and set mp.mp.dps
