@@ -31,3 +31,19 @@ def test_rank_prefers_verified_over_more_votes():
     assert ranked
     assert ranked[0][0] == 2
     assert ranked[0][1]["verified"] == 1
+
+
+def test_rank_does_not_let_tag_diversity_overpower_votes_when_verified_ties():
+    # Both answers have verified support, but answer=1 has stronger vote support.
+    # Ensure tag diversity acts as a tie-breaker, not the primary driver.
+    results = [
+        AttemptResult(attempt=1, answer=1, stats=AttemptStats(token_count=50, python_calls=1, python_errors=0), tag="a"),
+        AttemptResult(attempt=2, answer=1, stats=AttemptStats(token_count=50, python_calls=0, python_errors=0), tag="a"),
+        AttemptResult(attempt=3, answer=1, stats=AttemptStats(token_count=50, python_calls=0, python_errors=0), tag="a"),
+        # answer=2 appears under two tags, but only has 2 votes total.
+        AttemptResult(attempt=4, answer=2, stats=AttemptStats(token_count=50, python_calls=1, python_errors=0), tag="x"),
+        AttemptResult(attempt=5, answer=2, stats=AttemptStats(token_count=50, python_calls=0, python_errors=0), tag="y"),
+    ]
+    ranked = AIMO3Solver._rank_answers(results)  # noqa: SLF001
+    assert ranked
+    assert ranked[0][0] == 1
