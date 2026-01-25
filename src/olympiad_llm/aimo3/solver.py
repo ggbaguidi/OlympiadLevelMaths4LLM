@@ -678,8 +678,10 @@ class AIMO3Solver:
 
         # Retry if no valid answers.
         if not valid:
-            retry_budget = min(60.0, max(10.0, budget * 0.25))
-            retry_deadline = time.time() + retry_budget
+            remaining_overall = max(0.0, deadline - time.time())
+            # Use a meaningful slice of remaining time, but cap it to avoid monopolizing the notebook.
+            retry_budget = min(90.0, max(10.0, remaining_overall * 0.50))
+            retry_deadline = min(deadline, time.time() + retry_budget)
             retry_tasks = [
                 (
                     (

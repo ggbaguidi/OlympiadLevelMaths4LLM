@@ -42,6 +42,21 @@ class TraceRecorder:
 
         # Normalize and add minimal metadata.
         payload = dict(event)
+
+        # Backward/forward compatible schema:
+        # - historically we used "event" (e.g., solve_start / solve_end)
+        # - some ad-hoc scripts look for "event_type"
+        ev_name = payload.get("event")
+        if ev_name is None:
+            ev_name = payload.get("event_type")
+        if ev_name is not None:
+            payload.setdefault("event", ev_name)
+            payload.setdefault("event_type", ev_name)
+
+        # Avoid writing an explicit null problem field (common when include_problem_text=False).
+        if payload.get("problem") is None:
+            payload.pop("problem", None)
+
         payload.setdefault("ts", time.time())
 
         with open(p, "a", encoding="utf-8") as f:

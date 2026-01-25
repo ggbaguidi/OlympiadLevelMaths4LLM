@@ -12,6 +12,7 @@ def test_trace_recorder_writes_jsonl(tmp_path):
     assert len(lines) == 1
     obj = json.loads(lines[0])
     assert obj["event"] == "x"
+    assert obj["event_type"] == "x"
     assert obj["value"] == 1
     assert "ts" in obj
 
