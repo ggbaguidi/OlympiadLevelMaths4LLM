@@ -71,8 +71,16 @@ def _locate_archive(dataset_dir: Path, archive_name: str | None = None) -> Path 
     if cands:
         return cands[0]
 
-    # Fallback to any tar.gz.
+    cands = sorted(dataset_dir.glob("lean-*-linux.tar"))
+    if cands:
+        return cands[0]
+
+    # Fallback to any tar-like archive.
     cands = sorted(dataset_dir.glob("*.tar.gz"))
+    if cands:
+        return cands[0]
+
+    cands = sorted(dataset_dir.glob("*.tar"))
     if cands:
         return cands[0]
 
@@ -191,13 +199,54 @@ def ensure_lean_toolchain(
 
     archive: Path | None = None
 
+    # If the user passes a directory as archive_path, treat it as an already-extracted root.
+    extracted_hint: Path | None = None
+    if archive_path:
+        ap = Path(archive_path).expanduser()
+        if ap.exists() and ap.is_dir():
+            extracted_hint = ap
+
     if archive_path:
         p = Path(archive_path).expanduser()
-        archive = p if p.exists() else None
+        archive = p if p.exists() and p.is_file() else None
     if archive is None and dataset_dir:
         archive = _locate_archive(Path(dataset_dir).expanduser(), archive_name=archive_name)
 
     if archive is None:
+        # Some workflows place an *already extracted* Lean distribution in dataset_dir.
+        # If so, accept it and just add its bin dir to PATH.
+        for candidate_root in [extracted_hint, Path(dataset_dir).expanduser() if dataset_dir else None]:
+            if candidate_root is None:
+                continue
+            if candidate_root.exists() and candidate_root.is_dir():
+                bin_dir0 = _find_bin_dir(candidate_root)
+                if bin_dir0 is not None:
+                    os.environ["AIMO3_LEAN_BIN_DIR"] = str(bin_dir0)
+                    os.environ["PATH"] = str(bin_dir0) + os.pathsep + os.environ.get("PATH", "")
+
+                    lean_path = _find_executable("lean")
+                    lake_path = _find_executable("lake")
+                    lean_ver = _safe_run_version(["lean", "--version"]) if check_versions else None
+                    lake_ver = _safe_run_version(["lake", "--version"]) if check_versions else None
+
+                    installed0 = bool(lean_path and lake_path)
+                    if strict and not installed0:
+                        raise RuntimeError(
+                            "Found an extracted Lean bin dir, but lean/lake still not found on PATH"
+                        )
+
+                    return LeanToolchainInfo(
+                        enabled=True,
+                        installed=installed0,
+                        archive_path=None,
+                        extracted_root=str(candidate_root),
+                        bin_dir=str(bin_dir0),
+                        lean_path=lean_path,
+                        lake_path=lake_path,
+                        lean_version=lean_ver,
+                        lake_version=lake_ver,
+                    )
+
         msg = (
             "Lean toolchain is enabled but no archive was found. "
             "Set AIMO3_LEAN_DATASET_DIR to your Kaggle dataset mount (e.g. /kaggle/input/<ds>) "
@@ -226,7 +275,8 @@ def ensure_lean_toolchain(
     # Extract (idempotent-ish): if we already have a bin dir, don't re-extract.
     bin_dir = _find_bin_dir(root)
     if bin_dir is None:
-        with tarfile.open(archive, "r:gz") as tf:
+        # Use auto-detection so we can handle .tar.gz and .tar.
+        with tarfile.open(archive, "r:*") as tf:
             # Python 3.14+ changes default extraction safety behavior.
             # Use the new filter when available to avoid warnings and keep behavior explicit.
             try:
