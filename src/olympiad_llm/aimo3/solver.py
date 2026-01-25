@@ -410,6 +410,7 @@ class AIMO3Solver:
         attempt_tag: str | None,
         stop_event: threading.Event,
         deadline: float,
+        problem_id: str | None = None,
     ) -> AttemptResult:
         if stop_event.is_set() or time.time() > deadline:
             return AttemptResult(
@@ -430,6 +431,15 @@ class AIMO3Solver:
         # Keep a tail buffer of the assistant text so we can display candidate solutions.
         text_tail: str = ""
         cap = int(self.cfg.capture_attempt_text_chars)
+
+        # Per-attempt transcript capture (safe):
+        # - store user-visible assistant channels (final/commentary)
+        # - store python tool calls + outputs
+        # - do NOT store analysis/CoT
+        transcript_assistant_final: list[str] = []
+        transcript_assistant_commentary: list[str] = []
+        transcript_python_calls: list[str] = []
+        transcript_python_outputs: list[str] = []
 
         attempt_seed = int(math.pow(self.cfg.seed + attempt_index, 2))
 
@@ -525,6 +535,26 @@ class AIMO3Solver:
                 conversation.messages.extend(new_messages)
                 last = new_messages[-1]
 
+                # Capture non-analysis assistant messages.
+                for m in new_messages:
+                    ch = getattr(m, "channel", None)
+                    if ch == "analysis":
+                        continue
+                    # Some messages may have multiple content chunks.
+                    parts: list[str] = []
+                    with contextlib.suppress(Exception):
+                        for c in (m.content or []):
+                            t = getattr(c, "text", None)
+                            if t:
+                                parts.append(str(t))
+                    msg_text = "".join(parts).strip()
+                    if not msg_text:
+                        continue
+                    if ch == "final":
+                        transcript_assistant_final.append(msg_text)
+                    else:
+                        transcript_assistant_commentary.append(msg_text)
+
                 if last.channel == "final":
                     answer_text = last.content[0].text
                     if answer_text:
@@ -537,6 +567,11 @@ class AIMO3Solver:
                     break
 
                 if last.recipient == "python":
+                    with contextlib.suppress(Exception):
+                        code_text = str(last.content[0].text or "")
+                        if code_text:
+                            transcript_python_calls.append(code_text)
+
                     # Enforce tool-call caps for recovery variants.
                     if tool_call_cap is not None and (python_calls + 1) > int(tool_call_cap):
                         # We haven't executed this call; we are refusing further tool usage.
@@ -546,6 +581,9 @@ class AIMO3Solver:
                     python_calls += 1
                     tool_responses = local_tool.process_sync_plus(last)
                     resp_text = tool_responses[0].content[0].text
+                    with contextlib.suppress(Exception):
+                        if resp_text:
+                            transcript_python_outputs.append(str(resp_text))
                     if resp_text.startswith("[ERROR]") or "Traceback" in resp_text or "Error:" in resp_text:
                         python_errors += 1
                         consecutive_python_errors += 1
@@ -596,7 +634,7 @@ class AIMO3Solver:
                     with contextlib.suppress(Exception):
                         sandbox.close()
 
-        return AttemptResult(
+        result = AttemptResult(
             attempt=attempt_index + 1,
             answer=final_answer,
             stats=AttemptStats(token_count=total_tokens, python_calls=python_calls, python_errors=python_errors),
@@ -608,12 +646,59 @@ class AIMO3Solver:
             ),
         )
 
+        # Optional: record a per-attempt transcript for post-run inspection.
+        if bool(getattr(self.cfg, "trace_attempts_enabled", False)) and bool(getattr(self.cfg, "trace_enabled", False)):
+            max_chars = int(getattr(self.cfg, "trace_attempts_max_chars", 0) or 0)
+
+            def _cap_list(items: list[str], per_item_chars: int = 4000, max_items: int = 20) -> list[str]:
+                # Keep attempt payload bounded.
+                per_item_chars = max(0, int(per_item_chars))
+                max_items = max(0, int(max_items))
+                if max_items and len(items) > max_items:
+                    items = items[-max_items:]
+                if per_item_chars > 0:
+                    return [self._truncate(s, per_item_chars) for s in items]
+                return items
+
+            payload = {
+                "event": "attempt_end",
+                "problem_id": problem_id,
+                "attempt": int(result.attempt),
+                "tag": result.tag,
+                "answer": (int(result.answer) if isinstance(result.answer, int) else None),
+                "token_count": int(result.stats.token_count),
+                "python_calls": int(result.stats.python_calls),
+                "python_errors": int(result.stats.python_errors),
+                "aborted_for_tool_errors": bool(aborted_for_tool_errors),
+                "had_exception": bool(had_exception),
+                "assistant_final": self._truncate("\n\n".join(transcript_assistant_final).strip(), max_chars) if max_chars > 0 else "\n\n".join(transcript_assistant_final).strip(),
+                "assistant_commentary": self._truncate("\n\n".join(transcript_assistant_commentary).strip(), max_chars) if max_chars > 0 else "\n\n".join(transcript_assistant_commentary).strip(),
+                "python_calls_text": _cap_list(transcript_python_calls),
+                "python_outputs_text": _cap_list(transcript_python_outputs),
+            }
+            # Avoid dumping empty huge fields.
+            if not payload.get("assistant_final"):
+                payload.pop("assistant_final", None)
+            if not payload.get("assistant_commentary"):
+                payload.pop("assistant_commentary", None)
+            if not payload.get("python_calls_text"):
+                payload.pop("python_calls_text", None)
+            if not payload.get("python_outputs_text"):
+                payload.pop("python_outputs_text", None)
+
+            with contextlib.suppress(Exception):
+                self._trace.record(payload)
+
+        return result
+
     @staticmethod
     def _rank_answers(detailed_results: list[dict]) -> list[tuple[int, dict]]:
         # Compatibility wrapper around the dedicated module.
         return rank_candidates(detailed_results, filter_to_verified_if_any=True)
 
-    def _second_stage_verify(self, user_input: str, candidates: list[int], verify_deadline: float) -> int | None:
+    def _second_stage_verify(
+        self, user_input: str, candidates: list[int], verify_deadline: float, problem_id: str | None = None
+    ) -> int | None:
         if not candidates:
             return None
 
@@ -655,6 +740,7 @@ class AIMO3Solver:
                     f"second_stage_verify:cand={_cand}",
                     stop_event,
                     verify_deadline,
+                    problem_id,
                 )
                 for (vp, _cand, attempt_idx) in tasks
             ]
@@ -770,6 +856,7 @@ class AIMO3Solver:
                         attempt_tag,
                         stop_event,
                         attempt_deadline,
+                        pid,
                     )
                 )
 
@@ -948,7 +1035,16 @@ class AIMO3Solver:
 
             with ThreadPoolExecutor(max_workers=min(4, int(self.cfg.workers))) as ex:
                 futures = [
-                    ex.submit(self._process_attempt, user_input, sys_prompt, attempt_idx, attempt_tag, stop_event, retry_deadline)
+                    ex.submit(
+                        self._process_attempt,
+                        user_input,
+                        sys_prompt,
+                        attempt_idx,
+                        attempt_tag,
+                        stop_event,
+                        retry_deadline,
+                        pid,
+                    )
                     for (sys_prompt, attempt_idx, attempt_tag) in retry_tasks
                 ]
                 for fut in as_completed(futures):
@@ -1035,7 +1131,7 @@ class AIMO3Solver:
             desired_top_k = max(1, int(self.cfg.second_stage_verify_top_k))
             top_k = max(1, min(desired_top_k, len(ranked)))
             candidates = [ans for (ans, _d) in ranked[:top_k]]
-            verified_choice = self._second_stage_verify(user_input, candidates, verify_deadline)
+            verified_choice = self._second_stage_verify(user_input, candidates, verify_deadline, problem_id=pid)
             if verified_choice is not None:
                 chosen = verified_choice
 
@@ -1090,6 +1186,7 @@ class AIMO3Solver:
                 attempt_tag=f"tiebreak|variant={variant}|pack=recovery|card=top2",
                 stop_event=threading.Event(),
                 deadline=min(tb_deadline, deadline),
+                problem_id=pid,
             )
             detailed.append(tb_res)
             if isinstance(tb_res.answer, int) and tb_res.answer in {int(top_ans), int(runner_ans)}:

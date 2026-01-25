@@ -90,6 +90,14 @@ class AIMO3Config:
     # If True, include the full problem text in the trace. Off by default to avoid leakage.
     trace_include_problem_text: bool = False
 
+    # If enabled, also record per-attempt transcripts to the same JSONL trace.
+    # Notes:
+    # - By default we do NOT record hidden analysis/CoT.
+    # - We record user-visible channels (final/commentary) + python tool I/O.
+    trace_attempts_enabled: bool = False
+    # Hard cap on total characters stored per attempt transcript payload.
+    trace_attempts_max_chars: int = 20000
+
     # Model/server
     served_model_name: str = "gpt-oss"
     model_path: str = ""  # set via env AIMO3_MODEL_PATH in Kaggle
@@ -258,15 +266,17 @@ class AIMO3Config:
         strategy_packs = (os.getenv("AIMO3_STRATEGY_PACKS", AIMO3Config.strategy_packs) or "").strip()
         if not strategy_packs:
             strategy_packs = AIMO3Config.strategy_packs
+
+        trace_enabled = os.getenv("AIMO3_TRACE", "0").strip().lower() not in {"0", "false", "no"}
+        trace_path = (os.getenv("AIMO3_TRACE_PATH", AIMO3Config.trace_path) or "").strip() or AIMO3Config.trace_path
+        trace_include_problem_text = (
+            os.getenv("AIMO3_TRACE_INCLUDE_PROBLEM_TEXT", "0").strip().lower() not in {"0", "false", "no"}
+        )
+        trace_attempts_enabled = os.getenv("AIMO3_TRACE_ATTEMPTS", "0").strip().lower() not in {"0", "false", "no"}
+        trace_attempts_max_chars = _env_int("AIMO3_TRACE_ATTEMPTS_MAX_CHARS", AIMO3Config.trace_attempts_max_chars)
         proto = os.getenv("AIMO3_PROTOCOL", "1").strip().lower() not in {"0", "false", "no"}
         disp = os.getenv("AIMO3_DISPLAY_CANDIDATES", "1").strip().lower() not in {"0", "false", "no"}
         require_cuda = os.getenv("AIMO3_REQUIRE_CUDA", "1").strip().lower() not in {"0", "false", "no"}
-
-        trace_enabled = os.getenv("AIMO3_TRACE", "0").strip().lower() not in {"0", "false", "no"}
-        trace_path = os.getenv("AIMO3_TRACE_PATH", AIMO3Config.trace_path)
-        trace_include_problem_text = (
-            os.getenv("AIMO3_TRACE_INCLUDE_PROBLEM", "0").strip().lower() not in {"0", "false", "no"}
-        )
 
         # Core solver knobs
         attempts = _env_int("AIMO3_ATTEMPTS", AIMO3Config.attempts)
@@ -400,6 +410,8 @@ class AIMO3Config:
             trace_enabled=trace_enabled,
             trace_path=trace_path,
             trace_include_problem_text=trace_include_problem_text,
+            trace_attempts_enabled=trace_attempts_enabled,
+            trace_attempts_max_chars=trace_attempts_max_chars,
             require_cuda=require_cuda,
             server_timeout=server_timeout,
             context_tokens=context_tokens,
