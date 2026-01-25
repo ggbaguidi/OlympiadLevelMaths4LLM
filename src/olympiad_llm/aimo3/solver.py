@@ -41,6 +41,7 @@ from .recovery import (
     tool_call_cap_for_attempt,
     should_schedule_format_recovery_attempt,
 )
+from .tool_drain import iter_tool_calls
 
 
 def _require_openai():
@@ -562,6 +563,54 @@ class AIMO3Solver:
                     else:
                         transcript_assistant_commentary.append(msg_text)
 
+                # IMPORTANT: the model may emit multiple python tool calls in a single completion.
+                # We must execute ALL of them sequentially (in message order) and append their
+                # outputs before sampling again. Otherwise later calls may assume state from
+                # earlier calls and crash (NameError / missing imports).
+                had_python_calls_in_batch = False
+                for call in iter_tool_calls(new_messages, recipient="python"):
+                    had_python_calls_in_batch = True
+
+                    # Enforce tool-call caps for recovery variants.
+                    if tool_call_cap is not None and (python_calls + 1) > int(tool_call_cap):
+                        aborted_for_tool_errors = True
+                        break
+
+                    if call.text:
+                        transcript_python_calls.append(str(call.text))
+
+                    python_calls += 1
+                    tool_responses = local_tool.process_sync_plus(call.message)
+                    # tool_responses is typically a list[Message]
+                    with contextlib.suppress(Exception):
+                        resp_text = tool_responses[0].content[0].text
+                        if resp_text:
+                            transcript_python_outputs.append(str(resp_text))
+                        if str(resp_text).startswith("[ERROR]") or "Traceback" in str(resp_text) or "Error:" in str(resp_text):
+                            python_errors += 1
+                            consecutive_python_errors += 1
+                        else:
+                            consecutive_python_errors = 0
+
+                    conversation.messages.extend(tool_responses)
+
+                    if should_abort_attempt(
+                        python_errors=python_errors,
+                        consecutive_python_errors=consecutive_python_errors,
+                        policy=policy,
+                    ):
+                        aborted_for_tool_errors = True
+                        break
+
+                if aborted_for_tool_errors:
+                    break
+
+                # If we executed any tool calls, ignore any final message that might have been
+                # emitted in the same batch (it was generated without tool outputs). Instead,
+                # sample again with the tool outputs appended.
+                if had_python_calls_in_batch:
+                    continue
+
                 if last.channel == "final":
                     answer_text = last.content[0].text
                     if answer_text:
@@ -573,39 +622,7 @@ class AIMO3Solver:
                         final_answer = self._extractor.extract_int_fallback(answer_text)
                     break
 
-                if last.recipient == "python":
-                    with contextlib.suppress(Exception):
-                        code_text = str(last.content[0].text or "")
-                        if code_text:
-                            transcript_python_calls.append(code_text)
-
-                    # Enforce tool-call caps for recovery variants.
-                    if tool_call_cap is not None and (python_calls + 1) > int(tool_call_cap):
-                        # We haven't executed this call; we are refusing further tool usage.
-                        aborted_for_tool_errors = True
-                        break
-
-                    python_calls += 1
-                    tool_responses = local_tool.process_sync_plus(last)
-                    resp_text = tool_responses[0].content[0].text
-                    with contextlib.suppress(Exception):
-                        if resp_text:
-                            transcript_python_outputs.append(str(resp_text))
-                    if resp_text.startswith("[ERROR]") or "Traceback" in resp_text or "Error:" in resp_text:
-                        python_errors += 1
-                        consecutive_python_errors += 1
-                    else:
-                        consecutive_python_errors = 0
-                    conversation.messages.extend(tool_responses)
-
-                    # Tool-error recovery: if the tool is repeatedly failing, stop this attempt early.
-                    if should_abort_attempt(
-                        python_errors=python_errors,
-                        consecutive_python_errors=consecutive_python_errors,
-                        policy=policy,
-                    ):
-                        aborted_for_tool_errors = True
-                        break
+                # NOTE: python tool calls are handled above by draining all calls in the batch.
 
         except Exception:
             had_exception = True
