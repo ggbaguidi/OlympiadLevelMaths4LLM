@@ -18,7 +18,44 @@ class AIMO3Config:
     system_prompt: str = TIR_PROMPT_STANDARD
     tool_prompt: str = ENHANCED_TOOL_INSTRUCTION
     preference_prompt: str = (
-        "Use `math`, `numpy`, `sympy`, `mpmath`, `scipy`, `itertools` and `collections` to solve the problem."
+        "You have access to `math`, `numpy`, `sympy`, `mpmath`, `scipy`, `itertools`, and `collections` for:\n\n"
+        "# Symbolic Computation (sympy):\n"
+        "- Algebraic manipulation and simplification\n"
+        "- Solving equations and systems of equations\n"
+        "- Symbolic differentiation and integration\n"
+        "- Number theory functions (primes, divisors, modular arithmetic)\n"
+        "- Polynomial operations and factorization\n"
+        "- Working with mathematical expressions symbolically\n\n"
+        "# Numerical Computation (numpy):\n"
+        "- Array operations and linear algebra\n"
+        "- Efficient numerical calculations for large datasets\n"
+        "- Matrix operations and eigenvalue problems\n"
+        "- Statistical computations\n\n"
+
+        "# High-precision / numerical analysis (mpmath):\n"
+        "- High-precision floating-point arithmetic\n"
+        "- Numerical integration/summation and special functions\n"
+        "- Use mp.mp.dps to increase precision when needed\n\n"
+
+        "# Scientific computing (scipy) (import explicitly if needed):\n"
+        "- Optimization, root finding, numerical integration\n"
+        "- Linear algebra routines, statistics, special functions\n\n"
+
+        "# Discrete / combinatorics helpers (itertools, collections):\n"
+        "- Efficient iteration over combinations/permutations/products\n"
+        "- Counters, deques, default dicts for counting and graph/DP problems\n\n"
+        "# Mathematical Functions (math):\n"
+        "- Standard mathematical functions (trig, log, exp)\n"
+        "- Constants like pi and e\n"
+        "- Basic operations for single values\n\n"
+        "Best Practices:\n"
+        "- Use sympy for exact symbolic answers when possible\n"
+        "- Use numpy for numerical verification and large-scale computation\n"
+        "- Use mpmath for high-precision numeric checks when floating error matters\n"
+        "- Combine symbolic and numerical approaches: derive symbolically, verify numerically\n"
+        "- Keep tool code small and print intermediate checkpoints\n"
+        "- Document your computational strategy clearly\n"
+        "- Validate computational results against known cases or theoretical bounds"
     )
 
     # Heuristics / strategy augmentation
