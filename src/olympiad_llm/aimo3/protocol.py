@@ -16,11 +16,12 @@ def protocol_suffix() -> str:
     return (
         "\n\n"
         "Protocol (follow strictly):\n"
-        "1) First, restate the goal and list <=3 subgoals/lemmas.\n"
-        "2) If computation/search helps, use the Python tool (show the check).\n"
-        "3) Before finalizing, run a final Python check or sanity test.\n"
-        "4) If you are not fully confident, output NOBOX (do not output any \\boxed{...}).\n"
-        "5) If confident, output exactly one final line: \\boxed{n} with integer n in [0,99999].\n"
+        "1) Restate the goal. List <=2 candidate approaches, then choose one.\n"
+        "2) List <=3 subgoals/lemmas for the chosen approach.\n"
+        "3) If computation/search helps, use the Python tool (show the check).\n"
+        "4) Before finalizing, run a final sanity test (tool or reasoning).\n"
+        "5) If you are not fully confident, output NOBOX (do not output any \\boxed{...}).\n"
+        "6) If confident, output exactly one final line: \\boxed{n} with integer n in [0,99999].\n"
     )
 
 

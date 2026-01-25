@@ -27,13 +27,13 @@ GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
         instructions=[
             "Restate the problem in your own words and define every symbol.",
             "State precisely what must be computed/proved.",
-            "List constraints and hidden assumptions.",
+            "List constraints and hidden assumptions (domain, integrality, bounds).",
         ],
     ),
     StrategyCard(
         name="Represent the problem",
         instructions=[
-            "Choose a representation: equations, diagram, graph, table, or coordinate model.",
+            "Propose 2 representations (equations/diagram/graph/table/coordinates) and pick one.",
             "Introduce variables for unknowns; name key quantities.",
             "Rewrite conditions as explicit algebra/logic statements.",
         ],
@@ -43,7 +43,7 @@ GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
         instructions=[
             "Solve a smaller/simpler case first (small n, special angles, small primes).",
             "Look for patterns and formulate a conjecture.",
-            "Then generalize carefully.",
+            "Then generalize carefully: state what changes and what stays invariant.",
         ],
     ),
     StrategyCard(
@@ -82,16 +82,16 @@ GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
         name="Compute, then prove",
         instructions=[
             "Use the Python tool to compute small cases or search candidates.",
-            "Extract a clean conjecture (closed form, invariant, pattern).",
-            "Then prove it rigorously.",
+            "Extract a clean conjecture (closed form, invariant, pattern) and state it explicitly.",
+            "Then prove it rigorously (explain why the computation is evidence, not proof).",
         ],
     ),
     StrategyCard(
         name="Check & verify",
         instructions=[
             "Verify edge cases and constraints (domains, integrality, positivity).",
-            "Cross-check by an independent method or numeric sampling.",
-            "Only output a boxed integer when you are confident.",
+            "Cross-check by an independent method or numeric sampling; try to refute your result.",
+            "If checks are inconclusive, do not guess.",
         ],
     ),
 ]
@@ -103,6 +103,7 @@ FE_COMBI_STRATEGY_CARDS: list[StrategyCard] = [
         instructions=[
             "Extract immediate consequences: plug in 0, 1, -1, and symmetric inputs like (x,x), (x,0), (0,y).",
             "Check injectivity/surjectivity patterns and common forms (additive, multiplicative, linear, constant).",
+            "Generate 2 candidate forms; quickly try to disprove them (counterexample search / constraints).",
             "Use the Python tool to test candidate forms on random small integers/rationals when appropriate.",
         ],
     ),
@@ -120,6 +121,7 @@ FE_COMBI_STRATEGY_CARDS: list[StrategyCard] = [
             "Try a double-counting viewpoint (count the same set in two ways).",
             "Encode objects as sequences/graphs and use injections/surjections to compare sizes.",
             "If the answer is an integer, try modular constraints or parity/valuation invariants.",
+            "As a sanity check, compute small cases to confirm the combinatorial model matches the statement.",
         ],
     ),
 ]
@@ -195,6 +197,7 @@ def render_strategy_card(card: StrategyCard) -> str:
     lines = [
         "Wickelgren-style strategy card (paraphrased):",
         f"- Focus: {card.name}",
+        "- Micro-rules: propose 2 angles → pick 1; include a toy check; don't claim verification without a check.",
     ]
     for item in card.instructions:
         lines.append(f"- {item}")
