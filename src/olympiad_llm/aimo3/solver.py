@@ -969,103 +969,113 @@ class AIMO3Solver:
             "tiebreak": None,
         }
         tiebreak_used = False
+        runner_ans = None
+        runner_d = None
+        votes_gap = None
         if len(ranked) >= 2:
             runner_ans, runner_d = ranked[1]
             votes_gap = int(top_d["votes"]) - int(runner_d["votes"])
 
-            need_verify = False
-            if bool(self.cfg.second_stage_verify_enabled):
-                if bool(self.cfg.second_stage_verify_trigger_if_no_verified) and int(top_d["verified"]) == 0:
-                    need_verify = True
-                if votes_gap <= int(self.cfg.second_stage_verify_trigger_votes_gap):
-                    need_verify = True
+        # Second-stage verification can be valuable even when there is only one unique candidate,
+        # especially if it lacks any clean tool support.
+        need_verify = False
+        if bool(self.cfg.second_stage_verify_enabled):
+            if bool(self.cfg.second_stage_verify_trigger_if_no_verified) and int(top_d.get("verified", 0)) == 0:
+                need_verify = True
+            if votes_gap is not None and votes_gap <= int(self.cfg.second_stage_verify_trigger_votes_gap):
+                need_verify = True
 
-            remaining = deadline - time.time()
-            if need_verify and remaining >= float(self.cfg.second_stage_verify_min_remaining):
-                mult = 1.0
-                if int(top_d.get("verified", 0)) <= 0:
-                    mult *= 1.50
-                if votes_gap <= int(self.cfg.second_stage_verify_trigger_votes_gap):
-                    mult *= 1.25
-                if int(top_d.get("verified", 0)) > 0 and votes_gap >= 3:
-                    mult *= 0.80
+        verified_choice = None
+        remaining = deadline - time.time()
+        if need_verify and remaining >= float(self.cfg.second_stage_verify_min_remaining):
+            mult = 1.0
+            if int(top_d.get("verified", 0)) <= 0:
+                mult *= 1.50
+            if votes_gap is not None and votes_gap <= int(self.cfg.second_stage_verify_trigger_votes_gap):
+                mult *= 1.25
+            if votes_gap is not None and int(top_d.get("verified", 0)) > 0 and votes_gap >= 3:
+                mult *= 0.80
 
-                verify_budget = adaptive_verify_budget(
-                    remaining_s=remaining,
-                    base_fraction=float(self.cfg.second_stage_verify_budget_fraction),
-                    cap_s=float(self.cfg.second_stage_verify_budget_cap),
-                    multiplier=mult,
-                    min_s=float(self.cfg.second_stage_verify_min_effective_time),
-                )
-                verify_deadline = time.time() + verify_budget
-                top_k = max(2, int(self.cfg.second_stage_verify_top_k))
-                candidates = [ans for (ans, _d) in ranked[:top_k]]
-                verified_choice = self._second_stage_verify(user_input, candidates, verify_deadline)
-                if verified_choice is not None:
-                    chosen = verified_choice
+            verify_budget = adaptive_verify_budget(
+                remaining_s=remaining,
+                base_fraction=float(self.cfg.second_stage_verify_budget_fraction),
+                cap_s=float(self.cfg.second_stage_verify_budget_cap),
+                multiplier=mult,
+                min_s=float(self.cfg.second_stage_verify_min_effective_time),
+            )
+            verify_deadline = time.time() + verify_budget
+            desired_top_k = max(1, int(self.cfg.second_stage_verify_top_k))
+            top_k = max(1, min(desired_top_k, len(ranked)))
+            candidates = [ans for (ans, _d) in ranked[:top_k]]
+            verified_choice = self._second_stage_verify(user_input, candidates, verify_deadline)
+            if verified_choice is not None:
+                chosen = verified_choice
 
-                decision["second_stage"] = {
-                    "need_verify": bool(need_verify),
-                    "votes_gap": int(votes_gap),
-                    "budget_s": float(verify_budget),
-                    "candidates": [int(c) for c in candidates],
-                    "choice": (int(verified_choice) if verified_choice is not None else None),
-                }
+            decision["second_stage"] = {
+                "need_verify": bool(need_verify),
+                "votes_gap": (int(votes_gap) if votes_gap is not None else None),
+                "budget_s": float(verify_budget),
+                "candidates": [int(c) for c in candidates],
+                "choice": (int(verified_choice) if verified_choice is not None else None),
+            }
 
-                # If verification ran but couldn't choose, and the top candidate lacks verified support,
-                # run a single short tie-break attempt.
-                remaining2 = deadline - time.time()
-                if (
-                    bool(getattr(self.cfg, "tiebreak_enabled", True))
-                    and verified_choice is None
-                    and int(top_d.get("verified", 0)) <= 0
-                    and remaining2 >= float(getattr(self.cfg, "tiebreak_min_remaining_s", 0.0) or 0.0)
-                ):
-                    tb_budget = min(float(getattr(self.cfg, "tiebreak_budget_cap_s", 35.0) or 35.0), remaining2 * 0.60)
-                    tb_deadline = time.time() + max(3.0, tb_budget)
+        # If second-stage verification can't decide, run one short tie-break attempt when:
+        # - we actually have two candidates, and
+        # - either the leader has no verified support OR it's a vote tie.
+        remaining2 = deadline - time.time()
+        if (
+            bool(getattr(self.cfg, "tiebreak_enabled", True))
+            and verified_choice is None
+            and runner_ans is not None
+            and runner_d is not None
+            and remaining2 >= float(getattr(self.cfg, "tiebreak_min_remaining_s", 0.0) or 0.0)
+            and (int(top_d.get("verified", 0)) <= 0 or (votes_gap is not None and votes_gap <= 0))
+        ):
+            tb_budget = min(float(getattr(self.cfg, "tiebreak_budget_cap_s", 35.0) or 35.0), remaining2 * 0.60)
+            tb_deadline = time.time() + max(3.0, tb_budget)
 
-                    mode = str(getattr(self.cfg, "recovery_mode", "auto") or "auto").strip().lower()
-                    # Auto: avoid tool if we already saw many errors overall.
-                    total_errs = sum(int(r.stats.python_errors) for r in detailed)
-                    if mode == "auto":
-                        mode = "no_tool" if total_errs >= 8 else "micro_tool"
+            mode = str(getattr(self.cfg, "recovery_mode", "auto") or "auto").strip().lower()
+            # Auto: avoid tool if we already saw many errors overall.
+            total_errs = sum(int(r.stats.python_errors) for r in detailed)
+            if mode == "auto":
+                mode = "no_tool" if total_errs >= 8 else "micro_tool"
 
-                    variant = "no_tool" if mode == "no_tool" else "micro_tool"
-                    tb_prompt = (
-                        TIR_PROMPT_VERIFICATION
-                        + "\n\nTie-break task: Only choose between the candidate answers below. "
-                        "Do quick consistency checks. Output EXACTLY one line: \\boxed{CAND}. "
-                        "If you cannot decide, output NOBOX (do not output any boxed answer).\n"
-                        f"Candidates: {int(top_ans)}, {int(runner_ans)}."
-                    )
-                    if variant == "no_tool":
-                        tb_prompt += "\nDo NOT use the python tool."
-                    else:
-                        tb_prompt += "\nIf you use python, use at most a couple short snippets."
-                    if bool(self.cfg.protocol_enabled):
-                        tb_prompt = with_protocol(tb_prompt)
+            variant = "no_tool" if mode == "no_tool" else "micro_tool"
+            tb_prompt = (
+                TIR_PROMPT_VERIFICATION
+                + "\n\nTie-break task: Only choose between the candidate answers below. "
+                "Do quick consistency checks. Output EXACTLY one line: \\boxed{CAND}. "
+                "If you cannot decide, output NOBOX (do not output any boxed answer).\n"
+                f"Candidates: {int(top_ans)}, {int(runner_ans)}."
+            )
+            if variant == "no_tool":
+                tb_prompt += "\nDo NOT use the python tool."
+            else:
+                tb_prompt += "\nIf you use python, use at most a couple short snippets."
+            if bool(self.cfg.protocol_enabled):
+                tb_prompt = with_protocol(tb_prompt)
 
-                    tb_res = self._process_attempt(
-                        user_input,
-                        tb_prompt,
-                        attempt_index=99_999,
-                        attempt_tag=f"tiebreak|variant={variant}|pack=recovery|card=top2",
-                        stop_event=threading.Event(),
-                        deadline=min(tb_deadline, deadline),
-                    )
-                    detailed.append(tb_res)
-                    if isinstance(tb_res.answer, int) and tb_res.answer in {int(top_ans), int(runner_ans)}:
-                        chosen = int(tb_res.answer)
-                        tiebreak_used = True
+            tb_res = self._process_attempt(
+                user_input,
+                tb_prompt,
+                attempt_index=99_999,
+                attempt_tag=f"tiebreak|variant={variant}|pack=recovery|card=top2",
+                stop_event=threading.Event(),
+                deadline=min(tb_deadline, deadline),
+            )
+            detailed.append(tb_res)
+            if isinstance(tb_res.answer, int) and tb_res.answer in {int(top_ans), int(runner_ans)}:
+                chosen = int(tb_res.answer)
+                tiebreak_used = True
 
-                    decision["tiebreak"] = {
-                        "enabled": True,
-                        "variant": variant,
-                        "budget_s": float(tb_budget),
-                        "candidates": [int(top_ans), int(runner_ans)],
-                        "choice": (int(tb_res.answer) if isinstance(tb_res.answer, int) else None),
-                        "used": bool(tiebreak_used),
-                    }
+            decision["tiebreak"] = {
+                "enabled": True,
+                "variant": variant,
+                "budget_s": float(tb_budget),
+                "candidates": [int(top_ans), int(runner_ans)],
+                "choice": (int(tb_res.answer) if isinstance(tb_res.answer, int) else None),
+                "used": bool(tiebreak_used),
+            }
 
         self._trace.record(
             {

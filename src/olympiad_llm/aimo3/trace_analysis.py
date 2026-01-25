@@ -188,6 +188,10 @@ def summarize_trace(events: Iterable[dict[str, Any]]) -> list[ProblemSummary]:
             risk += 5.0
         if (ps.top_verified or 0) <= 0:
             risk += 2.0
+        # If we attempted second-stage verification but couldn't select a winner,
+        # that's a strong signal the run ended in ambiguity.
+        if ps.second_stage_ran and ps.second_stage_choice is None:
+            risk += 1.0
         if ps.python_errors > 0:
             risk += min(3.0, ps.python_errors / 5.0)
         if (ps.top_tag_diversity or 0) <= 1:
