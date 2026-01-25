@@ -7,6 +7,23 @@ def test_extract_boxed_int_last_one_wins():
     assert ex.extract_boxed_int(txt) == 1234
 
 
+def test_extract_boxed_int_handles_text_wrapper_and_spacing():
+    ex = AnswerExtractor(aimo_lo=0, aimo_hi=99999)
+    txt = "Answer is \\boxed{\\text{\\,1,234\\,}}."
+    assert ex.extract_boxed_int(txt) == 1234
+
+
+def test_extract_boxed_int_handles_nested_braces():
+    ex = AnswerExtractor(aimo_lo=0, aimo_hi=99999)
+    txt = "We conclude \\boxed{{1234}}."
+    assert ex.extract_boxed_int(txt) == 1234
+
+
+def test_extract_boxed_content_handles_nested_braces():
+    ex = AnswerExtractor()
+    assert ex.extract_boxed_content("X=\\boxed{{x^2+1}}") == "{x^2+1}"
+
+
 def test_extract_boxed_int_out_of_range_none():
     ex = AnswerExtractor(aimo_lo=0, aimo_hi=99999)
     assert ex.extract_boxed_int("\\boxed{100000}") is None

@@ -4,8 +4,15 @@ import re
 from dataclasses import dataclass
 
 
-_BOXED_RE = re.compile(r"\\boxed\s*\{\s*([^}]*)\s*\}")
-_BOXED_INT_RE = re.compile(r"\\boxed\s*\{\s*([0-9][0-9,]*)\s*\}")
+_LATEX_WRAPPER_RE = re.compile(
+    r"^\s*\\(?P<cmd>text|mathrm|mathbf|textbf|bf|operatorname)\s*\{(?P<body>.*)\}\s*$",
+    flags=re.DOTALL,
+)
+
+_LATEX_SPACING_RE = re.compile(r"\\[,;!]|\\quad|\\qquad")
+
+_STRICT_INT_RE = re.compile(r"^\s*([+-]?[0-9][0-9,]*)\s*$")
+_INT_TOKEN_RE = re.compile(r"([+-]?[0-9][0-9,]*)")
 
 # Fallback patterns when the model forgets boxing.
 _FINAL_INT_HINT_RE = re.compile(
@@ -13,6 +20,86 @@ _FINAL_INT_HINT_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _ANY_INT_RE = re.compile(r"\b([0-9][0-9,]*)\b")
+
+
+def _iter_boxed_contents(text: str) -> list[str]:
+    """Return contents of all occurrences of \boxed{...}.
+
+    Uses a small brace-matching parser (regex breaks on nested braces).
+    """
+
+    t = text or ""
+    out: list[str] = []
+    i = 0
+    n = len(t)
+    needle = "\\boxed"
+    while i < n:
+        j = t.find(needle, i)
+        if j < 0:
+            break
+
+        k = j + len(needle)
+        # Skip optional whitespace.
+        while k < n and t[k].isspace():
+            k += 1
+        if k >= n or t[k] != "{":
+            i = j + 1
+            continue
+
+        # Parse balanced braces starting at this '{'.
+        depth = 0
+        start = None
+        end = None
+        for p in range(k, n):
+            ch = t[p]
+            if ch == "{":
+                depth += 1
+                if depth == 1:
+                    start = p + 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = p
+                    break
+                if depth < 0:
+                    break
+        if start is not None and end is not None and end >= start:
+            out.append(t[start:end])
+            i = end + 1
+        else:
+            i = j + 1
+
+    return out
+
+
+def _clean_box_content(content: str) -> str:
+    """Best-effort cleanup for common LaTeX wrappers/spacers around integers."""
+
+    c = (content or "").strip()
+
+    # Remove common spacing commands.
+    c = _LATEX_SPACING_RE.sub(" ", c)
+    c = c.replace("\\displaystyle", " ")
+    c = c.replace("\\left", " ")
+    c = c.replace("\\right", " ")
+
+    # Iteratively unwrap common text wrappers: \text{123} -> 123.
+    # (This also helps with \mathrm{...}, \mathbf{...}, etc.)
+    for _ in range(5):
+        m = _LATEX_WRAPPER_RE.match(c)
+        if not m:
+            break
+        c = (m.group("body") or "").strip()
+
+    # Strip outer braces if someone wrote \boxed{{123}}.
+    for _ in range(3):
+        cc = c.strip()
+        if cc.startswith("{") and cc.endswith("}"):
+            c = cc[1:-1].strip()
+        else:
+            break
+
+    return c
 
 
 @dataclass(frozen=True)
@@ -28,16 +115,39 @@ class AnswerExtractor:
     def extract_boxed_int(self, text: str) -> int | None:
         """Return the last valid \boxed{int} in [aimo_lo, aimo_hi], else None."""
 
-        matches = list(_BOXED_INT_RE.findall(text or ""))
-        if not matches:
+        contents = _iter_boxed_contents(text or "")
+        if not contents:
             return None
-        raw = matches[-1].replace(",", "")
-        try:
-            val = int(raw)
-        except ValueError:
-            return None
-        if self.aimo_lo <= val <= self.aimo_hi:
-            return val
+
+        for raw_content in reversed(contents):
+            cleaned = _clean_box_content(raw_content)
+
+            # Strict path: the cleaned content is just an integer.
+            m = _STRICT_INT_RE.match(cleaned)
+            if m:
+                raw = (m.group(1) or "").replace(",", "")
+                try:
+                    val = int(raw)
+                except ValueError:
+                    val = None
+                if val is not None and self.aimo_lo <= val <= self.aimo_hi:
+                    return val
+
+            # Fallback path: pull the most plausible integer token from the content.
+            toks = _INT_TOKEN_RE.findall(cleaned)
+            if not toks:
+                continue
+            # Prefer the longest token (e.g., avoid picking the trailing "5" in "10^{5}").
+            toks_sorted = sorted(toks, key=lambda s: (len(s.replace(",", "").lstrip("+-")), toks.index(s)))
+            cand = toks_sorted[-1]
+            cand2 = cand.replace(",", "")
+            try:
+                val = int(cand2)
+            except ValueError:
+                continue
+            if self.aimo_lo <= val <= self.aimo_hi:
+                return val
+
         return None
 
     def extract_int_fallback(self, text: str) -> int | None:
@@ -70,10 +180,10 @@ class AnswerExtractor:
     def extract_boxed_content(self, text: str) -> str | None:
         """Return the *content* of the last \boxed{...} (not necessarily int)."""
 
-        matches = list(_BOXED_RE.findall(text or ""))
-        if not matches:
+        contents = _iter_boxed_contents(text or "")
+        if not contents:
             return None
-        return matches[-1].strip()
+        return contents[-1].strip()
 
     def normalize_final_answer_text(self, text: str) -> str:
         """If the answer contains \boxed{...}, return the boxed content; else return stripped text."""
