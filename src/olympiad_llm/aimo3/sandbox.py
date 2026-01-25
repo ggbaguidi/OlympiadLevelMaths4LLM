@@ -62,6 +62,7 @@ class AIMO3Sandbox:
             'import math\n'
             'import numpy\n'
             'import sympy\n'
+            'import random\n'
             'import itertools\n'
             'import collections\n'
             "import sympy as sp\n"
@@ -160,6 +161,7 @@ class AIMO3Sandbox:
             'import math\n'
             'import numpy\n'
             'import sympy\n'
+            'import random\n'
             'import itertools\n'
             'import collections\n'
             "import sympy as sp\n"
