@@ -40,6 +40,24 @@ def test_extract_int_fallback_prefers_answer_hint():
     assert ex.extract_int_fallback(txt) == 1234
 
 
+def test_extract_int_fallback_handles_dollar_math_wrapper():
+    ex = AnswerExtractor(aimo_lo=0, aimo_hi=99999)
+    txt = "Final answer is $1,234$. (Earlier we mentioned 99999.)"
+    assert ex.extract_int_fallback(txt) == 1234
+
+
+def test_extract_int_fallback_handles_bold_wrapper():
+    ex = AnswerExtractor(aimo_lo=0, aimo_hi=99999)
+    txt = "Final answer is **1234**. Ignore 777 later in the writeup. 777"
+    assert ex.extract_int_fallback(txt) == 1234
+
+
+def test_extract_int_fallback_handles_paren_math_wrapper():
+    ex = AnswerExtractor(aimo_lo=0, aimo_hi=99999)
+    txt = "final answer is \\((1234)\\)."
+    assert ex.extract_int_fallback(txt) == 1234
+
+
 def test_extract_int_fallback_last_int_in_range():
     ex = AnswerExtractor(aimo_lo=0, aimo_hi=99999)
     txt = "Some numbers 12 99 100000 and then 777"

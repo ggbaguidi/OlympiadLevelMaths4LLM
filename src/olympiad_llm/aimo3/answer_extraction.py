@@ -15,11 +15,21 @@ _STRICT_INT_RE = re.compile(r"^\s*([+-]?[0-9][0-9,]*)\s*$")
 _INT_TOKEN_RE = re.compile(r"([+-]?[0-9][0-9,]*)")
 
 # Fallback patterns when the model forgets boxing.
+#
+# Common failure mode: the model outputs something like
+#   "Final answer is $1,234$."
+#   "Final Answer: **1234**"
+#   "final answer is \(1234\)"
+#   "Final answer is \boxed{1234}" (boxing will be handled earlier, but keep this robust).
 _FINAL_INT_HINT_RE = re.compile(
-    r"(?:final\s+answer|answer|ans)\s*(?:is|=|:)?\s*([0-9][0-9,]*)",
+    r"(?:final\s+answer|answer|ans)\s*(?:is|=|:)?\s*"  # hint
+    r"(?:\\boxed\s*\{\s*)?"  # optional \boxed{
+    r"(?:\\text\s*\{\s*)?"  # optional \text{
+    r"(?:\*\*|\$|\\\(|\\\[)?\s*"  # optional markdown/LaTeX opener
+    r"([+-]?[0-9][0-9,]*)",  # capture integer
     flags=re.IGNORECASE,
 )
-_ANY_INT_RE = re.compile(r"\b([0-9][0-9,]*)\b")
+_ANY_INT_RE = re.compile(r"\b([+-]?[0-9][0-9,]*)\b")
 
 
 def _iter_boxed_contents(text: str) -> list[str]:
