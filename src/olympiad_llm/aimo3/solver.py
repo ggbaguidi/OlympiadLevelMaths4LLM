@@ -375,6 +375,28 @@ class AIMO3Solver:
             self.client = OpenAI(base_url=self.base_url, api_key="sk-local", timeout=self.cfg.session_timeout)
             self.server.wait_ready(self.client)
 
+        # Optional: install Lean toolchain from an offline archive.
+        # Do this BEFORE initializing kernels so that PATH is inherited.
+        if bool(getattr(self.cfg, "lean_toolchain_enabled", False)):
+            try:
+                from .lean_toolchain import ensure_lean_toolchain
+            except Exception:  # noqa: BLE001
+                # Optional module; fail gracefully if something is wrong with packaging.
+                ensure_lean_toolchain = None
+
+            if ensure_lean_toolchain is not None:
+                ensure_lean_toolchain(
+                    enabled=True,
+                    dataset_dir=str(getattr(self.cfg, "lean_toolchain_dataset_dir", "") or "") or None,
+                    archive_path=str(getattr(self.cfg, "lean_toolchain_archive_path", "") or "") or None,
+                    archive_name=str(getattr(self.cfg, "lean_toolchain_archive_name", "") or "") or None,
+                    work_dir=str(getattr(self.cfg, "lean_toolchain_work_dir", "") or "") or None,
+                    prefer_existing=True,
+                    check_versions=False,
+                    verbose=bool(getattr(self.cfg, "lean_toolchain_verbose", False)),
+                    strict=True,
+                )
+
         self._initialize_kernels()
         self.notebook_start_time = time.time()
         self.problems_remaining = int(self.cfg.problems_total)

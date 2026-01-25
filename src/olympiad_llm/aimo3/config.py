@@ -114,6 +114,24 @@ class AIMO3Config:
     kv_cache_dtype: str = "fp8_e4m3"
     dtype: str = "auto"
 
+    # Optional: Lean4 toolchain bootstrap (offline Kaggle).
+    # If enabled, the solver will attempt to locate/extract a Lean toolchain archive
+    # (e.g. lean-<ver>-linux.tar.gz) and make `lean`/`lake` available on PATH.
+    #
+    # This is NOT required for normal operation; it only matters if you want to
+    # call `lean`/`lake` from inside the python tool.
+    lean_toolchain_enabled: bool = False
+    # Kaggle dataset mount directory containing the tar.gz (e.g. /kaggle/input/<dataset>)
+    lean_toolchain_dataset_dir: str = ""
+    # Full path to the tar.gz (overrides dataset_dir if set)
+    lean_toolchain_archive_path: str = ""
+    # Optional: specific filename inside dataset_dir (if multiple archives exist)
+    lean_toolchain_archive_name: str = ""
+    # Writable directory to extract into (defaults to /kaggle/working/lean4 when present)
+    lean_toolchain_work_dir: str = ""
+    # Print setup diagnostics (useful while debugging Kaggle mounts)
+    lean_toolchain_verbose: bool = False
+
     # Time budgets (seconds)
     high_problem_timeout: float = 900.0
     base_problem_timeout: float = 300.0
@@ -315,6 +333,16 @@ class AIMO3Config:
         disp = os.getenv("AIMO3_DISPLAY_CANDIDATES", "1").strip().lower() not in {"0", "false", "no"}
         require_cuda = os.getenv("AIMO3_REQUIRE_CUDA", "1").strip().lower() not in {"0", "false", "no"}
 
+        # Optional: Lean toolchain bootstrap (offline Kaggle).
+        lean_toolchain_enabled = (
+            os.getenv("AIMO3_LEAN_TOOLCHAIN_ENABLED", "0").strip().lower() not in {"0", "false", "no"}
+        )
+        lean_toolchain_dataset_dir = (os.getenv("AIMO3_LEAN_DATASET_DIR", "") or "").strip()
+        lean_toolchain_archive_path = (os.getenv("AIMO3_LEAN_ARCHIVE_PATH", "") or "").strip()
+        lean_toolchain_archive_name = (os.getenv("AIMO3_LEAN_ARCHIVE_NAME", "") or "").strip()
+        lean_toolchain_work_dir = (os.getenv("AIMO3_LEAN_WORK_DIR", "") or "").strip()
+        lean_toolchain_verbose = os.getenv("AIMO3_LEAN_VERBOSE", "0").strip().lower() not in {"0", "false", "no"}
+
         # Core solver knobs
         attempts = _env_int("AIMO3_ATTEMPTS", AIMO3Config.attempts)
         workers = _env_int("AIMO3_WORKERS", AIMO3Config.workers)
@@ -496,6 +524,12 @@ class AIMO3Config:
             trace_attempts_enabled=trace_attempts_enabled,
             trace_attempts_max_chars=trace_attempts_max_chars,
             require_cuda=require_cuda,
+            lean_toolchain_enabled=lean_toolchain_enabled,
+            lean_toolchain_dataset_dir=lean_toolchain_dataset_dir,
+            lean_toolchain_archive_path=lean_toolchain_archive_path,
+            lean_toolchain_archive_name=lean_toolchain_archive_name,
+            lean_toolchain_work_dir=lean_toolchain_work_dir,
+            lean_toolchain_verbose=lean_toolchain_verbose,
             server_timeout=server_timeout,
             context_tokens=context_tokens,
             batch_size=batch_size,

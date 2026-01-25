@@ -55,6 +55,10 @@ class AIMO3Sandbox:
 
         # Preload common math stack.
         self.execute(
+            'import os\n'
+            '_lean_bin = os.environ.get("AIMO3_LEAN_BIN_DIR")\n'
+            'if _lean_bin and _lean_bin not in os.environ.get("PATH", ""):\n'
+            '    os.environ["PATH"] = _lean_bin + os.pathsep + os.environ.get("PATH", "")\n'
             'import math\n'
             'import numpy\n'
             'import sympy\n'
@@ -149,6 +153,10 @@ class AIMO3Sandbox:
         self.execute("%reset -f")
         self.execute("import gc; gc.collect()")
         self.execute(
+            'import os\n'
+            '_lean_bin = os.environ.get("AIMO3_LEAN_BIN_DIR")\n'
+            'if _lean_bin and _lean_bin not in os.environ.get("PATH", ""):\n'
+            '    os.environ["PATH"] = _lean_bin + os.pathsep + os.environ.get("PATH", "")\n'
             'import math\n'
             'import numpy\n'
             'import sympy\n'
