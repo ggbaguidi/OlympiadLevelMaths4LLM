@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import tarfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +20,20 @@ class LeanToolchainInfo:
     lake_path: str | None
     lean_version: str | None
     lake_version: str | None
+
+
+@dataclass(frozen=True)
+class LeanSmokeTestResult:
+    ok: bool
+    lean_path: str | None
+    lake_path: str | None
+    lean_version: str | None
+    lake_version: str | None
+    file_path: str | None
+    exit_code: int | None
+    stdout: str
+    stderr: str
+    elapsed_s: float
 
 
 def _is_truthy(v: str | None) -> bool:
@@ -49,6 +64,101 @@ def _safe_run_version(cmd: list[str]) -> str | None:
     err = (p.stderr or "").strip()
     txt = out if out else err
     return txt.strip() if txt else None
+
+
+def _default_smoke_dir() -> Path:
+    kaggle_work = Path("/kaggle/working")
+    if kaggle_work.exists():
+        return kaggle_work / "lean4_smoke"
+    return Path(".cache") / "aimo3" / "lean4_smoke"
+
+
+def lean_smoke_test(
+    *,
+    work_dir: str | None = None,
+    text: str | None = None,
+    timeout_s: float = 15.0,
+    verbose: bool = False,
+) -> LeanSmokeTestResult:
+    """Typecheck a tiny Lean file to confirm the toolchain works.
+
+    Intended usage in a Kaggle submission notebook BEFORE solver startup:
+    1) ensure_lean_toolchain(...)
+    2) lean_smoke_test(...)
+
+    Returns a structured result (stdout/stderr/exit code) for easy debugging.
+    """
+
+    lean_path = _find_executable("lean")
+    lake_path = _find_executable("lake")
+    lean_ver = _safe_run_version(["lean", "--version"]) if lean_path else None
+    lake_ver = _safe_run_version(["lake", "--version"]) if lake_path else None
+
+    if not lean_path:
+        raise FileNotFoundError("`lean` not found on PATH. Did you run ensure_lean_toolchain()?")
+
+    smoke_root = Path(work_dir) if work_dir else _default_smoke_dir()
+    smoke_root = smoke_root.expanduser().resolve()
+    smoke_root.mkdir(parents=True, exist_ok=True)
+
+    if text is None:
+        # Keep it minimal: no Mathlib, only core.
+        text = """-- aimo3 lean smoke test\n#eval (1 + 1 : Nat)\nexample : (1 : Nat) = 1 := rfl\n"""
+
+    test_file = smoke_root / "AIMO3Smoke.lean"
+    test_file.write_text(text, encoding="utf-8")
+
+    start = time.time()
+    try:
+        p = subprocess.run(
+            ["lean", str(test_file)],
+            capture_output=True,
+            text=True,
+            timeout=float(timeout_s),
+        )
+        exit_code = int(p.returncode)
+        stdout = (p.stdout or "")
+        stderr = (p.stderr or "")
+    except subprocess.TimeoutExpired as e:
+        exit_code = None
+        stdout = (getattr(e, "stdout", None) or "")
+        stderr = (getattr(e, "stderr", None) or "")
+        stderr = (stderr + "\n" if stderr else "") + f"[ERROR] lean smoke test timed out after {timeout_s} seconds"
+    except Exception as e:  # noqa: BLE001
+        exit_code = None
+        stdout = ""
+        stderr = f"[ERROR] lean smoke test failed: {e}"
+
+    elapsed = time.time() - start
+    ok = exit_code == 0
+
+    if verbose:
+        print(f"[lean-smoke] lean: {lean_path}")
+        if lake_path:
+            print(f"[lean-smoke] lake: {lake_path}")
+        if lean_ver:
+            print(f"[lean-smoke] lean --version: {lean_ver}")
+        if lake_ver:
+            print(f"[lean-smoke] lake --version: {lake_ver}")
+        print(f"[lean-smoke] file: {test_file}")
+        print(f"[lean-smoke] exit: {exit_code}  elapsed_s={elapsed:.3f}")
+        if stdout.strip():
+            print("[lean-smoke] stdout:\n" + stdout.strip())
+        if stderr.strip():
+            print("[lean-smoke] stderr:\n" + stderr.strip())
+
+    return LeanSmokeTestResult(
+        ok=ok,
+        lean_path=lean_path,
+        lake_path=lake_path,
+        lean_version=lean_ver,
+        lake_version=lake_ver,
+        file_path=str(test_file),
+        exit_code=exit_code,
+        stdout=stdout,
+        stderr=stderr,
+        elapsed_s=float(elapsed),
+    )
 
 
 def _default_work_dir() -> Path:

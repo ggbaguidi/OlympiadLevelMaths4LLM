@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from olympiad_llm.aimo3.lean_toolchain import ensure_lean_toolchain
+from olympiad_llm.aimo3.lean_toolchain import ensure_lean_toolchain, lean_smoke_test
 
 
 def _make_dummy_lean_archive(tmp_path: Path) -> Path:
@@ -161,3 +161,58 @@ def test_ensure_lean_toolchain_accepts_extracted_dir(tmp_path: Path, monkeypatch
     assert info.bin_dir is not None
     assert Path(info.bin_dir) == bin_dir
     assert os.environ.get("PATH", "").startswith(str(bin_dir))
+
+
+def test_lean_smoke_test_ok_with_dummy_exe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # Create dummy lean/lake binaries on PATH.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    lean = bin_dir / "lean"
+    lake = bin_dir / "lake"
+
+    lean.write_text(
+        """#!/bin/sh
+if [ \"$1\" = \"--version\" ]; then
+  echo 'Lean dummy'
+  exit 0
+fi
+exit 0
+""",
+        encoding="utf-8",
+    )
+    lake.write_text(
+        """#!/bin/sh
+if [ \"$1\" = \"--version\" ]; then
+  echo 'Lake dummy'
+  exit 0
+fi
+exit 0
+""",
+        encoding="utf-8",
+    )
+
+    for p in (lean, lake):
+        p.chmod(p.stat().st_mode | stat.S_IXUSR)
+
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    r = lean_smoke_test(work_dir=str(tmp_path / "smoke"), timeout_s=2.0, verbose=False)
+    assert r.ok is True
+    assert r.exit_code == 0
+    assert r.file_path is not None
+
+
+def test_lean_smoke_test_nonzero_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    lean = bin_dir / "lean"
+    lean.write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
+    lean.chmod(lean.stat().st_mode | stat.S_IXUSR)
+
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    r = lean_smoke_test(work_dir=str(tmp_path / "smoke"), timeout_s=2.0, verbose=False)
+    assert r.ok is False
+    assert r.exit_code == 7
