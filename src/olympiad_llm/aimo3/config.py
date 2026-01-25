@@ -145,6 +145,17 @@ class AIMO3Config:
     temperature: float = 0.95
     min_p: float = 0.05
 
+    # Optional: per-role temperature schedule (general)
+    # If a value is None, the solver will fall back to `temperature`.
+    temperature_exploration: float | None = 0.95
+    temperature_main: float | None = 0.70
+    temperature_code: float | None = 0.65
+    temperature_verification: float | None = 0.20
+    temperature_formatting: float | None = 0.10
+
+    # How many early attempts should run in "exploration" temperature mode.
+    exploration_attempts: int = 2
+
     # Hardware requirements
     # vLLM (as used in Kaggle) typically requires an NVIDIA GPU with a working driver.
     # If True and no CUDA driver/GPU is detected, we fail fast with a helpful error.
@@ -298,6 +309,24 @@ class AIMO3Config:
             "AIMO3_RECOVERY_MICRO_TOOL_CALL_CAP", AIMO3Config.recovery_micro_tool_call_cap
         )
 
+        # Decoding knobs
+        temperature = _env_float("AIMO3_TEMPERATURE", AIMO3Config.temperature)
+        min_p = _env_float("AIMO3_MIN_P", AIMO3Config.min_p)
+
+        # Per-role temperatures (optional)
+        temperature_exploration = _env_float(
+            "AIMO3_TEMPERATURE_EXPLORATION", float(AIMO3Config.temperature_exploration or temperature)
+        )
+        temperature_main = _env_float("AIMO3_TEMPERATURE_MAIN", float(AIMO3Config.temperature_main or temperature))
+        temperature_code = _env_float("AIMO3_TEMPERATURE_CODE", float(AIMO3Config.temperature_code or temperature))
+        temperature_verification = _env_float(
+            "AIMO3_TEMPERATURE_VERIFICATION", float(AIMO3Config.temperature_verification or temperature)
+        )
+        temperature_formatting = _env_float(
+            "AIMO3_TEMPERATURE_FORMATTING", float(AIMO3Config.temperature_formatting or temperature)
+        )
+        exploration_attempts = _env_int("AIMO3_EXPLORATION_ATTEMPTS", AIMO3Config.exploration_attempts)
+
         format_recovery_enabled = (
             os.getenv("AIMO3_FORMAT_RECOVERY_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
         )
@@ -358,6 +387,14 @@ class AIMO3Config:
             tiebreak_enabled=tiebreak_enabled,
             tiebreak_min_remaining_s=tiebreak_min_remaining_s,
             tiebreak_budget_cap_s=tiebreak_budget_cap_s,
+            temperature=temperature,
+            min_p=min_p,
+            temperature_exploration=temperature_exploration,
+            temperature_main=temperature_main,
+            temperature_code=temperature_code,
+            temperature_verification=temperature_verification,
+            temperature_formatting=temperature_formatting,
+            exploration_attempts=exploration_attempts,
             attempts=attempts,
             workers=workers,
             early_stop=early_stop,

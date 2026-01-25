@@ -32,6 +32,7 @@ from .budget import adaptive_verify_budget, compute_attempt_and_verify_deadlines
 from .answer_extraction import AnswerExtractor
 from .attempts import AttemptResult, AttemptStats
 from .trace import TraceRecorder, stable_problem_id
+from .decoding import temperature_for_attempt
 from .recovery import (
     ToolRecoveryPolicy,
     should_abort_attempt,
@@ -448,7 +449,7 @@ class AIMO3Solver:
 
                 stream = self.client.completions.create(
                     model=self.cfg.served_model_name,
-                    temperature=self.cfg.temperature,
+                    temperature=temperature_for_attempt(cfg=self.cfg, attempt_index=attempt_index, attempt_tag=attempt_tag),
                     max_tokens=max_tokens,
                     prompt=prompt_ids,
                     seed=attempt_seed,
@@ -1079,6 +1080,9 @@ class AIMO3Solver:
                         "attempt": int(r.attempt),
                         "answer": (int(r.answer) if isinstance(r.answer, int) else None),
                         "tag": r.tag,
+                        "temperature": float(
+                            temperature_for_attempt(cfg=self.cfg, attempt_index=int(r.attempt) - 1, attempt_tag=r.tag)
+                        ),
                         "token_count": int(r.stats.token_count),
                         "python_calls": int(r.stats.python_calls),
                         "python_errors": int(r.stats.python_errors),
