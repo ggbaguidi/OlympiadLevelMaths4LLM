@@ -24,7 +24,7 @@ from .errors import OptionalDependencyError
 from .prompts import TIR_PROMPT_ANALYTIC, TIR_PROMPT_CODE_FIRST, TIR_PROMPT_STANDARD, TIR_PROMPT_VERIFICATION, TIR_PROMPTS
 from .sandbox import AIMO3Sandbox
 from .vllm_server import VLLMServer
-from .wickelgren import augment_system_prompt
+from .wickelgren import augment_system_prompt_with_meta
 from .protocol import with_protocol
 from .ranking import rank_candidates
 from .budget import adaptive_verify_budget, compute_attempt_and_verify_deadlines, reserve_fraction_for_budget
@@ -478,6 +478,8 @@ class AIMO3Solver:
                         if cap > 0 and len(text_tail) > cap:
                             text_tail = text_tail[-cap:]
                     final_answer = self._extractor.extract_boxed_int(answer_text)
+                    if final_answer is None:
+                        final_answer = self._extractor.extract_int_fallback(answer_text)
                     break
 
                 if last.recipient == "python":
@@ -619,14 +621,23 @@ class AIMO3Solver:
         for attempt_index in range(int(self.cfg.attempts)):
             base = TIR_PROMPTS[attempt_index % len(TIR_PROMPTS)]
             base_name = prompt_names[attempt_index % len(prompt_names)]
-            sys_prompt = (
-                augment_system_prompt(base, attempt_index=attempt_index)
-                if bool(self.cfg.wickelgren_strategies_enabled)
-                else base
-            )
+            meta_pack = "none"
+            meta_card = "none"
+            if bool(self.cfg.wickelgren_strategies_enabled):
+                sys_prompt, meta = augment_system_prompt_with_meta(
+                    base,
+                    attempt_index=attempt_index,
+                    problem_text=problem,
+                    mode=str(getattr(self.cfg, "strategy_pack_mode", "round_robin")),
+                    enabled_packs=str(getattr(self.cfg, "strategy_packs", "generic")),
+                )
+                meta_pack = str(meta.get("pack", "none"))
+                meta_card = str(meta.get("card", "none"))
+            else:
+                sys_prompt = base
             if bool(self.cfg.protocol_enabled):
                 sys_prompt = with_protocol(sys_prompt)
-            tasks.append((sys_prompt, attempt_index, base_name))
+            tasks.append((sys_prompt, attempt_index, f"{base_name}|pack={meta_pack}|card={meta_card}"))
 
         detailed: list[AttemptResult] = []
         valid: list[int] = []
@@ -671,32 +682,64 @@ class AIMO3Solver:
             retry_deadline = time.time() + retry_budget
             retry_tasks = [
                 (
-                    augment_system_prompt(TIR_PROMPT_VERIFICATION, attempt_index=int(self.cfg.attempts) + 0)
-                    if bool(self.cfg.wickelgren_strategies_enabled)
-                    else TIR_PROMPT_VERIFICATION,
+                    (
+                        augment_system_prompt_with_meta(
+                            TIR_PROMPT_VERIFICATION,
+                            attempt_index=int(self.cfg.attempts) + 0,
+                            problem_text=problem,
+                            mode=str(getattr(self.cfg, "strategy_pack_mode", "round_robin")),
+                            enabled_packs=str(getattr(self.cfg, "strategy_packs", "generic")),
+                        )[0]
+                        if bool(self.cfg.wickelgren_strategies_enabled)
+                        else TIR_PROMPT_VERIFICATION
+                    ),
                     int(self.cfg.attempts) + 0,
-                    "verification",
+                    "verification|pack=retry|card=retry",
                 ),
                 (
-                    augment_system_prompt(TIR_PROMPT_ANALYTIC, attempt_index=int(self.cfg.attempts) + 1)
-                    if bool(self.cfg.wickelgren_strategies_enabled)
-                    else TIR_PROMPT_ANALYTIC,
+                    (
+                        augment_system_prompt_with_meta(
+                            TIR_PROMPT_ANALYTIC,
+                            attempt_index=int(self.cfg.attempts) + 1,
+                            problem_text=problem,
+                            mode=str(getattr(self.cfg, "strategy_pack_mode", "round_robin")),
+                            enabled_packs=str(getattr(self.cfg, "strategy_packs", "generic")),
+                        )[0]
+                        if bool(self.cfg.wickelgren_strategies_enabled)
+                        else TIR_PROMPT_ANALYTIC
+                    ),
                     int(self.cfg.attempts) + 1,
-                    "analytic",
+                    "analytic|pack=retry|card=retry",
                 ),
                 (
-                    augment_system_prompt(TIR_PROMPT_CODE_FIRST, attempt_index=int(self.cfg.attempts) + 2)
-                    if bool(self.cfg.wickelgren_strategies_enabled)
-                    else TIR_PROMPT_CODE_FIRST,
+                    (
+                        augment_system_prompt_with_meta(
+                            TIR_PROMPT_CODE_FIRST,
+                            attempt_index=int(self.cfg.attempts) + 2,
+                            problem_text=problem,
+                            mode=str(getattr(self.cfg, "strategy_pack_mode", "round_robin")),
+                            enabled_packs=str(getattr(self.cfg, "strategy_packs", "generic")),
+                        )[0]
+                        if bool(self.cfg.wickelgren_strategies_enabled)
+                        else TIR_PROMPT_CODE_FIRST
+                    ),
                     int(self.cfg.attempts) + 2,
-                    "code_first",
+                    "code_first|pack=retry|card=retry",
                 ),
                 (
-                    augment_system_prompt(TIR_PROMPT_STANDARD, attempt_index=int(self.cfg.attempts) + 3)
-                    if bool(self.cfg.wickelgren_strategies_enabled)
-                    else TIR_PROMPT_STANDARD,
+                    (
+                        augment_system_prompt_with_meta(
+                            TIR_PROMPT_STANDARD,
+                            attempt_index=int(self.cfg.attempts) + 3,
+                            problem_text=problem,
+                            mode=str(getattr(self.cfg, "strategy_pack_mode", "round_robin")),
+                            enabled_packs=str(getattr(self.cfg, "strategy_packs", "generic")),
+                        )[0]
+                        if bool(self.cfg.wickelgren_strategies_enabled)
+                        else TIR_PROMPT_STANDARD
+                    ),
                     int(self.cfg.attempts) + 3,
-                    "standard",
+                    "standard|pack=retry|card=retry",
                 ),
             ]
 
