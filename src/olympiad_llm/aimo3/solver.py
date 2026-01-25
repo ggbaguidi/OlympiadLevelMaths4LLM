@@ -358,6 +358,13 @@ class AIMO3Solver:
         self.notebook_start_time = time.time()
         self.problems_remaining = int(self.cfg.problems_total)
 
+        # Notebook-friendly tracing behavior: optionally reset the trace file at startup.
+        if bool(getattr(self.cfg, "trace_enabled", False)) and bool(getattr(self.cfg, "trace_reset_on_start", False)):
+            with contextlib.suppress(Exception):
+                p = str(getattr(self.cfg, "trace_path", "aimo3_trace.jsonl") or "aimo3_trace.jsonl")
+                if p and os.path.exists(p):
+                    os.remove(p)
+
         self._trace = TraceRecorder(
             enabled=bool(getattr(self.cfg, "trace_enabled", False)),
             path=str(getattr(self.cfg, "trace_path", "aimo3_trace.jsonl")),

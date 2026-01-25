@@ -90,6 +90,10 @@ class AIMO3Config:
     # If True, include the full problem text in the trace. Off by default to avoid leakage.
     trace_include_problem_text: bool = False
 
+    # If True, delete (reset) the trace file at solver startup.
+    # Useful in notebooks where you want a fresh trace on each kernel restart.
+    trace_reset_on_start: bool = True
+
     # If enabled, also record per-attempt transcripts to the same JSONL trace.
     # Notes:
     # - By default we do NOT record hidden analysis/CoT.
@@ -272,6 +276,9 @@ class AIMO3Config:
         trace_include_problem_text = (
             os.getenv("AIMO3_TRACE_INCLUDE_PROBLEM_TEXT", "0").strip().lower() not in {"0", "false", "no"}
         )
+        trace_reset_on_start = (
+            os.getenv("AIMO3_TRACE_RESET_ON_START", "1").strip().lower() not in {"0", "false", "no"}
+        )
         trace_attempts_enabled = os.getenv("AIMO3_TRACE_ATTEMPTS", "0").strip().lower() not in {"0", "false", "no"}
         trace_attempts_max_chars = _env_int("AIMO3_TRACE_ATTEMPTS_MAX_CHARS", AIMO3Config.trace_attempts_max_chars)
         proto = os.getenv("AIMO3_PROTOCOL", "1").strip().lower() not in {"0", "false", "no"}
@@ -410,6 +417,7 @@ class AIMO3Config:
             trace_enabled=trace_enabled,
             trace_path=trace_path,
             trace_include_problem_text=trace_include_problem_text,
+            trace_reset_on_start=trace_reset_on_start,
             trace_attempts_enabled=trace_attempts_enabled,
             trace_attempts_max_chars=trace_attempts_max_chars,
             require_cuda=require_cuda,
