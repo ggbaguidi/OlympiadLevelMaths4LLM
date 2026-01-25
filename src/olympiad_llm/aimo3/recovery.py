@@ -74,3 +74,21 @@ def should_schedule_recovery_attempt(
         return True
 
     return False
+
+
+def tool_call_cap_for_attempt(*, attempt_tag: str | None, recovery_micro_cap: int) -> int | None:
+    """Return a max python tool-call cap for this attempt.
+
+    - None: no cap enforcement
+    - 0: tool disabled
+
+    This is primarily used to enforce recovery variants, without relying on
+    tool-config wiring.
+    """
+
+    tag = str(attempt_tag or "")
+    if "variant=no_tool" in tag:
+        return 0
+    if "variant=micro_tool" in tag:
+        return max(0, int(recovery_micro_cap))
+    return None

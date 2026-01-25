@@ -37,6 +37,7 @@ from .recovery import (
     should_abort_attempt,
     should_recycle_sandbox,
     should_schedule_recovery_attempt,
+    tool_call_cap_for_attempt,
 )
 
 
@@ -413,6 +414,11 @@ class AIMO3Solver:
         had_exception = False
         aborted_for_tool_errors = False
 
+        tool_call_cap = tool_call_cap_for_attempt(
+            attempt_tag=attempt_tag,
+            recovery_micro_cap=int(getattr(self.cfg, "recovery_micro_tool_call_cap", 0) or 0),
+        )
+
         try:
             try:
                 sandbox = self.sandbox_pool.get(timeout=self.cfg.sandbox_timeout)
@@ -501,6 +507,12 @@ class AIMO3Solver:
                     break
 
                 if last.recipient == "python":
+                    # Enforce tool-call caps for recovery variants.
+                    if tool_call_cap is not None and (python_calls + 1) > int(tool_call_cap):
+                        # We haven't executed this call; we are refusing further tool usage.
+                        aborted_for_tool_errors = True
+                        break
+
                     python_calls += 1
                     tool_responses = local_tool.process_sync_plus(last)
                     resp_text = tool_responses[0].content[0].text
@@ -752,6 +764,10 @@ class AIMO3Solver:
 
                     if self._should_early_stop(detailed):
                         stop_event.set()
+                        # Best-effort cancellation of remaining work.
+                        for f in list(futures):
+                            with contextlib.suppress(Exception):
+                                f.cancel()
                         break
 
                     # Schedule next base task (if any).
@@ -774,16 +790,28 @@ class AIMO3Solver:
                             recovery_min_remaining_s=float(getattr(self.cfg, "recovery_min_remaining_s", 0.0) or 0.0),
                         ):
                             recovery_left -= 1
-                            # Use a conservative system prompt: discourage long tool sessions.
-                            recovery_prompt = (
-                                TIR_PROMPT_ANALYTIC
-                                + "\n\nRecovery mode: The python tool seems unstable. Prefer reasoning-first. "
-                                "If you use python, run very small snippets and restart from scratch if errors persist."
-                            )
+                            mode = str(getattr(self.cfg, "recovery_mode", "auto") or "auto").strip().lower()
+                            # Auto: if we had to abort for tool issues, go no-tool; else allow micro-tool.
+                            if mode == "auto":
+                                mode = "no_tool" if (r.tag and "tool_abort" in str(r.tag)) else "micro_tool"
+
+                            if mode == "no_tool":
+                                recovery_prompt = (
+                                    TIR_PROMPT_ANALYTIC
+                                    + "\n\nRecovery mode: DO NOT use the python tool. Solve by reasoning only."
+                                )
+                                variant = "no_tool"
+                            else:
+                                recovery_prompt = (
+                                    TIR_PROMPT_ANALYTIC
+                                    + "\n\nRecovery mode: The python tool may be unstable. Prefer reasoning-first. "
+                                    "If you use python, use at most a couple very small snippets."
+                                )
+                                variant = "micro_tool"
                             if bool(self.cfg.protocol_enabled):
                                 recovery_prompt = with_protocol(recovery_prompt)
                             attempt_idx = int(self.cfg.attempts) + (int(self.cfg.recovery_attempts_cap) - recovery_left)
-                            attempt_tag = "recovery|pack=recovery|card=tool_instability"
+                            attempt_tag = f"recovery|variant={variant}|pack=recovery|card=tool_instability"
                             _submit_one(recovery_prompt, attempt_idx, attempt_tag)
 
         self.problems_remaining = max(0, int(self.problems_remaining) - 1)

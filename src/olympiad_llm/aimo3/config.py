@@ -117,6 +117,13 @@ class AIMO3Config:
     recovery_attempts_cap: int = 2
     recovery_trigger_python_errors: int = 3
     recovery_min_remaining_s: float = 15.0
+
+    # Recovery attempt style:
+    # - "auto": choose based on observed tool instability
+    # - "no_tool": strongly discourage tool use (and enforce cap=0)
+    # - "micro_tool": allow a small number of tool calls (cap > 0)
+    recovery_mode: str = "auto"
+    recovery_micro_tool_call_cap: int = 2
     turns: int = 128
     seed: int = 3
 
@@ -270,6 +277,12 @@ class AIMO3Config:
         recovery_min_remaining_s = _env_float(
             "AIMO3_RECOVERY_MIN_REMAINING_S", AIMO3Config.recovery_min_remaining_s
         )
+        recovery_mode = (os.getenv("AIMO3_RECOVERY_MODE", AIMO3Config.recovery_mode) or "").strip().lower()
+        if recovery_mode not in {"auto", "no_tool", "micro_tool"}:
+            recovery_mode = AIMO3Config.recovery_mode
+        recovery_micro_tool_call_cap = _env_int(
+            "AIMO3_RECOVERY_MICRO_TOOL_CALL_CAP", AIMO3Config.recovery_micro_tool_call_cap
+        )
 
         second_stage_verify_marker = os.getenv(
             "AIMO3_SECOND_STAGE_MARKER", AIMO3Config.second_stage_verify_marker
@@ -305,6 +318,8 @@ class AIMO3Config:
             recovery_attempts_cap=recovery_attempts_cap,
             recovery_trigger_python_errors=recovery_trigger_python_errors,
             recovery_min_remaining_s=recovery_min_remaining_s,
+            recovery_mode=recovery_mode,
+            recovery_micro_tool_call_cap=recovery_micro_tool_call_cap,
             attempts=attempts,
             workers=workers,
             early_stop=early_stop,

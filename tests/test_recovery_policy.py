@@ -1,5 +1,6 @@
 from olympiad_llm.aimo3.recovery import ToolRecoveryPolicy, should_abort_attempt, should_recycle_sandbox
 from olympiad_llm.aimo3.recovery import should_schedule_recovery_attempt
+from olympiad_llm.aimo3.recovery import tool_call_cap_for_attempt
 from olympiad_llm.aimo3.attempts import AttemptResult, AttemptStats
 
 
@@ -64,3 +65,9 @@ def test_should_schedule_recovery_attempt_not_when_answer_present():
         recovery_trigger_python_errors=1,
         recovery_min_remaining_s=10.0,
     )
+
+
+def test_tool_call_cap_for_attempt_variants():
+    assert tool_call_cap_for_attempt(attempt_tag=None, recovery_micro_cap=2) is None
+    assert tool_call_cap_for_attempt(attempt_tag="recovery|variant=no_tool", recovery_micro_cap=2) == 0
+    assert tool_call_cap_for_attempt(attempt_tag="recovery|variant=micro_tool", recovery_micro_cap=2) == 2
