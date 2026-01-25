@@ -159,17 +159,17 @@ def rank_candidates(
         candidates = [c for c in candidates if c.verified > 0] or candidates
 
     # Verified-first, then votes.
-    # Penalize errors strongly; prefer candidates that used Python (calls) and have shorter completions on average.
-    # Prefer candidates that appear across different prompt/strategy tags (robustness signal).
+    # Penalize tool errors strongly. Tag diversity is helpful, but should usually be a tie-breaker
+    # rather than dominating vote strength.
     candidates_sorted = sorted(
         candidates,
         key=lambda c: (
             int(c.verified > 0),
             c.verified,
-            c.tag_diversity,
             c.votes,
-            -c.errors,
             -c.tool_error_attempts,
+            -c.errors,
+            c.tag_diversity,
             c.tool_attempts,
             c.calls,
             -c.avg_len,
