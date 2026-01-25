@@ -85,6 +85,10 @@ ENHANCED_TOOL_INSTRUCTION = """Use this tool to execute Python code for mathemat
 - Pre-loaded: math, itertools, collections, numpy as np, sympy as sp, mpmath as mp, Fraction
     (Other libraries like scipy/ortools may be available but you should import them explicitly.)
 
+- Optional (if installed in the runtime): Lean4 toolchain (`lean`, `lake`).
+    If `lean`/`lake` exist on PATH, you may typecheck small Lean snippets by writing a temporary
+    `.lean` file and running `subprocess.run(["lean", "file.lean"], ...)`.
+
 **BEST PRACTICES:**
 1. Use print() to see results
 2. Always start tool code with the imports you rely on (even if preloaded)

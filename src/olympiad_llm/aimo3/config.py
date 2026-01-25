@@ -61,7 +61,9 @@ class AIMO3Config:
         "- Combine symbolic and numerical approaches: derive symbolically, verify numerically\n"
         "- Keep tool code small and print intermediate checkpoints\n"
         "- Document your computational strategy clearly\n"
-        "- Validate computational results against known cases or theoretical bounds"
+        "- Validate computational results against known cases or theoretical bounds\n\n"
+        "Optional (if installed in the runtime):\n"
+        "- Lean4 toolchain (`lean`, `lake`) can be used for typechecking Lean code from Python via subprocess.\n"
     )
 
     # Heuristics / strategy augmentation
