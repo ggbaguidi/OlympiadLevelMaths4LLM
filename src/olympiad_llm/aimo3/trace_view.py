@@ -24,10 +24,33 @@ class AttemptTranscript:
     token_count: int | None
     python_calls: int | None
     python_errors: int | None
+    lean_calls: int | None
     assistant_final: str | None
     assistant_commentary: str | None
     python_calls_text: list[str] | None
     python_outputs_text: list[str] | None
+
+
+def _coerce_int(v: Any) -> int | None:
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float):
+        if v.is_integer():
+            return int(v)
+        return None
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return None
+        try:
+            return int(s)
+        except Exception:
+            return None
+    return None
 
 
 def _iter_events(path: str | Path) -> Iterable[dict[str, Any]]:
@@ -45,7 +68,13 @@ def _iter_events(path: str | Path) -> Iterable[dict[str, Any]]:
                 continue
 
 
-def iter_attempt_transcripts(path: str | Path, problem_id: str | None = None) -> Iterable[AttemptTranscript]:
+def iter_attempt_transcripts(
+    path: str | Path,
+    problem_id: str | None = None,
+    *,
+    attempt: int | None = None,
+    answer: int | None = None,
+) -> Iterable[AttemptTranscript]:
     for ev in _iter_events(path):
         ev_name = ev.get("event") or ev.get("event_type")
         if ev_name != "attempt_end":
@@ -55,14 +84,24 @@ def iter_attempt_transcripts(path: str | Path, problem_id: str | None = None) ->
             continue
         if problem_id is not None and pid != problem_id:
             continue
+
+        att = _coerce_int(ev.get("attempt")) or 0
+        ans = _coerce_int(ev.get("answer"))
+
+        if attempt is not None and att != int(attempt):
+            continue
+        if answer is not None and ans != int(answer):
+            continue
+
         yield AttemptTranscript(
             problem_id=pid,
-            attempt=int(ev.get("attempt") or 0),
+            attempt=int(att),
             tag=ev.get("tag"),
-            answer=ev.get("answer"),
+            answer=ans,
             token_count=ev.get("token_count"),
             python_calls=ev.get("python_calls"),
             python_errors=ev.get("python_errors"),
+            lean_calls=_coerce_int(ev.get("lean_calls")),
             assistant_final=ev.get("assistant_final"),
             assistant_commentary=ev.get("assistant_commentary"),
             python_calls_text=ev.get("python_calls_text"),
@@ -71,7 +110,10 @@ def iter_attempt_transcripts(path: str | Path, problem_id: str | None = None) ->
 
 
 def _print_attempt(a: AttemptTranscript) -> None:
-    header = f"problem_id={a.problem_id} attempt={a.attempt} answer={a.answer} calls={a.python_calls} errors={a.python_errors} tag={a.tag}"
+    header = (
+        f"problem_id={a.problem_id} attempt={a.attempt} answer={a.answer} "
+        f"calls={a.python_calls} errors={a.python_errors} lean_calls={a.lean_calls} tag={a.tag}"
+    )
     print("=" * len(header))
     print(header)
     print("=" * len(header))
@@ -99,11 +141,18 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="View AIMO-3 per-attempt transcripts from a trace JSONL.")
     ap.add_argument("--path", default="aimo3_trace.jsonl", help="Path to the trace JSONL")
     ap.add_argument("--problem-id", default=None, help="Filter to a specific problem_id")
+    ap.add_argument("--attempt", type=int, default=None, help="Filter to a specific attempt number")
+    ap.add_argument("--answer", type=int, default=None, help="Filter to a specific extracted answer")
     ap.add_argument("--max", type=int, default=50, help="Max attempts to print")
     args = ap.parse_args(argv)
 
     n = 0
-    for a in iter_attempt_transcripts(args.path, problem_id=args.problem_id):
+    for a in iter_attempt_transcripts(
+        args.path,
+        problem_id=args.problem_id,
+        attempt=args.attempt,
+        answer=args.answer,
+    ):
         _print_attempt(a)
         n += 1
         if n >= int(args.max):
