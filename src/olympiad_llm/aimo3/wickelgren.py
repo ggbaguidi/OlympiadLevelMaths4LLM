@@ -10,7 +10,9 @@ Goal: reduce prompt brittleness by giving the model a concrete, varied
 "strategy card" each attempt (understand → explore → plan → execute → check).
 """
 
+import re
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -19,7 +21,7 @@ class StrategyCard:
     instructions: list[str]
 
 
-STRATEGY_CARDS: list[StrategyCard] = [
+GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
     StrategyCard(
         name="Understand & restate",
         instructions=[
@@ -95,10 +97,98 @@ STRATEGY_CARDS: list[StrategyCard] = [
 ]
 
 
-def select_strategy(attempt_index: int) -> StrategyCard:
-    if not STRATEGY_CARDS:
+FE_COMBI_STRATEGY_CARDS: list[StrategyCard] = [
+    StrategyCard(
+        name="Functional equation sanity checks",
+        instructions=[
+            "Extract immediate consequences: plug in 0, 1, -1, and symmetric inputs like (x,x), (x,0), (0,y).",
+            "Check injectivity/surjectivity patterns and common forms (additive, multiplicative, linear, constant).",
+            "Use the Python tool to test candidate forms on random small integers/rationals when appropriate.",
+        ],
+    ),
+    StrategyCard(
+        name="Combinatorial invariants & orbits",
+        instructions=[
+            "Look for an invariant or potential function under the described operation.",
+            "If a group action/symmetry is present, consider orbit decomposition or normalization.",
+            "Try extremal arguments: pick a minimal/maximal object and derive forced structure.",
+        ],
+    ),
+    StrategyCard(
+        name="Double counting & encoding",
+        instructions=[
+            "Try a double-counting viewpoint (count the same set in two ways).",
+            "Encode objects as sequences/graphs and use injections/surjections to compare sizes.",
+            "If the answer is an integer, try modular constraints or parity/valuation invariants.",
+        ],
+    ),
+]
+
+
+@dataclass(frozen=True)
+class StrategyPack:
+    name: str
+    cards: list[StrategyCard]
+
+
+PACKS: dict[str, StrategyPack] = {
+    "generic": StrategyPack(name="generic", cards=GENERIC_STRATEGY_CARDS),
+    "fe_combi": StrategyPack(name="fe_combi", cards=FE_COMBI_STRATEGY_CARDS),
+}
+
+
+_FE_COMBI_CUE_RE = re.compile(
+    r"(functional\s+equation|find\s+all\s+functions|f\(|g\(|h\(|\bpermutation\b|\bsubset\b|\bsubsets\b|\bgraph\b|\bcombin\w+\b|\bcount\b|\barrange\b)",
+    flags=re.IGNORECASE,
+)
+
+
+def _parse_enabled_packs(enabled: str | list[str] | None) -> list[str]:
+    if enabled is None:
+        return ["generic"]
+    if isinstance(enabled, list):
+        packs = [p.strip() for p in enabled if str(p).strip()]
+    else:
+        packs = [p.strip() for p in str(enabled).split(",") if p.strip()]
+    packs = [p for p in packs if p in PACKS]
+    return packs or ["generic"]
+
+
+def detect_fe_combi(problem_text: str | None) -> bool:
+    return bool(_FE_COMBI_CUE_RE.search(problem_text or ""))
+
+
+def select_strategy(attempt_index: int, *, pack: str = "generic") -> StrategyCard:
+    p = PACKS.get(pack, PACKS["generic"])
+    if not p.cards:
         raise RuntimeError("No strategy cards configured")
-    return STRATEGY_CARDS[int(attempt_index) % len(STRATEGY_CARDS)]
+    return p.cards[int(attempt_index) % len(p.cards)]
+
+
+def select_strategy_pack(
+    *,
+    attempt_index: int,
+    problem_text: str | None,
+    mode: str,
+    enabled_packs: str | list[str] | None,
+) -> str:
+    packs = _parse_enabled_packs(enabled_packs)
+    m = (mode or "").strip().lower()
+    if m in {"off", "none", "0"}:
+        return "generic"
+
+    if m == "auto":
+        if detect_fe_combi(problem_text) and "fe_combi" in packs:
+            # Prioritize the topic pack on the first attempt, then alternate.
+            # This keeps behavior general (still multi-attempt diverse), while
+            # ensuring at least one targeted attempt gets run early.
+            packs = ["fe_combi", "generic"] if "generic" in packs else ["fe_combi"]
+            return packs[int(attempt_index) % len(packs)]
+
+        return "generic"
+
+    # round-robin default
+    return packs[int(attempt_index) % len(packs)]
 
 
 def render_strategy_card(card: StrategyCard) -> str:
@@ -111,10 +201,42 @@ def render_strategy_card(card: StrategyCard) -> str:
     return "\n".join(lines)
 
 
-def augment_system_prompt(base_prompt: str, *, attempt_index: int) -> str:
-    """Append a strategy card to the base system prompt."""
-    card = select_strategy(attempt_index)
+def augment_system_prompt_with_meta(
+    base_prompt: str,
+    *,
+    attempt_index: int,
+    problem_text: str | None = None,
+    mode: str = "round_robin",
+    enabled_packs: str | list[str] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Append a strategy card and return (prompt, meta).
+
+    Meta includes the selected pack and card name for attempt tagging.
+    """
+
+    pack = select_strategy_pack(
+        attempt_index=int(attempt_index),
+        problem_text=problem_text,
+        mode=mode,
+        enabled_packs=enabled_packs,
+    )
+    card = select_strategy(int(attempt_index), pack=pack)
     strategy_text = render_strategy_card(card)
-    if not base_prompt:
-        return strategy_text
-    return base_prompt.rstrip() + "\n\n" + strategy_text
+    out = strategy_text if not base_prompt else base_prompt.rstrip() + "\n\n" + strategy_text
+    return out, {"pack": pack, "card": card.name}
+
+
+def augment_system_prompt(base_prompt: str, *, attempt_index: int) -> str:
+    """Append a strategy card to the base system prompt.
+
+    Backward-compatible wrapper: uses only the generic pack.
+    """
+
+    out, _meta = augment_system_prompt_with_meta(
+        base_prompt,
+        attempt_index=attempt_index,
+        problem_text=None,
+        mode="off",
+        enabled_packs=["generic"],
+    )
+    return out

@@ -24,6 +24,15 @@ class AIMO3Config:
     # Heuristics / strategy augmentation
     wickelgren_strategies_enabled: bool = True
 
+    # Strategy packs (general: diversify attempt styles)
+    # Modes:
+    # - "off": use only the generic pack (same behavior as before)
+    # - "round_robin": cycle through enabled packs across attempts
+    # - "auto": enable topic packs only when simple keyword cues are present
+    strategy_pack_mode: str = "round_robin"
+    # Comma-separated list of enabled packs. Known packs include: generic, fe_combi
+    strategy_packs: str = "generic,fe_combi"
+
     # Attempt-level protocol (lemmas + verification gate)
     protocol_enabled: bool = True
 
@@ -157,6 +166,12 @@ class AIMO3Config:
         served_model_name = os.getenv("AIMO3_SERVED_MODEL_NAME", "gpt-oss")
         reuse = os.getenv("AIMO3_REUSE_EXISTING_SERVER", "1").strip().lower() not in {"0", "false", "no"}
         wick = os.getenv("AIMO3_WICKELGREN", "1").strip().lower() not in {"0", "false", "no"}
+        strategy_pack_mode = (os.getenv("AIMO3_STRATEGY_PACK_MODE", AIMO3Config.strategy_pack_mode) or "").strip()
+        if not strategy_pack_mode:
+            strategy_pack_mode = AIMO3Config.strategy_pack_mode
+        strategy_packs = (os.getenv("AIMO3_STRATEGY_PACKS", AIMO3Config.strategy_packs) or "").strip()
+        if not strategy_packs:
+            strategy_packs = AIMO3Config.strategy_packs
         proto = os.getenv("AIMO3_PROTOCOL", "1").strip().lower() not in {"0", "false", "no"}
         disp = os.getenv("AIMO3_DISPLAY_CANDIDATES", "1").strip().lower() not in {"0", "false", "no"}
         require_cuda = os.getenv("AIMO3_REQUIRE_CUDA", "1").strip().lower() not in {"0", "false", "no"}
@@ -229,6 +244,8 @@ class AIMO3Config:
             served_model_name=served_model_name,
             reuse_existing_server=reuse,
             wickelgren_strategies_enabled=wick,
+            strategy_pack_mode=strategy_pack_mode,
+            strategy_packs=strategy_packs,
             protocol_enabled=proto,
             display_candidates=disp,
             trace_enabled=trace_enabled,
