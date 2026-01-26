@@ -318,6 +318,36 @@ class AIMO3Solver:
         - Falls back to plain printing.
         """
 
+        if not bool(self.cfg.display_candidates):
+            return
+
+        rows = [self._attempt_to_row(r) for r in attempts]
+        if not rows:
+            return
+
+        # Keep output manageable.
+        max_rows = max(1, int(self.cfg.display_max_rows))
+        rows = rows[:max_rows]
+
+        # Prefer notebook display.
+        try:
+            import pandas as pd  # type: ignore
+
+            df = pd.DataFrame(rows)
+            try:
+                from IPython.display import display  # type: ignore
+
+                display(df)
+            except Exception:  # noqa: BLE001
+                print(df.to_string(index=False))
+        except Exception:  # noqa: BLE001
+            for row in rows:
+                print(
+                    f"Attempt {row['Attempt']}: ans={row['Answer']} "
+                    f"verified={row['ToolVerified']} calls={row['PyCalls']} errors={row['PyErrors']} tokens={row['Tokens']}\n"
+                    f"  {row['Snippet']}\n"
+                )
+
     def _sandbox_env_snapshot(self) -> dict | None:
         """Best-effort: query one sandbox for python + package versions.
 
@@ -392,36 +422,6 @@ class AIMO3Solver:
         finally:
             with contextlib.suppress(Exception):
                 self.sandbox_pool.put(sb)
-
-        if not bool(self.cfg.display_candidates):
-            return
-
-        rows = [self._attempt_to_row(r) for r in attempts]
-        if not rows:
-            return
-
-        # Keep output manageable.
-        max_rows = max(1, int(self.cfg.display_max_rows))
-        rows = rows[:max_rows]
-
-        # Prefer notebook display.
-        try:
-            import pandas as pd  # type: ignore
-
-            df = pd.DataFrame(rows)
-            try:
-                from IPython.display import display  # type: ignore
-
-                display(df)
-            except Exception:  # noqa: BLE001
-                print(df.to_string(index=False))
-        except Exception:  # noqa: BLE001
-            for row in rows:
-                print(
-                    f"Attempt {row['Attempt']}: ans={row['Answer']} "
-                    f"verified={row['ToolVerified']} calls={row['PyCalls']} errors={row['PyErrors']} tokens={row['Tokens']}\n"
-                    f"  {row['Snippet']}\n"
-                )
 
     @staticmethod
     def _has_verification_marker(text: str | None, marker: str) -> bool:
