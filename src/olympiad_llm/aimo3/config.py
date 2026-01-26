@@ -303,6 +303,10 @@ class AIMO3Config:
                 return int(float(raw))
             except Exception:  # noqa: BLE001
                 return int(default)
+        
+        preference_prompt = os.getenv("AIMO3_PREFERENCE_PROMPT", AIMO3Config.preference_prompt)
+        tool_prompt = os.getenv("AIMO3_TOOL_PROMPT", AIMO3Config.tool_prompt)
+        system_prompt = os.getenv("AIMO3_SYSTEM_PROMPT", AIMO3Config.system_prompt)
 
         # Profile presets (apply only when the corresponding env var is NOT explicitly set).
         # This makes it easy to reduce orchestration steps without rewriting many env vars.
@@ -511,6 +515,9 @@ class AIMO3Config:
                 tiebreak_enabled = False
 
         return AIMO3Config(
+            system_prompt=system_prompt,
+            tool_prompt=tool_prompt,
+            preference_prompt=preference_prompt,
             model_path=model_path,
             served_model_name=served_model_name,
             reuse_existing_server=reuse,
