@@ -70,7 +70,7 @@ class AIMO3Sandbox:
             "import mpmath as mp\n"
             "from fractions import Fraction\n"
             'import mpmath\n'
-            'mpmath.mp.dps = 64\n'
+            'mpmath.mp.dps = 18\n'
             "try:\n"
             "    import ortools  # noqa: F401\n"
             "    from ortools.sat.python import cp_model  # noqa: F401\n"
@@ -183,7 +183,7 @@ class AIMO3Sandbox:
             "import mpmath as mp\n"
             "from fractions import Fraction\n"
             'import mpmath\n'
-            'mpmath.mp.dps = 64\n'
+            'mpmath.mp.dps = 18\n'
             "try:\n"
             "    import ortools  # noqa: F401\n"
             "    from ortools.sat.python import cp_model  # noqa: F401\n"
