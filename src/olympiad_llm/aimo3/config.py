@@ -249,6 +249,14 @@ class AIMO3Config:
     format_recovery_trigger_tokens: int = 2000
     format_recovery_min_remaining_s: float = 20.0
 
+    # Finalization (per-attempt): if an attempt did tool work but never emitted a clean final
+    # boxed integer, do one short “final answer only” completion to force synthesis.
+    # This helps with the common failure mode: last tool call ran, then the attempt ends
+    # without a final answer line.
+    finalize_answer_enabled: bool = True
+    finalize_answer_max_tokens: int = 128
+    finalize_answer_min_remaining_s: float = 3.0
+
     # Tie-break verification (general): if ranking/second-stage verification is inconclusive,
     # run one short discriminating attempt comparing top candidates.
     tiebreak_enabled: bool = True
@@ -519,6 +527,16 @@ class AIMO3Config:
             "AIMO3_FORMAT_RECOVERY_MIN_REMAINING_S", AIMO3Config.format_recovery_min_remaining_s
         )
 
+        finalize_answer_enabled = (
+            os.getenv("AIMO3_FINALIZE_ANSWER_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+        )
+        finalize_answer_max_tokens = _env_int(
+            "AIMO3_FINALIZE_ANSWER_MAX_TOKENS", AIMO3Config.finalize_answer_max_tokens
+        )
+        finalize_answer_min_remaining_s = _env_float(
+            "AIMO3_FINALIZE_ANSWER_MIN_REMAINING_S", AIMO3Config.finalize_answer_min_remaining_s
+        )
+
         tiebreak_enabled = os.getenv("AIMO3_TIEBREAK_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
         tiebreak_min_remaining_s = _env_float(
             "AIMO3_TIEBREAK_MIN_REMAINING_S", AIMO3Config.tiebreak_min_remaining_s
@@ -603,6 +621,9 @@ class AIMO3Config:
             format_recovery_cap=format_recovery_cap,
             format_recovery_trigger_tokens=format_recovery_trigger_tokens,
             format_recovery_min_remaining_s=format_recovery_min_remaining_s,
+            finalize_answer_enabled=finalize_answer_enabled,
+            finalize_answer_max_tokens=finalize_answer_max_tokens,
+            finalize_answer_min_remaining_s=finalize_answer_min_remaining_s,
             tiebreak_enabled=tiebreak_enabled,
             tiebreak_min_remaining_s=tiebreak_min_remaining_s,
             tiebreak_budget_cap_s=tiebreak_budget_cap_s,

@@ -644,6 +644,8 @@ class AIMO3Solver:
             recovery_micro_cap=int(getattr(self.cfg, "recovery_micro_tool_call_cap", 0) or 0),
         )
 
+        conversation = None
+
         try:
             try:
                 sandbox = self.sandbox_pool.get(timeout=self.cfg.sandbox_timeout)
@@ -860,6 +862,74 @@ class AIMO3Solver:
                     break
 
                 # NOTE: python tool calls are handled above by draining all calls in the batch.
+
+            # Best-effort: attempt might have generated a plausible answer somewhere in the
+            # visible text but never emitted a final channel with boxing.
+            if final_answer is None:
+                with contextlib.suppress(Exception):
+                    ans = self._extractor.extract_boxed_int(text_tail)
+                    if ans is None:
+                        ans = self._extractor.extract_int_fallback(text_tail)
+                    if ans is not None:
+                        final_answer = ans
+
+            # Last-chance synthesis: if we did work (possibly including tools) but never
+            # produced a clean boxed integer, do one short completion asking ONLY for \boxed{N}.
+            if (
+                final_answer is None
+                and conversation is not None
+                and bool(getattr(self.cfg, "finalize_answer_enabled", True))
+                and not bool(stop_event.is_set())
+                and not bool(aborted_for_tool_errors)
+            ):
+                remaining = float(deadline - time.time())
+                min_remaining = float(getattr(self.cfg, "finalize_answer_min_remaining_s", 0.0) or 0.0)
+                if remaining >= min_remaining and min_remaining >= 0.0:
+                    # Add an explicit user instruction to force a single-line boxed integer.
+                    h = _require_harmony()
+                    Message = h["Message"]
+                    Role = h["Role"]
+                    conversation.messages.append(
+                        Message.from_role_and_content(
+                            Role.USER,
+                            "Finalization: output ONLY one line of the form \\\\boxed{N} where N is the final integer answer. "
+                            "Do NOT call the python tool. If you cannot determine the answer, output NOBOX.",
+                        )
+                    )
+
+                    prompt_ids = self.encoding.render_conversation_for_completion(conversation, self.Role.ASSISTANT)
+                    max_tokens = self.cfg.context_tokens - len(prompt_ids)
+                    max_tokens = min(max_tokens, int(getattr(self.cfg, "finalize_answer_max_tokens", 0) or 0))
+                    # This is intentionally a *short* completion; do not apply the usual
+                    # buffer-tokens gate (which is tuned for long generations).
+                    if max_tokens > 0:
+                        resp = self.client.completions.create(
+                            model=self.cfg.served_model_name,
+                            temperature=float(getattr(self.cfg, "temperature_formatting", 0.10) or 0.10),
+                            max_tokens=max_tokens,
+                            prompt=prompt_ids,
+                            seed=attempt_seed + 11,
+                            stream=False,
+                            extra_body={
+                                "min_p": self.cfg.min_p,
+                                "stop_token_ids": self.stop_token_ids,
+                                "return_token_ids": False,
+                            },
+                            timeout=max(0.0, deadline - time.time()),
+                        )
+                        fin_text = None
+                        with contextlib.suppress(Exception):
+                            fin_text = resp.choices[0].text
+
+                        if fin_text:
+                            text_tail = (text_tail + str(fin_text))
+                            if cap > 0 and len(text_tail) > cap:
+                                text_tail = text_tail[-cap:]
+                            transcript_assistant_final.append(str(fin_text).strip())
+                            with contextlib.suppress(Exception):
+                                final_answer = self._extractor.extract_boxed_int(str(fin_text))
+                                if final_answer is None:
+                                    final_answer = self._extractor.extract_int_fallback(str(fin_text))
 
         except Exception:
             had_exception = True
