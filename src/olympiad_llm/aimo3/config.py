@@ -413,6 +413,9 @@ class AIMO3Config:
         )
 
         # Verification knobs
+        second_stage_verify_enabled = (
+            os.getenv("AIMO3_SECOND_STAGE_VERIFY_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+        )
         second_stage_top_k = _env_int("AIMO3_SECOND_STAGE_TOP_K", AIMO3Config.second_stage_verify_top_k)
         second_stage_cap = _env_float("AIMO3_SECOND_STAGE_BUDGET_CAP", AIMO3Config.second_stage_verify_budget_cap)
         second_stage_fraction = _env_float(
@@ -617,6 +620,7 @@ class AIMO3Config:
             python_tool_timeout_retry_min_remaining_s=python_tool_timeout_retry_min_remaining_s,
             abort_attempt_on_python_timeout=abort_attempt_on_python_timeout,
             recycle_sandbox_on_python_timeout=recycle_sandbox_on_python_timeout,
+            second_stage_verify_enabled=second_stage_verify_enabled,
             second_stage_verify_top_k=second_stage_top_k,
             second_stage_verify_budget_cap=second_stage_cap,
             second_stage_verify_budget_fraction=second_stage_fraction,

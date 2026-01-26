@@ -68,3 +68,13 @@ def test_disable_prompts_env_var(monkeypatch):
     cfg = AIMO3Config.from_env()
     assert cfg.disabled_prompts == "verification,analytic"
 
+
+def test_second_stage_verify_enabled_env_var(monkeypatch):
+    from olympiad_llm.aimo3.config import AIMO3Config
+
+    monkeypatch.delenv("AIMO3_PROFILE", raising=False)
+    monkeypatch.setenv("AIMO3_SECOND_STAGE_VERIFY_ENABLED", "0")
+
+    cfg = AIMO3Config.from_env()
+    assert cfg.second_stage_verify_enabled is False
+

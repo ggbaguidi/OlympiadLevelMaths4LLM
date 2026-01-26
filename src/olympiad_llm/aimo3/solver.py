@@ -164,14 +164,67 @@ class AIMO3Tool:
 
     @staticmethod
     def _ensure_last_print(code: str) -> str:
-        lines = code.strip().split("\n")
+        # Best-effort UX: if the user ends their tool snippet with a simple expression,
+        # auto-wrap it in print(...). This helps avoid the common warning:
+        #   [WARN] No output. Use print() to see results.
+        #
+        # Safety: do NOT rewrite multi-line blocks (function/class defs, loops, returns,
+        # indented code, etc.) because that can change semantics or introduce SyntaxError.
+        src = str(code or "")
+        stripped = src.strip("\n")
+        if not stripped.strip():
+            return src
+
+        lines = stripped.split("\n")
         if not lines:
-            return code
-        last = lines[-1].strip()
+            return src
+
+        raw_last_line = lines[-1]
+        last = raw_last_line.strip()
         if not last or last.startswith("#"):
-            return code
-        if "print" in last or last.startswith("import"):
-            return code
+            return src
+
+        # If the last line is indented, it's almost certainly inside a block.
+        indent = raw_last_line[: len(raw_last_line) - len(raw_last_line.lstrip())]
+        if indent:
+            return src
+
+        # Heuristic: avoid rewriting statements/headers.
+        statement_prefixes = (
+            "return",
+            "def ",
+            "class ",
+            "for ",
+            "while ",
+            "if ",
+            "elif ",
+            "else",
+            "try",
+            "except",
+            "finally",
+            "with ",
+            "import ",
+            "from ",
+            "raise",
+            "assert",
+            "pass",
+            "break",
+            "continue",
+            "yield",
+            "del ",
+            "global ",
+            "nonlocal ",
+            "@",
+        )
+        lower_last = last.lower()
+        if lower_last.endswith(":") or lower_last.startswith(statement_prefixes):
+            return src
+
+        # If it already prints, do nothing.
+        if last.startswith("print(") or "print" in last:
+            return src
+
+        # Only apply to single-line snippets or when the last line is a top-level expression.
         lines[-1] = f"print({last})"
         return "\n".join(lines)
 
