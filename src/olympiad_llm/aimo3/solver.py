@@ -7,6 +7,7 @@ installed without the heavy AIMO-3 stack.
 """
 
 import contextlib
+import json
 import math
 import os
 import queue
@@ -313,6 +314,81 @@ class AIMO3Solver:
         - Uses pandas + IPython.display if available.
         - Falls back to plain printing.
         """
+
+    def _sandbox_env_snapshot(self) -> dict | None:
+        """Best-effort: query one sandbox for python + package versions.
+
+        Uses a borrowed sandbox from the pool to reflect the actual kernel environment.
+        Returns a small dict (JSON-serializable) or None on failure.
+        """
+
+        if not hasattr(self, "sandbox_pool"):
+            return None
+        # Only meaningful if the optional dependency stack is present.
+        sb: AIMO3Sandbox | None = None
+        try:
+            sb = self.sandbox_pool.get(timeout=float(getattr(self.cfg, "sandbox_timeout", 0.0) or 0.0) or 0.5)
+        except Exception:
+            sb = None
+
+        if sb is None:
+            return None
+
+        try:
+            pkg_raw = str(getattr(self.cfg, "trace_env_packages", "") or "")
+            packages = [p.strip() for p in pkg_raw.split(",") if p.strip()]
+
+            # Emit a single JSON line as the *last* line, so we can parse robustly.
+            code = (
+                "import json, sys\n"
+                "try:\n"
+                "    import platform\n"
+                "    _platform = platform.platform()\n"
+                "except Exception:\n"
+                "    _platform = None\n"
+                "def _ver(name):\n"
+                "    try:\n"
+                "        m = __import__(name)\n"
+                "    except Exception:\n"
+                "        return None\n"
+                "    return getattr(m, '__version__', None)\n"
+                f"_names = {packages!r}\n"
+                "_pkgs = {n: _ver(n) for n in _names}\n"
+                "_info = {\n"
+                "  'python': {'version': sys.version, 'executable': sys.executable},\n"
+                "  'platform': _platform,\n"
+                "  'packages': _pkgs,\n"
+                "}\n"
+                "print(json.dumps(_info, ensure_ascii=False))\n"
+            )
+            out = sb.execute(code, timeout=min(2.0, float(getattr(self.cfg, "jupyter_timeout", 10.0) or 10.0)))
+
+            # Find the last JSON-looking line.
+            last_json = None
+            for line in str(out or "").splitlines()[::-1]:
+                s = line.strip()
+                if s.startswith("{") and s.endswith("}"):
+                    last_json = s
+                    break
+            if not last_json:
+                return {"error": "no_json", "raw": self._truncate(str(out or ""), 1000)}
+            try:
+                parsed = json.loads(last_json)
+            except Exception:  # noqa: BLE001
+                return {"error": "bad_json", "raw": self._truncate(last_json, 1000)}
+
+            # Keep payload bounded.
+            if isinstance(parsed, dict):
+                # Avoid huge sys.version strings if something went weird.
+                with contextlib.suppress(Exception):
+                    py = parsed.get("python")
+                    if isinstance(py, dict) and "version" in py:
+                        py["version"] = str(py.get("version", ""))[:4000]
+                return parsed
+            return {"error": "unexpected_type"}
+        finally:
+            with contextlib.suppress(Exception):
+                self.sandbox_pool.put(sb)
 
         if not bool(self.cfg.display_candidates):
             return
@@ -1036,20 +1112,24 @@ class AIMO3Solver:
         valid: list[int] = []
         stop_event = threading.Event()
 
-        self._trace.record(
-            {
-                "event": "solve_start",
-                "problem_id": pid,
-                "problem_len": len(problem or ""),
-                "problem": (problem if self._trace.include_problem_text else None),
-                "budget_s": float(budget),
-                "attempt_deadline_in_s": float(max(0.0, attempt_deadline - time.time())),
-                "overall_deadline_in_s": float(max(0.0, deadline - time.time())),
-                "attempts": int(self.cfg.attempts),
-                "workers": int(self.cfg.workers),
-                "sandbox_pool_size": int(getattr(self.cfg, "sandbox_pool_size", 0) or 0),
-            }
-        )
+        solve_start_payload = {
+            "event": "solve_start",
+            "problem_id": pid,
+            "problem_len": len(problem or ""),
+            "problem": (problem if self._trace.include_problem_text else None),
+            "budget_s": float(budget),
+            "attempt_deadline_in_s": float(max(0.0, attempt_deadline - time.time())),
+            "overall_deadline_in_s": float(max(0.0, deadline - time.time())),
+            "attempts": int(self.cfg.attempts),
+            "workers": int(self.cfg.workers),
+            "sandbox_pool_size": int(getattr(self.cfg, "sandbox_pool_size", 0) or 0),
+        }
+        if bool(getattr(self.cfg, "trace_env_enabled", False)) and bool(getattr(self.cfg, "trace_enabled", False)):
+            with contextlib.suppress(Exception):
+                env = self._sandbox_env_snapshot()
+                if env is not None:
+                    solve_start_payload["sandbox_env"] = env
+        self._trace.record(solve_start_payload)
 
         with ThreadPoolExecutor(max_workers=int(self.cfg.workers)) as ex:
             # Dynamic scheduling allows recovery attempts to reuse freed worker capacity.

@@ -116,6 +116,13 @@ class AIMO3Config:
     # Hard cap on total characters stored per attempt transcript payload.
     trace_attempts_max_chars: int = 20000
 
+    # Optional: record a lightweight snapshot of the sandbox environment at solve start.
+    # This is useful when debugging version-dependent behavior (e.g., sympy API differences).
+    trace_env_enabled: bool = False
+    # Comma-separated list of import names to query for __version__ inside the sandbox.
+    # Example: "sympy,numpy,mpmath,jupyter_client,ortools"
+    trace_env_packages: str = "sympy,numpy,mpmath"
+
     # Model/server
     served_model_name: str = "gpt-oss"
     model_path: str = ""  # set via env AIMO3_MODEL_PATH in Kaggle
@@ -357,6 +364,8 @@ class AIMO3Config:
         )
         trace_attempts_enabled = os.getenv("AIMO3_TRACE_ATTEMPTS", "0").strip().lower() not in {"0", "false", "no"}
         trace_attempts_max_chars = _env_int("AIMO3_TRACE_ATTEMPTS_MAX_CHARS", AIMO3Config.trace_attempts_max_chars)
+        trace_env_enabled = os.getenv("AIMO3_TRACE_ENV", "0").strip().lower() not in {"0", "false", "no"}
+        trace_env_packages = (os.getenv("AIMO3_TRACE_ENV_PACKAGES", AIMO3Config.trace_env_packages) or "").strip() or AIMO3Config.trace_env_packages
         proto = os.getenv("AIMO3_PROTOCOL", "1").strip().lower() not in {"0", "false", "no"}
         disp = os.getenv("AIMO3_DISPLAY_CANDIDATES", "1").strip().lower() not in {"0", "false", "no"}
         require_cuda = os.getenv("AIMO3_REQUIRE_CUDA", "1").strip().lower() not in {"0", "false", "no"}
@@ -564,6 +573,8 @@ class AIMO3Config:
             trace_reset_on_start=trace_reset_on_start,
             trace_attempts_enabled=trace_attempts_enabled,
             trace_attempts_max_chars=trace_attempts_max_chars,
+            trace_env_enabled=trace_env_enabled,
+            trace_env_packages=trace_env_packages,
             require_cuda=require_cuda,
             lean_toolchain_enabled=lean_toolchain_enabled,
             lean_toolchain_dataset_dir=lean_toolchain_dataset_dir,

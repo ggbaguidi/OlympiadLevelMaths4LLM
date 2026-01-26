@@ -78,3 +78,15 @@ def test_second_stage_verify_enabled_env_var(monkeypatch):
     cfg = AIMO3Config.from_env()
     assert cfg.second_stage_verify_enabled is False
 
+
+def test_trace_env_config_env_vars(monkeypatch):
+    from olympiad_llm.aimo3.config import AIMO3Config
+
+    monkeypatch.delenv("AIMO3_PROFILE", raising=False)
+    monkeypatch.setenv("AIMO3_TRACE_ENV", "1")
+    monkeypatch.setenv("AIMO3_TRACE_ENV_PACKAGES", "sympy,numpy,mpmath,jupyter_client")
+
+    cfg = AIMO3Config.from_env()
+    assert cfg.trace_env_enabled is True
+    assert cfg.trace_env_packages == "sympy,numpy,mpmath,jupyter_client"
+
