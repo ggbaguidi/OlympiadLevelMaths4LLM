@@ -46,8 +46,9 @@ def test_rewrite_sp_circle_three_points():
 O1 = circ1.center
 """
     out = rewrite_python_tool_code(code)
+    assert "def _aimo3_circle3" in out
     norm = "".join(out.split())
-    assert "sp.Circle.from_three_points(A,E,F)" in norm
+    assert "_aimo3_circle3(A,E,F)" in norm
     assert "sp.Circle(A,E,F)" not in norm
 
 

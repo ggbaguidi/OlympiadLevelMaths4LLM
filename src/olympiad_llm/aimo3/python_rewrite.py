@@ -13,6 +13,10 @@ Current rewrites:
  Replace `sp.valuation` with a small compatibility wrapper `_aimo3_valuation`
   that tries the integer p-adic valuation first, then falls back to
   `prime_valuation` for numberfield contexts.
+
+ Replace `sp.Circle(A,B,C)` with `_aimo3_circle3(A,B,C)` where `_aimo3_circle3`
+    attempts to call `sp.Circle.from_three_points` if available, otherwise falls
+    back to `sp.Circle(A,B,C)`.
 """
 
 import io
@@ -23,6 +27,8 @@ from typing import Iterable
 _AIMO3_VALUATION_ALIAS = "_aimo3_valuation"
 _AIMO3_INT_VALUATION_ALIAS = "_aimo3_int_valuation"
 _AIMO3_PRIME_VALUATION_ALIAS = "_aimo3_prime_valuation"
+
+_AIMO3_CIRCLE3_ALIAS = "_aimo3_circle3"
 
 _AIMO3_VALUATION_BLOCK = (
     f"from sympy.polys.numberfields import prime_valuation as {_AIMO3_PRIME_VALUATION_ALIAS}\n"
@@ -38,6 +44,27 @@ _AIMO3_VALUATION_BLOCK = (
     "    except Exception:\n"
     "        pass\n"
     f"    return {_AIMO3_PRIME_VALUATION_ALIAS}(a, p)\n"
+)
+
+
+_AIMO3_CIRCLE3_BLOCK = (
+    f"def {_AIMO3_CIRCLE3_ALIAS}(p, q, r):\n"
+    "    \"\"\"Compatibility helper for circles through three points.\n\n"
+    "    Uses `Circle.from_three_points` when available; otherwise falls back to\n"
+    "    `Circle(p,q,r)` which is supported on many SymPy versions.\n"
+    "    \"\"\"\n"
+    "    try:\n"
+    "        import sympy as sp\n"
+    "        Circle = sp.Circle\n"
+    "        if hasattr(Circle, 'from_three_points'):\n"
+    "            try:\n"
+    "                return Circle.from_three_points(p, q, r)\n"
+    "            except Exception:\n"
+    "                pass\n"
+    "        return Circle(p, q, r)\n"
+    "    except Exception:\n"
+    "        # If SymPy isn't available for some reason, fail loudly.\n"
+    "        return sp.Circle(p, q, r)\n"
 )
 
 
@@ -160,16 +187,16 @@ def _count_top_level_commas(tokens: list[tokenize.TokenInfo], start_i: int, end_
 
 
 def _rewrite_sp_circle_three_points(src: str) -> str:
-    """Rewrite `sp.Circle(A,B,C)` into `sp.Circle.from_three_points(A,B,C)`.
+    """Rewrite `sp.Circle(A,B,C)` into `_aimo3_circle3(A,B,C)`.
 
-    Motivation: in some degenerate cases SymPy may return a non-Circle object (e.g. Segment2D)
-    from `sp.Circle(p1,p2,p3)`. Using `from_three_points` gives a clearer failure mode.
+    Motivation: SymPy versions differ in whether `Circle.from_three_points` exists.
+    `_aimo3_circle3` tries it when available but falls back to `Circle(p,q,r)`.
 
     This rewrite is conservative:
     - only applies to the exact `sp.Circle(...)` call form
     - only when there are exactly 3 top-level args (2 commas)
     - does not touch strings/comments (token-based)
-    - does not touch already-rewritten `sp.Circle.from_three_points(...)`
+    - does not touch already-rewritten `_aimo3_circle3(...)`
     """
 
     if "sp.Circle" not in src:
@@ -191,12 +218,6 @@ def _rewrite_sp_circle_three_points(src: str) -> str:
             and _is_op(toks[i + 1], ".")
             and _is_name(toks[i + 2], "Circle")
         ):
-            # If this is already `sp.Circle.from_three_points`, don't touch.
-            if i + 4 < len(toks) and _is_op(toks[i + 3], ".") and _is_name(toks[i + 4], "from_three_points"):
-                out.append((t.type, t.string))
-                i += 1
-                continue
-
             # Only rewrite when followed by a call: (...)
             j = i + 3
             if j < len(toks) and _is_op(toks[j], "("):
@@ -216,16 +237,8 @@ def _rewrite_sp_circle_three_points(src: str) -> str:
                     # tokens between j+1 and k are the arg list (with nesting)
                     commas = _count_top_level_commas(toks, j + 1, k)
                     if commas == 2:
-                        # Emit: sp . Circle . from_three_points
-                        out.extend(
-                            [
-                                (toks[i].type, toks[i].string),
-                                (toks[i + 1].type, toks[i + 1].string),
-                                (toks[i + 2].type, toks[i + 2].string),
-                                (tokenize.OP, "."),
-                                (tokenize.NAME, "from_three_points"),
-                            ]
-                        )
+                        # Emit: _aimo3_circle3
+                        out.append((tokenize.NAME, _AIMO3_CIRCLE3_ALIAS))
                         changed = True
                         i += 3
                         continue
@@ -246,6 +259,10 @@ def rewrite_python_tool_code(code: str) -> str:
 
     if "sp.Circle" in rewritten:
         rewritten = _rewrite_sp_circle_three_points(rewritten)
+
+    # If helper is referenced, ensure helper block is present.
+    if _AIMO3_CIRCLE3_ALIAS in rewritten and f"def {_AIMO3_CIRCLE3_ALIAS}" not in rewritten:
+        rewritten = _insert_import_after_header_lines(rewritten, _AIMO3_CIRCLE3_BLOCK)
 
     if "sp.valuation" in rewritten:
         rewritten = _rewrite_sp_valuation_tokens(rewritten)
