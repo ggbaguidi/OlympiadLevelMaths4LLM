@@ -751,7 +751,8 @@ class AIMO3Solver:
                             self.sandbox_pool.put(AIMO3Sandbox(timeout=self.cfg.jupyter_timeout))
                     else:
                         try:
-                            sandbox.reset()
+                            if bool(getattr(self.cfg, "sandbox_reset_between_attempts", True)):
+                                sandbox.reset()
                             self.sandbox_pool.put(sandbox)
                         except Exception:  # noqa: BLE001
                             # If reset fails, recycle.

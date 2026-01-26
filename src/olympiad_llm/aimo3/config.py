@@ -198,6 +198,12 @@ class AIMO3Config:
     # If the pool is exhausted, allow creating an ephemeral sandbox for that attempt.
     sandbox_create_on_exhaustion: bool = True
 
+    # Sandbox state policy
+    # By default we reset the sandbox between attempts to avoid cross-attempt contamination.
+    # Set to False only for debugging / interactive workflows where you want to reuse
+    # functions/variables across attempts.
+    sandbox_reset_between_attempts: bool = True
+
     # Tool-error recovery (general robustness)
     # Abort an attempt early if it is repeatedly failing tool calls, to avoid wasting tokens/time.
     abort_attempt_after_python_errors: int = 4
@@ -432,6 +438,9 @@ class AIMO3Config:
         sandbox_create_on_exhaustion = (
             os.getenv("AIMO3_SANDBOX_CREATE_ON_EXHAUSTION", "1").strip().lower() not in {"0", "false", "no"}
         )
+        sandbox_reset_between_attempts = (
+            os.getenv("AIMO3_SANDBOX_RESET_BETWEEN_ATTEMPTS", "1").strip().lower() not in {"0", "false", "no"}
+        )
 
         abort_attempt_after_python_errors = _env_int(
             "AIMO3_ABORT_ATTEMPT_AFTER_PYTHON_ERRORS", AIMO3Config.abort_attempt_after_python_errors
@@ -557,6 +566,7 @@ class AIMO3Config:
             kernel_init_workers=kernel_init_workers,
             sandbox_pool_size=sandbox_pool_size,
             sandbox_create_on_exhaustion=sandbox_create_on_exhaustion,
+            sandbox_reset_between_attempts=sandbox_reset_between_attempts,
             abort_attempt_after_python_errors=abort_attempt_after_python_errors,
             abort_attempt_after_consecutive_python_errors=abort_attempt_after_consecutive_python_errors,
             recycle_sandbox_after_python_errors=recycle_sandbox_after_python_errors,

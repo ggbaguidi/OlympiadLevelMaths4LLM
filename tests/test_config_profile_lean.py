@@ -48,3 +48,13 @@ def test_code_first_phase_env_var(monkeypatch):
     cfg = AIMO3Config.from_env()
     assert cfg.code_first_phase_s == 300.0
 
+
+def test_sandbox_reset_between_attempts_env_var(monkeypatch):
+    from olympiad_llm.aimo3.config import AIMO3Config
+
+    monkeypatch.delenv("AIMO3_PROFILE", raising=False)
+    monkeypatch.setenv("AIMO3_SANDBOX_RESET_BETWEEN_ATTEMPTS", "0")
+
+    cfg = AIMO3Config.from_env()
+    assert cfg.sandbox_reset_between_attempts is False
+
