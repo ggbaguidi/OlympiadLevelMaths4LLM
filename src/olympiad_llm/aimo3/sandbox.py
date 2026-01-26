@@ -80,13 +80,27 @@ class AIMO3Sandbox:
 
     @staticmethod
     def _format_error(traceback: list[str]) -> str:
+        # Jupyter/IPython traceback formats vary across runtimes.
+        # In some environments frames look like:
+        #   File "<ipython-input-...>", line ...
+        # In others they look like:
+        #   File "/tmp/ipykernel_1234/....py", line ...
+        #
+        # Keep relevant frames (ipython-input OR ipykernel) so we don't accidentally
+        # drop the entire traceback and return the misleading "[WARN] No output".
         clean_lines: list[str] = []
         for frame in traceback:
             clean_frame = re.sub(r"\x1b\[[0-9;]*m", "", frame)
-            if 'File "' in clean_frame and "ipython-input" not in clean_frame:
-                continue
+            if 'File "' in clean_frame:
+                if ("ipython-input" not in clean_frame) and ("ipykernel" not in clean_frame):
+                    continue
             clean_lines.append(clean_frame)
-        return "".join(clean_lines)
+
+        if clean_lines:
+            return "".join(clean_lines)
+
+        # Fallback: return original traceback (ANSI-stripped) if filtering removed everything.
+        return "".join(re.sub(r"\x1b\[[0-9;]*m", "", f) for f in traceback)
 
     def execute(self, code: str, timeout: float | None = None) -> str:
         if self._client is None or self._km is None:
