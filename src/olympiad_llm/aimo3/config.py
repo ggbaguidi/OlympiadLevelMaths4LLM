@@ -81,6 +81,12 @@ class AIMO3Config:
     # Attempt-level protocol (lemmas + verification gate)
     protocol_enabled: bool = True
 
+    # Prompt selection (first-stage rotation)
+    # Comma-separated list of prompt kinds to disable.
+    # Known kinds: standard, code_first, analytic, verification.
+    # Example: AIMO3_DISABLE_PROMPTS="verification,analytic"
+    disabled_prompts: str = ""
+
     # Notebook display / logging
     # If True, show a table of attempts (candidate answers + stats + snippet) after solving.
     display_candidates: bool = True
@@ -322,6 +328,8 @@ class AIMO3Config:
         tool_prompt = os.getenv("AIMO3_TOOL_PROMPT", AIMO3Config.tool_prompt)
         system_prompt = os.getenv("AIMO3_SYSTEM_PROMPT", AIMO3Config.system_prompt)
 
+        disabled_prompts = (os.getenv("AIMO3_DISABLE_PROMPTS", "") or "").strip()
+
         # Profile presets (apply only when the corresponding env var is NOT explicitly set).
         # This makes it easy to reduce orchestration steps without rewriting many env vars.
         profile = (os.getenv("AIMO3_PROFILE", "") or "").strip().lower()
@@ -538,6 +546,7 @@ class AIMO3Config:
             system_prompt=system_prompt,
             tool_prompt=tool_prompt,
             preference_prompt=preference_prompt,
+            disabled_prompts=disabled_prompts,
             model_path=model_path,
             served_model_name=served_model_name,
             reuse_existing_server=reuse,

@@ -21,7 +21,7 @@ from typing import Optional
 
 from .config import AIMO3Config
 from .errors import OptionalDependencyError
-from .prompts import TIR_PROMPT_ANALYTIC, TIR_PROMPT_CODE_FIRST, TIR_PROMPT_STANDARD, TIR_PROMPT_VERIFICATION, TIR_PROMPTS
+from .prompts import TIR_PROMPT_ANALYTIC, TIR_PROMPT_CODE_FIRST, TIR_PROMPT_STANDARD, TIR_PROMPT_VERIFICATION
 from .sandbox import AIMO3Sandbox
 from .vllm_server import VLLMServer
 from .wickelgren import augment_system_prompt_with_meta
@@ -901,6 +901,28 @@ class AIMO3Solver:
             return None
         return best_cand
 
+    @staticmethod
+    def _enabled_prompt_specs(cfg: AIMO3Config) -> list[tuple[str, str]]:
+        """Return enabled (name, prompt) pairs for first-stage rotation.
+
+        Controlled by cfg.disabled_prompts (comma-separated list).
+        Always returns at least one spec (falls back to standard).
+        """
+
+        disabled_raw = str(getattr(cfg, "disabled_prompts", "") or "")
+        disabled = {t.strip().lower() for t in disabled_raw.split(",") if t.strip()}
+
+        specs: list[tuple[str, str]] = [
+            ("standard", TIR_PROMPT_STANDARD),
+            ("code_first", TIR_PROMPT_CODE_FIRST),
+            ("analytic", TIR_PROMPT_ANALYTIC),
+            ("verification", TIR_PROMPT_VERIFICATION),
+        ]
+        enabled = [(name, prompt) for (name, prompt) in specs if name not in disabled]
+        if not enabled:
+            enabled = [("standard", TIR_PROMPT_STANDARD)]
+        return enabled
+
     def solve_problem(self, problem: str) -> int:
         problem_start_time = time.time()
         user_input = f"{problem} {self.cfg.preference_prompt}"
@@ -934,11 +956,11 @@ class AIMO3Solver:
             reserve_min_s=float(self.cfg.verification_reserve_min),
         )
 
-        prompt_names = ["standard", "code_first", "analytic", "verification"]
+        prompt_specs = self._enabled_prompt_specs(self.cfg)
+        enabled_names = {name for (name, _p) in prompt_specs}
         tasks: list[tuple[str, int, str]] = []
         for attempt_index in range(int(self.cfg.attempts)):
-            base = TIR_PROMPTS[attempt_index % len(TIR_PROMPTS)]
-            base_name = prompt_names[attempt_index % len(prompt_names)]
+            base_name, base = prompt_specs[attempt_index % len(prompt_specs)]
             meta_pack = "none"
             meta_card = "none"
             if bool(self.cfg.wickelgren_strategies_enabled):
@@ -985,7 +1007,7 @@ class AIMO3Solver:
             phase_s = float(getattr(self.cfg, "code_first_phase_s", 0.0) or 0.0)
             phase_end = problem_start_time + max(0.0, phase_s)
 
-            phase1_names = {"code_first", "verification"}
+            phase1_names = {"code_first", "verification"} & enabled_names
             phase1_tasks: deque[tuple[str, int, str]] = deque()
             phase2_tasks: deque[tuple[str, int, str]] = deque()
             for _p, _idx, _tag in base_tasks:
@@ -1013,6 +1035,8 @@ class AIMO3Solver:
 
             def _phase1_active() -> bool:
                 if phase_s <= 0.0:
+                    return False
+                if not phase1_names:
                     return False
                 if valid:
                     return False
@@ -1156,68 +1180,29 @@ class AIMO3Solver:
             # Use a meaningful slice of remaining time, but cap it to avoid monopolizing the notebook.
             retry_budget = min(90.0, max(10.0, remaining_overall * 0.50))
             retry_deadline = min(deadline, time.time() + retry_budget)
-            retry_tasks = [
-                (
-                    (
-                        augment_system_prompt_with_meta(
-                            TIR_PROMPT_VERIFICATION,
-                            attempt_index=int(self.cfg.attempts) + 0,
-                            problem_text=problem,
-                            mode=str(getattr(self.cfg, "strategy_pack_mode", "round_robin")),
-                            enabled_packs=str(getattr(self.cfg, "strategy_packs", "generic")),
-                        )[0]
-                        if bool(self.cfg.wickelgren_strategies_enabled)
-                        else TIR_PROMPT_VERIFICATION
-                    ),
-                    int(self.cfg.attempts) + 0,
-                    "verification|pack=retry|card=retry",
-                ),
-                (
-                    (
-                        augment_system_prompt_with_meta(
-                            TIR_PROMPT_ANALYTIC,
-                            attempt_index=int(self.cfg.attempts) + 1,
-                            problem_text=problem,
-                            mode=str(getattr(self.cfg, "strategy_pack_mode", "round_robin")),
-                            enabled_packs=str(getattr(self.cfg, "strategy_packs", "generic")),
-                        )[0]
-                        if bool(self.cfg.wickelgren_strategies_enabled)
-                        else TIR_PROMPT_ANALYTIC
-                    ),
-                    int(self.cfg.attempts) + 1,
-                    "analytic|pack=retry|card=retry",
-                ),
-                (
-                    (
-                        augment_system_prompt_with_meta(
-                            TIR_PROMPT_CODE_FIRST,
-                            attempt_index=int(self.cfg.attempts) + 2,
-                            problem_text=problem,
-                            mode=str(getattr(self.cfg, "strategy_pack_mode", "round_robin")),
-                            enabled_packs=str(getattr(self.cfg, "strategy_packs", "generic")),
-                        )[0]
-                        if bool(self.cfg.wickelgren_strategies_enabled)
-                        else TIR_PROMPT_CODE_FIRST
-                    ),
-                    int(self.cfg.attempts) + 2,
-                    "code_first|pack=retry|card=retry",
-                ),
-                (
-                    (
-                        augment_system_prompt_with_meta(
-                            TIR_PROMPT_STANDARD,
-                            attempt_index=int(self.cfg.attempts) + 3,
-                            problem_text=problem,
-                            mode=str(getattr(self.cfg, "strategy_pack_mode", "round_robin")),
-                            enabled_packs=str(getattr(self.cfg, "strategy_packs", "generic")),
-                        )[0]
-                        if bool(self.cfg.wickelgren_strategies_enabled)
-                        else TIR_PROMPT_STANDARD
-                    ),
-                    int(self.cfg.attempts) + 3,
-                    "standard|pack=retry|card=retry",
-                ),
+            retry_order: list[tuple[str, str]] = [
+                ("verification", TIR_PROMPT_VERIFICATION),
+                ("analytic", TIR_PROMPT_ANALYTIC),
+                ("code_first", TIR_PROMPT_CODE_FIRST),
+                ("standard", TIR_PROMPT_STANDARD),
             ]
+            retry_tasks: list[tuple[str, int, str]] = []
+            for name, base_prompt in retry_order:
+                if name not in enabled_names:
+                    continue
+                attempt_idx = int(self.cfg.attempts) + len(retry_tasks)
+                sys_prompt = (
+                    augment_system_prompt_with_meta(
+                        base_prompt,
+                        attempt_index=attempt_idx,
+                        problem_text=problem,
+                        mode=str(getattr(self.cfg, "strategy_pack_mode", "round_robin")),
+                        enabled_packs=str(getattr(self.cfg, "strategy_packs", "generic")),
+                    )[0]
+                    if bool(self.cfg.wickelgren_strategies_enabled)
+                    else base_prompt
+                )
+                retry_tasks.append((sys_prompt, attempt_idx, f"{name}|pack=retry|card=retry"))
 
             # Apply protocol to retry prompts too.
             if bool(self.cfg.protocol_enabled):
