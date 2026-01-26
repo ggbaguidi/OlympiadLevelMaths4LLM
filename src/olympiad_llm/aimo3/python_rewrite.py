@@ -25,7 +25,6 @@ _AIMO3_INT_VALUATION_ALIAS = "_aimo3_int_valuation"
 _AIMO3_PRIME_VALUATION_ALIAS = "_aimo3_prime_valuation"
 
 _AIMO3_VALUATION_BLOCK = (
-    f"from sympy.ntheory.factor_ import valuation as {_AIMO3_INT_VALUATION_ALIAS}\n"
     f"from sympy.polys.numberfields import prime_valuation as {_AIMO3_PRIME_VALUATION_ALIAS}\n"
     f"def {_AIMO3_VALUATION_ALIAS}(a, p):\n"
     "    \"\"\"Compatibility valuation helper.\n\n"

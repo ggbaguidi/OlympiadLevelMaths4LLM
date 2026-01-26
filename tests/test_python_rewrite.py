@@ -7,7 +7,6 @@ x = 10
 v = sp.valuation(x, 2)
 """
     out = rewrite_python_tool_code(code)
-    assert "from sympy.ntheory.factor_ import valuation" in out
     assert "from sympy.polys.numberfields import prime_valuation" in out
     assert "def _aimo3_valuation" in out
     assert "sp.valuation" not in out
