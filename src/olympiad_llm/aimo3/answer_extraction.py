@@ -21,8 +21,9 @@ _INT_TOKEN_RE = re.compile(r"([+-]?[0-9][0-9,]*)")
 #   "Final Answer: **1234**"
 #   "final answer is \(1234\)"
 #   "Final answer is \boxed{1234}" (boxing will be handled earlier, but keep this robust).
+#   "Thus, the answer is 1234."
 _FINAL_INT_HINT_RE = re.compile(
-    r"(?:final\s+answer|answer|ans)\s*(?:is|=|:)?\s*"  # hint
+    r"(?:final|thus\s+answer|answer|ans)\s*(?:is|=|:)?\s*"  # hint
     r"(?:\\boxed\s*\{\s*)?"  # optional \boxed{
     r"(?:\\text\s*\{\s*)?"  # optional \text{
     r"(?:\*\*|\$|\\\(|\\\[)?\s*"  # optional markdown/LaTeX opener
