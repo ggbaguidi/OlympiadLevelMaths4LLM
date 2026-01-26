@@ -10,13 +10,9 @@ This module is deliberately conservative:
 - avoids touching strings/comments
 
 Current rewrites:
-- Replace `sp.valuation` with `prime_valuation` (SymPy numberfields helper) and
-  inject a stable alias import.
-
-Notes:
-- `prime_valuation` has different semantics than integer p-adic valuation.
-  This rewrite is meant to prevent immediate AttributeError crashes when models
-  use `sp.valuation(...)` in numberfield contexts.
+ Replace `sp.valuation` with a small compatibility wrapper `_aimo3_valuation`
+  that tries the integer p-adic valuation first, then falls back to
+  `prime_valuation` for numberfield contexts.
 """
 
 import io
@@ -24,8 +20,26 @@ import tokenize
 from typing import Iterable
 
 
-_PRIME_VAL_ALIAS = "_aimo3_prime_valuation"
-_PRIME_VAL_IMPORT = f"from sympy.polys.numberfields import prime_valuation as {_PRIME_VAL_ALIAS}"
+_AIMO3_VALUATION_ALIAS = "_aimo3_valuation"
+_AIMO3_INT_VALUATION_ALIAS = "_aimo3_int_valuation"
+_AIMO3_PRIME_VALUATION_ALIAS = "_aimo3_prime_valuation"
+
+_AIMO3_VALUATION_BLOCK = (
+    f"from sympy.ntheory.factor_ import valuation as {_AIMO3_INT_VALUATION_ALIAS}\n"
+    f"from sympy.polys.numberfields import prime_valuation as {_AIMO3_PRIME_VALUATION_ALIAS}\n"
+    f"def {_AIMO3_VALUATION_ALIAS}(a, p):\n"
+    "    \"\"\"Compatibility valuation helper.\n\n"
+    "    - If p is an integer-like (int or sympy.Integer), use integer p-adic valuation.\n"
+    "    - Otherwise, fall back to SymPy's numberfield prime_valuation.\n"
+    "    \"\"\"\n"
+    "    try:\n"
+    "        import sympy as sp\n"
+    "        if isinstance(p, (int, sp.Integer)):\n"
+    f"            return {_AIMO3_INT_VALUATION_ALIAS}(a, int(p))\n"
+    "    except Exception:\n"
+    "        pass\n"
+    f"    return {_AIMO3_PRIME_VALUATION_ALIAS}(a, p)\n"
+)
 
 
 def _is_name(tok: tokenize.TokenInfo, s: str) -> bool:
@@ -64,7 +78,7 @@ def _insert_import_after_header_lines(code: str, import_line: str) -> str:
 
 
 def _rewrite_sp_valuation_tokens(src: str) -> str:
-    """Replace token sequence `sp . valuation` with `_aimo3_prime_valuation`."""
+    """Replace token sequence `sp . valuation` with `_aimo3_valuation`."""
 
     # Tokenize / untokenize preserves formatting reasonably well.
     out_tokens: list[tokenize.TokenInfo] = []
@@ -88,7 +102,7 @@ def _rewrite_sp_valuation_tokens(src: str) -> str:
             out_tokens.append(
                 tokenize.TokenInfo(
                     type=tokenize.NAME,
-                    string=_PRIME_VAL_ALIAS,
+                    string=_AIMO3_VALUATION_ALIAS,
                     start=t.start,
                     end=toks[i + 2].end,
                     line=t.line,
@@ -101,6 +115,34 @@ def _rewrite_sp_valuation_tokens(src: str) -> str:
         i += 1
 
     return tokenize.untokenize(out_tokens)
+
+
+def _rewrite_prime_valuation_alias_to_wrapper(src: str) -> str:
+    """Rewrite `_aimo3_prime_valuation` calls to `_aimo3_valuation`.
+
+    Backward compatibility: older rewrites emitted `_aimo3_prime_valuation(...)`.
+    That alias crashes on integer valuation use-cases; the wrapper dispatches.
+    """
+
+    if _AIMO3_PRIME_VALUATION_ALIAS not in src:
+        return src
+
+    toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
+    out: list[tokenize.TokenInfo] = []
+    for t in toks:
+        if t.type == tokenize.NAME and t.string == _AIMO3_PRIME_VALUATION_ALIAS:
+            out.append(
+                tokenize.TokenInfo(
+                    type=tokenize.NAME,
+                    string=_AIMO3_VALUATION_ALIAS,
+                    start=t.start,
+                    end=t.end,
+                    line=t.line,
+                )
+            )
+        else:
+            out.append(t)
+    return tokenize.untokenize(out)
 
 
 def _count_top_level_commas(tokens: list[tokenize.TokenInfo], start_i: int, end_i: int) -> int:
@@ -208,8 +250,17 @@ def rewrite_python_tool_code(code: str) -> str:
 
     if "sp.valuation" in rewritten:
         rewritten = _rewrite_sp_valuation_tokens(rewritten)
-        # If we actually introduced the alias usage, inject the import.
-        if _PRIME_VAL_ALIAS in rewritten and _PRIME_VAL_IMPORT not in rewritten:
-            rewritten = _insert_import_after_header_lines(rewritten, _PRIME_VAL_IMPORT)
+
+    # Back-compat: older rewrite emitted `_aimo3_prime_valuation(...)`.
+    # Only apply if the wrapper isn't already defined in the snippet; otherwise we risk
+    # rewriting user-provided helper code and breaking idempotence.
+    if _AIMO3_PRIME_VALUATION_ALIAS in rewritten and f"def {_AIMO3_VALUATION_ALIAS}" not in rewritten:
+        rewritten = _rewrite_prime_valuation_alias_to_wrapper(rewritten)
+
+    # If wrapper is referenced, ensure helper block is present.
+    # IMPORTANT: avoid modifying user-provided wrapper definitions; if the function is
+    # already defined (even with a different body), leave it untouched for idempotence.
+    if _AIMO3_VALUATION_ALIAS in rewritten and f"def {_AIMO3_VALUATION_ALIAS}" not in rewritten:
+        rewritten = _insert_import_after_header_lines(rewritten, _AIMO3_VALUATION_BLOCK)
 
     return rewritten

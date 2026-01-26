@@ -7,9 +7,11 @@ x = 10
 v = sp.valuation(x, 2)
 """
     out = rewrite_python_tool_code(code)
+    assert "from sympy.ntheory.factor_ import valuation" in out
     assert "from sympy.polys.numberfields import prime_valuation" in out
+    assert "def _aimo3_valuation" in out
     assert "sp.valuation" not in out
-    assert "_aimo3_prime_valuation(x, 2)" in out
+    assert "_aimo3_valuation(x, 2)" in out
 
 
 def test_rewrite_does_not_touch_strings_or_comments():
@@ -18,14 +20,23 @@ s = "sp.valuation(x,2) in a string"
 """
     out = rewrite_python_tool_code(code)
     # No alias inserted because no real token match.
-    assert "_aimo3_prime_valuation" not in out
+    assert "_aimo3_valuation" not in out
     assert out == code
 
 
 def test_rewrite_is_idempotent():
-    code = """from sympy.polys.numberfields import prime_valuation as _aimo3_prime_valuation
+    code = """from sympy.ntheory.factor_ import valuation as _aimo3_int_valuation
+from sympy.polys.numberfields import prime_valuation as _aimo3_prime_valuation
+def _aimo3_valuation(a, p):
+    try:
+        import sympy as sp
+        if isinstance(p, (int, sp.Integer)):
+            return _aimo3_int_valuation(a, int(p))
+    except Exception:
+        pass
+    return _aimo3_prime_valuation(a, p)
 x = 10
-v = _aimo3_prime_valuation(x, 2)
+v = _aimo3_valuation(x, 2)
 """
     out = rewrite_python_tool_code(code)
     assert out == code
