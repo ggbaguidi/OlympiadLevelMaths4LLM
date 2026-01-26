@@ -27,6 +27,7 @@ REQUIRED_LIBRARIES = [
     "vllm",
     "openai_harmony",
     "mpmath",
+    "ortools",
 ]
 
 
