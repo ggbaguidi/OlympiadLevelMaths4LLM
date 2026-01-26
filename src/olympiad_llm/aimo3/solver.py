@@ -44,6 +44,7 @@ from .recovery import (
 )
 from .tool_drain import iter_tool_calls
 from .python_timeouts import parse_timeout_directive, parse_timeout_error
+from .python_rewrite import rewrite_python_tool_code
 
 
 def _require_openai():
@@ -253,7 +254,9 @@ class AIMO3Tool:
     def process_sync_plus(self, message, timeout_override_s: float | None = None):
         self._ensure_session()
         raw_script = message.content[0].text
-        final_script = self._ensure_last_print(raw_script)
+        # Apply best-effort rewrites for known API mismatches before execution.
+        rewritten_script = rewrite_python_tool_code(str(raw_script or ""))
+        final_script = self._ensure_last_print(rewritten_script)
 
         timeout_s: float | None = None
         if timeout_override_s is not None:
