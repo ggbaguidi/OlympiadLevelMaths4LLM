@@ -28,6 +28,14 @@ _PRIME_VAL_ALIAS = "_aimo3_prime_valuation"
 _PRIME_VAL_IMPORT = f"from sympy.polys.numberfields import prime_valuation as {_PRIME_VAL_ALIAS}"
 
 
+def _is_name(tok: tokenize.TokenInfo, s: str) -> bool:
+    return tok.type == tokenize.NAME and tok.string == s
+
+
+def _is_op(tok: tokenize.TokenInfo, s: str) -> bool:
+    return tok.type == tokenize.OP and tok.string == s
+
+
 def _insert_import_after_header_lines(code: str, import_line: str) -> str:
     """Insert `import_line` after leading blank/comment lines.
 
@@ -95,17 +103,113 @@ def _rewrite_sp_valuation_tokens(src: str) -> str:
     return tokenize.untokenize(out_tokens)
 
 
+def _count_top_level_commas(tokens: list[tokenize.TokenInfo], start_i: int, end_i: int) -> int:
+    """Count commas at nesting depth 0 within (start_i, end_i) token indices."""
+
+    depth = 0
+    commas = 0
+    for t in tokens[start_i:end_i]:
+        if _is_op(t, "(") or _is_op(t, "[") or _is_op(t, "{"):
+            depth += 1
+        elif _is_op(t, ")") or _is_op(t, "]") or _is_op(t, "}"):
+            depth = max(0, depth - 1)
+        elif depth == 0 and _is_op(t, ","):
+            commas += 1
+    return commas
+
+
+def _rewrite_sp_circle_three_points(src: str) -> str:
+    """Rewrite `sp.Circle(A,B,C)` into `sp.Circle.from_three_points(A,B,C)`.
+
+    Motivation: in some degenerate cases SymPy may return a non-Circle object (e.g. Segment2D)
+    from `sp.Circle(p1,p2,p3)`. Using `from_three_points` gives a clearer failure mode.
+
+    This rewrite is conservative:
+    - only applies to the exact `sp.Circle(...)` call form
+    - only when there are exactly 3 top-level args (2 commas)
+    - does not touch strings/comments (token-based)
+    - does not touch already-rewritten `sp.Circle.from_three_points(...)`
+    """
+
+    if "sp.Circle" not in src:
+        return src
+
+    toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
+    # Use (tok_type, tok_string) pairs for untokenize to avoid relying on positional
+    # metadata when injecting new tokens.
+    out: list[tuple[int, str]] = []
+    changed = False
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+
+        # Match: sp . Circle
+        if (
+            _is_name(t, "sp")
+            and i + 2 < len(toks)
+            and _is_op(toks[i + 1], ".")
+            and _is_name(toks[i + 2], "Circle")
+        ):
+            # If this is already `sp.Circle.from_three_points`, don't touch.
+            if i + 4 < len(toks) and _is_op(toks[i + 3], ".") and _is_name(toks[i + 4], "from_three_points"):
+                out.append((t.type, t.string))
+                i += 1
+                continue
+
+            # Only rewrite when followed by a call: (...)
+            j = i + 3
+            if j < len(toks) and _is_op(toks[j], "("):
+                # Find matching ')'
+                depth = 0
+                k = j
+                while k < len(toks):
+                    if _is_op(toks[k], "("):
+                        depth += 1
+                    elif _is_op(toks[k], ")"):
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    k += 1
+
+                if k < len(toks) and _is_op(toks[k], ")"):
+                    # tokens between j+1 and k are the arg list (with nesting)
+                    commas = _count_top_level_commas(toks, j + 1, k)
+                    if commas == 2:
+                        # Emit: sp . Circle . from_three_points
+                        out.extend(
+                            [
+                                (toks[i].type, toks[i].string),
+                                (toks[i + 1].type, toks[i + 1].string),
+                                (toks[i + 2].type, toks[i + 2].string),
+                                (tokenize.OP, "."),
+                                (tokenize.NAME, "from_three_points"),
+                            ]
+                        )
+                        changed = True
+                        i += 3
+                        continue
+
+        out.append((t.type, t.string))
+        i += 1
+
+    if not changed:
+        return src
+    return tokenize.untokenize(out)
+
+
 def rewrite_python_tool_code(code: str) -> str:
     """Apply all configured rewrites to python-tool code."""
 
     src = str(code or "")
-    if "sp.valuation" not in src:
-        return src
+    rewritten = src
 
-    rewritten = _rewrite_sp_valuation_tokens(src)
+    if "sp.Circle" in rewritten:
+        rewritten = _rewrite_sp_circle_three_points(rewritten)
 
-    # If we actually introduced the alias usage, inject the import.
-    if _PRIME_VAL_ALIAS in rewritten and _PRIME_VAL_IMPORT not in rewritten:
-        rewritten = _insert_import_after_header_lines(rewritten, _PRIME_VAL_IMPORT)
+    if "sp.valuation" in rewritten:
+        rewritten = _rewrite_sp_valuation_tokens(rewritten)
+        # If we actually introduced the alias usage, inject the import.
+        if _PRIME_VAL_ALIAS in rewritten and _PRIME_VAL_IMPORT not in rewritten:
+            rewritten = _insert_import_after_header_lines(rewritten, _PRIME_VAL_IMPORT)
 
     return rewritten

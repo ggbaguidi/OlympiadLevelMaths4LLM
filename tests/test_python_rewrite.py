@@ -29,3 +29,21 @@ v = _aimo3_prime_valuation(x, 2)
 """
     out = rewrite_python_tool_code(code)
     assert out == code
+
+
+def test_rewrite_sp_circle_three_points():
+    code = """circ1 = sp.Circle(A, E, F)
+O1 = circ1.center
+"""
+    out = rewrite_python_tool_code(code)
+    norm = "".join(out.split())
+    assert "sp.Circle.from_three_points(A,E,F)" in norm
+    assert "sp.Circle(A,E,F)" not in norm
+
+
+def test_rewrite_sp_circle_does_not_touch_two_arg_circle():
+    code = """# Circle by center+radius should not be rewritten
+circ = sp.Circle(A, 3)
+"""
+    out = rewrite_python_tool_code(code)
+    assert out == code
