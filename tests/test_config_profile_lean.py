@@ -37,3 +37,14 @@ def test_turns_env_var(monkeypatch):
     monkeypatch.setenv("AIMO3_TURNS", "33")
     cfg = AIMO3Config.from_env()
     assert cfg.turns == 33
+
+
+def test_code_first_phase_env_var(monkeypatch):
+    from olympiad_llm.aimo3.config import AIMO3Config
+
+    monkeypatch.delenv("AIMO3_PROFILE", raising=False)
+    monkeypatch.setenv("AIMO3_CODE_FIRST_PHASE_S", "300")
+
+    cfg = AIMO3Config.from_env()
+    assert cfg.code_first_phase_s == 300.0
+

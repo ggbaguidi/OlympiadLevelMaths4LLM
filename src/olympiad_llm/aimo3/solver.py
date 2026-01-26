@@ -14,8 +14,8 @@ import subprocess
 import sys
 import threading
 import time
-from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import Counter, defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from typing import Optional
 
@@ -978,7 +978,22 @@ class AIMO3Solver:
         with ThreadPoolExecutor(max_workers=int(self.cfg.workers)) as ex:
             # Dynamic scheduling allows recovery attempts to reuse freed worker capacity.
             base_tasks = list(tasks)
-            next_i = 0
+
+            # Optional phase-1 policy: for an initial window (or until we have at least one
+            # extracted integer), only run code-first / verification prompts.
+            phase_s = float(getattr(self.cfg, "code_first_phase_s", 0.0) or 0.0)
+            phase_end = problem_start_time + max(0.0, phase_s)
+
+            phase1_names = {"code_first", "verification"}
+            phase1_tasks: deque[tuple[str, int, str]] = deque()
+            phase2_tasks: deque[tuple[str, int, str]] = deque()
+            for _p, _idx, _tag in base_tasks:
+                base_name = str(_tag).split("|", 1)[0]
+                if base_name in phase1_names:
+                    phase1_tasks.append((_p, _idx, _tag))
+                else:
+                    phase2_tasks.append((_p, _idx, _tag))
+
             futures = set()
 
             def _submit_one(sys_prompt: str, attempt_idx: int, attempt_tag: str) -> None:
@@ -995,20 +1010,65 @@ class AIMO3Solver:
                     )
                 )
 
+            def _phase1_active() -> bool:
+                if phase_s <= 0.0:
+                    return False
+                if valid:
+                    return False
+                # Don't keep phase-1 alive past the attempt-generation deadline.
+                return time.time() < min(phase_end, attempt_deadline)
+
+            def _next_base_task() -> tuple[str, int, str] | None:
+                if _phase1_active():
+                    # During phase-1: only schedule tool-heavy prompts.
+                    if phase1_tasks:
+                        return phase1_tasks.popleft()
+                    return None
+
+                # Phase-2: schedule remaining proof prompts first.
+                if phase2_tasks:
+                    return phase2_tasks.popleft()
+                if phase1_tasks:
+                    return phase1_tasks.popleft()
+                return None
+
+            def _fill_executor() -> None:
+                # Try to keep workers busy, subject to phase gating.
+                while (not stop_event.is_set()) and time.time() <= attempt_deadline and len(futures) < int(self.cfg.workers):
+                    nxt = _next_base_task()
+                    if nxt is None:
+                        break
+                    sys_prompt, attempt_idx, attempt_tag = nxt
+                    _submit_one(sys_prompt, attempt_idx, attempt_tag)
+
             # Seed the executor.
-            warm = min(int(self.cfg.workers), len(base_tasks))
-            for _ in range(warm):
-                sys_prompt, attempt_idx, attempt_tag = base_tasks[next_i]
-                next_i += 1
-                _submit_one(sys_prompt, attempt_idx, attempt_tag)
+            _fill_executor()
 
             recovery_left = int(getattr(self.cfg, "recovery_attempts_cap", 0) or 0)
             format_recovery_left = int(getattr(self.cfg, "format_recovery_cap", 0) or 0)
 
-            while futures:
+            while futures or phase1_tasks or phase2_tasks:
+                # Keep the pool topped up when possible.
+                _fill_executor()
+
+                if not futures:
+                    # Nothing running right now (e.g., phase-1 gating exhausted its queue).
+                    if stop_event.is_set() or time.time() > attempt_deadline:
+                        break
+                    # Wait briefly for phase-1 to expire (or for external stop), then retry.
+                    time.sleep(0.05)
+                    continue
+
+                try:
+                    # Wait for one future to complete, but don't block forever so we can
+                    # react to phase transitions and deadlines.
+                    done = next(as_completed(futures, timeout=0.25))
+                except FuturesTimeoutError:
+                    continue
+                except Exception:  # noqa: BLE001
+                    continue
+
                 with contextlib.suppress(Exception):
-                    # Wait for one future to complete.
-                    done = next(as_completed(futures))
                     futures.remove(done)
                     r: AttemptResult = done.result()
                     detailed.append(r)
@@ -1022,12 +1082,6 @@ class AIMO3Solver:
                             with contextlib.suppress(Exception):
                                 f.cancel()
                         break
-
-                    # Schedule next base task (if any).
-                    if (not stop_event.is_set()) and time.time() <= attempt_deadline and next_i < len(base_tasks):
-                        sys_prompt, attempt_idx, attempt_tag = base_tasks[next_i]
-                        next_i += 1
-                        _submit_one(sys_prompt, attempt_idx, attempt_tag)
 
                     # If we saw tool instability, spend a little extra budget on a recovery attempt.
                     if (

@@ -182,6 +182,14 @@ class AIMO3Config:
     early_stop_min_verified: int = 1
     attempts: int = 8
     workers: int = 16
+
+    # Phase scheduling (optional)
+    # If > 0, then until we either (a) find at least one extracted integer answer, or
+    # (b) this many seconds have elapsed for the current problem, we prioritize
+    # code-first / tool-heavy prompting and postpone proof-y prompts.
+    #
+    # This is a cheap way to reduce wasted “long proof with no boxed answer” tokens early.
+    code_first_phase_s: float = 0.0
     # Concurrency used only during *kernel creation*. High values can cause port races.
     kernel_init_workers: int = 4
     # How many sandbox kernels to keep warm in the pool.
@@ -356,6 +364,9 @@ class AIMO3Config:
         early_stop_min_verified = _env_int("AIMO3_EARLY_STOP_MIN_VERIFIED", AIMO3Config.early_stop_min_verified)
 
         turns = _env_int("AIMO3_TURNS", AIMO3Config.turns)
+
+        # Phase scheduling
+        code_first_phase_s = _env_float("AIMO3_CODE_FIRST_PHASE_S", AIMO3Config.code_first_phase_s)
 
         # Time budgets
         base_problem_timeout = _env_float("AIMO3_BASE_PROBLEM_TIMEOUT", AIMO3Config.base_problem_timeout)
@@ -572,6 +583,7 @@ class AIMO3Config:
             exploration_attempts=exploration_attempts,
             attempts=attempts,
             workers=workers,
+            code_first_phase_s=code_first_phase_s,
             early_stop=early_stop,
             early_stop_min_verified=early_stop_min_verified,
             turns=turns,
