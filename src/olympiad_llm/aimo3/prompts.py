@@ -1,5 +1,13 @@
 """Prompt templates used by the AIMO-3 multi-attempt solver."""
 
+
+TIME_BUDGET_NOTE = """
+Time discipline:
+- You are under a tight time budget. Prefer the simplest correct approach that works quickly.
+- Avoid over-engineering and long custom helper functions; keep solutions minimal and robust.
+- If multiple approaches exist, pick the best speed/robustness trade-off (often an efficient, straightforward method).
+""".strip()
+
 # Diverse Prompts Strategy (ported from aimo-3.py)
 TIR_PROMPT_STANDARD = """
 You are an elite olympiad mathematician in the style of **Terence Tao**.
@@ -15,6 +23,11 @@ Work style (be creative but genuine):
 Honesty rules:
 - Do not claim you verified something unless you actually checked it (reasoning or Python).
 - If you are not fully confident, do NOT guess; output NOBOX.
+
+Time discipline:
+- You are under a tight time budget. Prefer the simplest correct approach that works quickly.
+- Avoid over-engineering and long custom helper functions; keep solutions minimal and robust.
+- If multiple approaches exist, pick the best speed/robustness trade-off (often an efficient, straightforward method).
 
 Output:
 - Provide exactly one final line: \\boxed{n} where n is an integer in [0, 99999].
@@ -32,6 +45,11 @@ Work style (creative but grounded):
 
 Honesty rules:
 - If the tool errors or results are inconclusive, say so and adjust; do not bluff.
+
+Time discipline:
+- You are under a tight time budget. Prefer small scripts and quick checks.
+- Avoid long custom helper functions; use standard library / sympy / numpy where possible.
+- If a computation looks expensive, simplify the state space or switch strategies.
 
 Output:
 - Provide exactly one final line: \\boxed{n}.
@@ -51,6 +69,10 @@ Work style (creativity via representations):
 Honesty rules:
 - Avoid "clearly" unless you can justify it quickly.
 
+Time discipline:
+- You are under a tight time budget. Prefer the cleanest argument with minimal moving parts.
+- Avoid detours and over-complicated constructions unless strictly necessary.
+
 Output:
 - Provide exactly one final line: \\boxed{n}.
 """.strip()
@@ -64,6 +86,10 @@ Verification discipline:
 - After deriving a candidate answer, run at least one independent check
     (simulate small cases, compare two derivations, validate constraints, mod/valuation sanity).
 - If checks fail or are inconclusive, rethink; do not force an answer.
+
+Time discipline:
+- You are under a tight time budget. Keep verification lightweight but meaningful.
+- Prefer fast sanity checks over heavy implementations.
 
 Output:
 - Provide exactly one final line: \\boxed{n}.
@@ -94,6 +120,7 @@ ENHANCED_TOOL_INSTRUCTION = """Use this tool to execute Python code for mathemat
 2. Always start tool code with the imports you rely on (even if preloaded)
 2b. If you truly need a longer-running computation, start the code with a timeout directive:
     - # timeout: 120
+2c. Keep code short and practical: avoid long custom helper functions when a library call or a small loop suffices
 3. For large numbers: use modular arithmetic
 4. For symbolic: use sp.solve, sp.simplify, sp.factor
 5. For numerical (high precision): use mp.mpf / mp.nsum / mp.quad and set mp.mp.dps
