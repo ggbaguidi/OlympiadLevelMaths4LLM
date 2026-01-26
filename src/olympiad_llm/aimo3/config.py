@@ -339,6 +339,7 @@ class AIMO3Config:
             except Exception:  # noqa: BLE001
                 return int(default)
         
+        seed = _env_int("AIMO3_SEED", AIMO3Config.seed)
         preference_prompt = os.getenv("AIMO3_PREFERENCE_PROMPT", AIMO3Config.preference_prompt)
         tool_prompt = os.getenv("AIMO3_TOOL_PROMPT", AIMO3Config.tool_prompt)
         system_prompt = os.getenv("AIMO3_SYSTEM_PROMPT", AIMO3Config.system_prompt)
@@ -573,6 +574,7 @@ class AIMO3Config:
                 tiebreak_enabled = False
 
         return AIMO3Config(
+            seed=seed,
             system_prompt=system_prompt,
             tool_prompt=tool_prompt,
             preference_prompt=preference_prompt,
