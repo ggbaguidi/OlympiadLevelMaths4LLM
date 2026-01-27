@@ -129,6 +129,11 @@ class AIMO3Config:
     kv_cache_dtype: str = "fp8_e4m3"
     dtype: str = "auto"
 
+    # Optional: warm OS page cache by reading model shards before starting vLLM.
+    # This reduces cold-start stalls and first-token latency in notebook runtimes.
+    preload_model_weights: bool = False
+    preload_model_workers: int = 8
+
     # Optional: Lean4 toolchain bootstrap (offline Kaggle).
     # If enabled, the solver will attempt to locate/extract a Lean toolchain archive
     # (e.g. lean-<ver>-linux.tar.gz) and make `lean`/`lake` available on PATH.
@@ -186,6 +191,10 @@ class AIMO3Config:
     context_tokens: int = 65536
     search_tokens: int = 1024
     buffer_tokens: int = 512
+    # If enabled, request top-k logprobs from vLLM and compute a mean-token entropy
+    # to slightly bias ranking toward more confident attempts.
+    entropy_weighting_enabled: bool = False
+    top_logprobs: int = 5
     batch_size: int = 256
     early_stop: int = 3
     # Early-stop quality guardrails
@@ -379,6 +388,12 @@ class AIMO3Config:
         disp = os.getenv("AIMO3_DISPLAY_CANDIDATES", "1").strip().lower() not in {"0", "false", "no"}
         require_cuda = os.getenv("AIMO3_REQUIRE_CUDA", "1").strip().lower() not in {"0", "false", "no"}
 
+        # Startup perf knobs
+        preload_model_weights = (
+            os.getenv("AIMO3_PRELOAD_MODEL_WEIGHTS", "0").strip().lower() not in {"0", "false", "no"}
+        )
+        preload_model_workers = _env_int("AIMO3_PRELOAD_MODEL_WORKERS", AIMO3Config.preload_model_workers)
+
         # Optional: Lean toolchain bootstrap (offline Kaggle).
         lean_toolchain_enabled = (
             os.getenv("AIMO3_LEAN_TOOLCHAIN_ENABLED", "0").strip().lower() not in {"0", "false", "no"}
@@ -503,6 +518,11 @@ class AIMO3Config:
         temperature = _env_float("AIMO3_TEMPERATURE", AIMO3Config.temperature)
         min_p = _env_float("AIMO3_MIN_P", AIMO3Config.min_p)
 
+        entropy_weighting_enabled = (
+            os.getenv("AIMO3_ENTROPY_WEIGHTING_ENABLED", "0").strip().lower() not in {"0", "false", "no"}
+        )
+        top_logprobs = _env_int("AIMO3_TOP_LOGPROBS", AIMO3Config.top_logprobs)
+
         # Per-role temperatures (optional)
         temperature_exploration = _env_float(
             "AIMO3_TEMPERATURE_EXPLORATION", float(AIMO3Config.temperature_exploration or temperature)
@@ -581,6 +601,8 @@ class AIMO3Config:
             disabled_prompts=disabled_prompts,
             model_path=model_path,
             served_model_name=served_model_name,
+            preload_model_weights=preload_model_weights,
+            preload_model_workers=preload_model_workers,
             reuse_existing_server=reuse,
             wickelgren_strategies_enabled=wick,
             strategy_pack_mode=strategy_pack_mode,
@@ -631,6 +653,8 @@ class AIMO3Config:
             tiebreak_budget_cap_s=tiebreak_budget_cap_s,
             temperature=temperature,
             min_p=min_p,
+            entropy_weighting_enabled=entropy_weighting_enabled,
+            top_logprobs=top_logprobs,
             temperature_exploration=temperature_exploration,
             temperature_main=temperature_main,
             temperature_code=temperature_code,

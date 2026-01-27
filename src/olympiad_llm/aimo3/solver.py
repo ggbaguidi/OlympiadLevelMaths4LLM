@@ -300,6 +300,11 @@ class AIMO3Solver:
 
     def _attempt_to_row(self, r: AttemptResult) -> dict:
         snippet = self._truncate(r.output_text, int(self.cfg.display_attempt_text_chars))
+        ent = None
+        with contextlib.suppress(Exception):
+            v = float(getattr(r.stats, "mean_entropy", float("inf")))
+            if v != float("inf") and v > 0.0:
+                ent = v
         return {
             "Attempt": r.attempt,
             "Answer": r.answer,
@@ -308,6 +313,7 @@ class AIMO3Solver:
             "PyErrors": int(r.stats.python_errors),
             "LeanCalls": int(getattr(r.stats, "lean_calls", 0) or 0),
             "Tokens": int(r.stats.token_count),
+            "Entropy": ent,
             "Snippet": snippet,
         }
 
@@ -428,6 +434,42 @@ class AIMO3Solver:
         if not marker:
             return False
         return marker in (text or "")
+
+    @staticmethod
+    def _compute_mean_entropy(logprobs_buffer: list[object]) -> float:
+        """Best-effort mean entropy from top-k logprobs.
+
+        We only see top-k probabilities, so this underestimates true entropy, but it's
+        still a useful confidence proxy to break ties.
+        """
+
+        if not logprobs_buffer:
+            return float("inf")
+
+        total_entropy = 0.0
+        token_count = 0
+        for top_dict in logprobs_buffer:
+            if not isinstance(top_dict, dict):
+                continue
+            if not top_dict:
+                continue
+
+            ent = 0.0
+            # top_dict maps token_str -> logprob
+            for _tok, lp in top_dict.items():
+                try:
+                    prob = math.exp(float(lp))
+                except Exception:  # noqa: BLE001
+                    continue
+                if prob > 0.0:
+                    ent -= prob * math.log2(prob)
+
+            total_entropy += ent
+            token_count += 1
+
+        if token_count <= 0:
+            return float("inf")
+        return total_entropy / float(token_count)
 
     def _should_early_stop(self, detailed: list[AttemptResult]) -> bool:
         """Quality-aware early stop.
@@ -625,6 +667,8 @@ class AIMO3Solver:
         transcript_python_calls: list[str] = []
         transcript_python_outputs: list[str] = []
 
+        logprobs_buffer: list[object] = []
+
         attempt_seed = int(math.pow(self.cfg.seed + attempt_index, 2))
 
         policy = ToolRecoveryPolicy(
@@ -680,6 +724,7 @@ class AIMO3Solver:
                 stream = self.client.completions.create(
                     model=self.cfg.served_model_name,
                     temperature=temperature_for_attempt(cfg=self.cfg, attempt_index=attempt_index, attempt_tag=attempt_tag),
+                    logprobs=(int(self.cfg.top_logprobs) if (bool(getattr(self.cfg, "entropy_weighting_enabled", False)) and int(getattr(self.cfg, "top_logprobs", 0) or 0) > 0) else None),
                     max_tokens=max_tokens,
                     prompt=prompt_ids,
                     seed=attempt_seed,
@@ -708,6 +753,15 @@ class AIMO3Solver:
                                 text_tail = (text_tail + new_text)
                                 if cap > 0 and len(text_tail) > cap:
                                     text_tail = text_tail[-cap:]
+
+                            # Optional: collect top-k logprobs for entropy.
+                            if bool(getattr(self.cfg, "entropy_weighting_enabled", False)):
+                                with contextlib.suppress(Exception):
+                                    lp = chunk.choices[0].logprobs
+                                    tlp = getattr(lp, "top_logprobs", None)
+                                    if tlp:
+                                        # vLLM returns a list[dict[token->logprob]]
+                                        logprobs_buffer.extend(list(tlp))
                         if "}" in new_text:
                             search_text = "".join(text_chunks[-self.cfg.search_tokens :])
                             ans = self._extractor.extract_boxed_int(search_text)
@@ -974,6 +1028,11 @@ class AIMO3Solver:
                 python_calls=python_calls,
                 python_errors=python_errors,
                 lean_calls=lean_calls,
+                mean_entropy=(
+                    self._compute_mean_entropy(logprobs_buffer)
+                    if bool(getattr(self.cfg, "entropy_weighting_enabled", False))
+                    else float("inf")
+                ),
             ),
             output_text=text_tail,
             tag=(

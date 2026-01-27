@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from .config import AIMO3Config
@@ -52,6 +53,51 @@ class VLLMServer:
         # If either side is missing, CUDA won't work for vLLM.
         return bool(has_lib and has_dev)
 
+    def _preload_model_weights(self) -> None:
+        """Best-effort OS page-cache warmup for large checkpoints.
+
+        This mirrors the high-LB Kaggle notebook trick: reading shard files once before
+        starting vLLM reduces random stalls and first-token latency on cold starts.
+        """
+
+        if not bool(getattr(self.cfg, "preload_model_weights", False)):
+            return
+
+        model_path = str(getattr(self.cfg, "model_path", "") or "")
+        if not model_path or not os.path.isdir(model_path):
+            return
+
+        # Enumerate shard files.
+        files: list[str] = []
+        for root, _dirs, names in os.walk(model_path):
+            for name in names:
+                p = os.path.join(root, name)
+                if os.path.isfile(p):
+                    files.append(p)
+        if not files:
+            return
+
+        workers = int(getattr(self.cfg, "preload_model_workers", 8) or 8)
+        workers = max(1, workers)
+        # Avoid silly oversubscription.
+        with contextlib.suppress(Exception):
+            workers = min(workers, max(1, (os.cpu_count() or 1)))
+
+        def _read_file(path: str) -> None:
+            # Read in 1GiB-ish chunks; content is discarded.
+            try:
+                with open(path, "rb") as f:
+                    while f.read(1024 * 1024 * 1024):
+                        pass
+            except Exception:
+                # Best-effort warmup; ignore unreadable files.
+                return
+
+        start = time.time()
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            list(ex.map(_read_file, files))
+        _ = time.time() - start
+
     def start(self) -> None:
         if not self.cfg.model_path:
             raise ValueError(
@@ -66,6 +112,10 @@ class VLLMServer:
                 "Local: install NVIDIA drivers + CUDA runtime, and ensure /dev/nvidia* devices are present.\n\n"
                 "If you *intentionally* want to try starting anyway, set AIMO3_REQUIRE_CUDA=0 (may still fail)."
             )
+
+        # Optional: warm OS page cache for model files.
+        with contextlib.suppress(Exception):
+            self._preload_model_weights()
 
         cmd = [
             sys.executable,

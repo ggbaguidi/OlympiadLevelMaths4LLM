@@ -13,6 +13,11 @@ class AttemptStats:
     # Heuristic count of python tool calls that likely invoked Lean/Lake.
     lean_calls: int = 0
 
+    # Optional confidence proxy from model logprobs.
+    # When enabled, the solver computes a mean per-token entropy (lower is more confident).
+    # Default is +inf meaning "unknown / not computed".
+    mean_entropy: float = float("inf")
+
     @property
     def tool_verified(self) -> bool:
         """Heuristic: attempt used the tool and tool produced no errors."""

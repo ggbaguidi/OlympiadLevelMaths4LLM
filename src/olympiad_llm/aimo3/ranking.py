@@ -8,6 +8,7 @@ because they are much less likely to be "plausible but wrong".
 This module is deliberately lightweight and has no optional dependencies.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,9 +28,18 @@ class CandidateStats:
     len_sum: int
     n: int
 
+    # Optional: confidence proxy aggregated from attempts.
+    # We track a sum of (1/entropy) across attempts for this answer.
+    # Higher is better (more confident on average).
+    entropy_score_sum: float
+
     @property
     def avg_len(self) -> float:
         return self.len_sum / max(1, self.n)
+
+    @property
+    def entropy_score(self) -> float:
+        return float(self.entropy_score_sum)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -41,6 +51,7 @@ class CandidateStats:
             "calls": int(self.calls),
             "errors": int(self.errors),
             "avg_len": float(self.avg_len),
+            "entropy_score": float(self.entropy_score),
         }
 
 
@@ -75,6 +86,7 @@ def aggregate_candidates(detailed_results: list[Any]) -> list[CandidateStats]:
     """Aggregate per-attempt results into per-answer candidate stats."""
 
     stats: dict[int, dict[str, int]] = {}
+    entropy_score_sum: dict[int, float] = {}
     tags: dict[int, set[str]] = {}
 
     for rec in detailed_results:
@@ -101,6 +113,7 @@ def aggregate_candidates(detailed_results: list[Any]) -> list[CandidateStats]:
                 "len_sum": 0,
                 "n": 0,
             }
+            entropy_score_sum[a] = 0.0
             tags[a] = set()
 
         s = stats[a]
@@ -115,6 +128,16 @@ def aggregate_candidates(detailed_results: list[Any]) -> list[CandidateStats]:
         s["n"] += 1
         if ar.stats.tool_verified:
             s["verified"] += 1
+
+        # Optional: incorporate mean entropy if present.
+        # Lower entropy => higher score contribution.
+        try:
+            ent = float(getattr(ar.stats, "mean_entropy", float("inf")))
+        except Exception:  # noqa: BLE001
+            ent = float("inf")
+        if ent > 0.0 and ent != float("inf") and not math.isnan(ent):
+            # Use a soft cap to avoid single ultra-low values dominating.
+            entropy_score_sum[a] = float(entropy_score_sum.get(a, 0.0)) + (1.0 / max(ent, 1e-9))
 
         if getattr(ar, "tag", None):
             tags[a].add(str(ar.tag))
@@ -133,6 +156,7 @@ def aggregate_candidates(detailed_results: list[Any]) -> list[CandidateStats]:
                 errors=int(s["errors"]),
                 len_sum=int(s["len_sum"]),
                 n=int(s["n"]),
+                entropy_score_sum=float(entropy_score_sum.get(a, 0.0)),
             )
         )
     return out
@@ -167,6 +191,8 @@ def rank_candidates(
             int(c.verified > 0),
             c.verified,
             c.votes,
+            # Confidence tie-breaker (only meaningful if logprobs/entropy was computed).
+            c.entropy_score,
             -c.tool_error_attempts,
             -c.errors,
             c.tag_diversity,
