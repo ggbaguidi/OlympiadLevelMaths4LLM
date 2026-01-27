@@ -278,12 +278,12 @@ class AIMO3Config:
     temperature: float = 0.95
     min_p: float = 0.05
 
-    # Optional: per-role temperature schedule (general)
+            # Optional: per-role temperature schedule (general)
     # If a value is None, the solver will fall back to `temperature`.
     temperature_exploration: float | None = 0.95
     temperature_main: float | None = 0.70
     temperature_code: float | None = 0.65
-    temperature_verification: float | None = 0.20
+    temperature_verification: float | None = 0.15  # Decreased from 0.20
     temperature_formatting: float | None = 0.10
 
     # How many early attempts should run in "exploration" temperature mode.
@@ -306,7 +306,7 @@ class AIMO3Config:
     # Reserve part of the per-problem time budget for verification.
     # This prevents the common failure mode: spending the entire budget on generation,
     # then skipping verification due to insufficient remaining time.
-    verification_reserve_fraction: float = 0.15
+    verification_reserve_fraction: float = 0.20  # Increased from 0.15
     verification_reserve_cap: float = 120.0
     verification_reserve_min: float = 10.0
 
@@ -519,7 +519,7 @@ class AIMO3Config:
         min_p = _env_float("AIMO3_MIN_P", AIMO3Config.min_p)
 
         entropy_weighting_enabled = (
-            os.getenv("AIMO3_ENTROPY_WEIGHTING_ENABLED", "0").strip().lower() not in {"0", "false", "no"}
+            os.getenv("AIMO3_ENTROPY_WEIGHTING_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
         )
         top_logprobs = _env_int("AIMO3_TOP_LOGPROBS", AIMO3Config.top_logprobs)
 
@@ -536,7 +536,7 @@ class AIMO3Config:
             "AIMO3_TEMPERATURE_FORMATTING", float(AIMO3Config.temperature_formatting or temperature)
         )
         exploration_attempts = _env_int("AIMO3_EXPLORATION_ATTEMPTS", AIMO3Config.exploration_attempts)
-
+        
         format_recovery_enabled = (
             os.getenv("AIMO3_FORMAT_RECOVERY_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
         )
