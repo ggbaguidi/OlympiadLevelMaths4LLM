@@ -652,6 +652,7 @@ class AIMO3Solver:
         python_errors = 0
         lean_calls = 0
         consecutive_python_errors = 0
+        timeout_count = 0
         total_tokens = 0
         final_answer: int | None = None
         # Keep a tail buffer of the assistant text so we can display candidate solutions.
@@ -871,6 +872,7 @@ class AIMO3Solver:
                         # If we still timed out after any retry, fail fast and optionally recycle.
                         if timed_out_s is not None:
                             had_timeout = True
+                            timeout_count += 1
                             if bool(getattr(self.cfg, "abort_attempt_on_python_timeout", True)):
                                 aborted_for_tool_errors = True
                             if bool(getattr(self.cfg, "recycle_sandbox_on_python_timeout", True)):
@@ -890,6 +892,7 @@ class AIMO3Solver:
                     if should_abort_attempt(
                         python_errors=python_errors,
                         consecutive_python_errors=consecutive_python_errors,
+                        timeout_count=timeout_count,
                         policy=policy,
                     ):
                         aborted_for_tool_errors = True
@@ -1028,6 +1031,7 @@ class AIMO3Solver:
                 python_calls=python_calls,
                 python_errors=python_errors,
                 lean_calls=lean_calls,
+                timeout_count=timeout_count,
                 mean_entropy=(
                     self._compute_mean_entropy(logprobs_buffer)
                     if bool(getattr(self.cfg, "entropy_weighting_enabled", False))
