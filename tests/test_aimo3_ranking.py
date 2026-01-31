@@ -47,3 +47,26 @@ def test_rank_does_not_let_tag_diversity_overpower_votes_when_verified_ties():
     ranked = AIMO3Solver._rank_answers(results)  # noqa: SLF001
     assert ranked
     assert ranked[0][0] == 1
+
+
+def test_rank_penalizes_timeout_attempts():
+    """Answers from timed-out attempts should be ranked lower than equal-vote alternatives."""
+    from olympiad_llm.aimo3.ranking import rank_candidates
+
+    # Answer 1: 2 votes, 1 verified, 1 timeout
+    # Answer 2: 2 votes, 1 verified, 0 timeouts
+    # Both have same votes and verified count, but answer 2 has no timeouts.
+    results = [
+        AttemptResult(attempt=1, answer=1, stats=AttemptStats(token_count=50, python_calls=1, python_errors=0, timeout_count=0)),
+        AttemptResult(attempt=2, answer=1, stats=AttemptStats(token_count=50, python_calls=1, python_errors=0, timeout_count=1)),
+        AttemptResult(attempt=3, answer=2, stats=AttemptStats(token_count=50, python_calls=1, python_errors=0, timeout_count=0)),
+        AttemptResult(attempt=4, answer=2, stats=AttemptStats(token_count=50, python_calls=1, python_errors=0, timeout_count=0)),
+    ]
+    ranked = rank_candidates(results)
+    assert ranked
+    # Answer 2 should rank higher because it has no timeouts.
+    assert ranked[0][0] == 2
+    assert ranked[0][1]["timeout_attempts"] == 0
+    assert ranked[1][0] == 1
+    assert ranked[1][1]["timeout_attempts"] == 1
+

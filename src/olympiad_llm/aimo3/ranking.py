@@ -22,6 +22,7 @@ class CandidateStats:
     verified: int
     tool_attempts: int
     tool_error_attempts: int
+    timeout_attempts: int  # NEW: count of attempts that timed out
     tag_diversity: int
     calls: int
     errors: int
@@ -47,6 +48,7 @@ class CandidateStats:
             "verified": int(self.verified),
             "tool_attempts": int(self.tool_attempts),
             "tool_error_attempts": int(self.tool_error_attempts),
+            "timeout_attempts": int(self.timeout_attempts),
             "tag_diversity": int(self.tag_diversity),
             "calls": int(self.calls),
             "errors": int(self.errors),
@@ -108,6 +110,7 @@ def aggregate_candidates(detailed_results: list[Any]) -> list[CandidateStats]:
                 "verified": 0,
                 "tool_attempts": 0,
                 "tool_error_attempts": 0,
+                "timeout_attempts": 0,
                 "calls": 0,
                 "errors": 0,
                 "len_sum": 0,
@@ -124,6 +127,9 @@ def aggregate_candidates(detailed_results: list[Any]) -> list[CandidateStats]:
             s["tool_attempts"] += 1
         if int(ar.stats.python_errors) > 0:
             s["tool_error_attempts"] += 1
+        # Track timeout attempts for penalty.
+        if getattr(ar.stats, "had_timeout", False):
+            s["timeout_attempts"] += 1
         s["len_sum"] += int(ar.stats.token_count)
         s["n"] += 1
         if ar.stats.tool_verified:
@@ -151,6 +157,7 @@ def aggregate_candidates(detailed_results: list[Any]) -> list[CandidateStats]:
                 verified=int(s["verified"]),
                 tool_attempts=int(s["tool_attempts"]),
                 tool_error_attempts=int(s["tool_error_attempts"]),
+                timeout_attempts=int(s["timeout_attempts"]),
                 tag_diversity=len(tags.get(a, set())),
                 calls=int(s["calls"]),
                 errors=int(s["errors"]),
@@ -183,8 +190,8 @@ def rank_candidates(
         candidates = [c for c in candidates if c.verified > 0] or candidates
 
     # Verified-first, then votes.
-    # Penalize tool errors strongly. Tag diversity is helpful, but should usually be a tie-breaker
-    # rather than dominating vote strength.
+    # Penalize tool errors and timeouts strongly. Tag diversity is helpful, but should
+    # usually be a tie-breaker rather than dominating vote strength.
     candidates_sorted = sorted(
         candidates,
         key=lambda c: (
@@ -194,6 +201,7 @@ def rank_candidates(
             # Confidence tie-breaker (only meaningful if logprobs/entropy was computed).
             c.entropy_score,
             -c.tool_error_attempts,
+            -c.timeout_attempts,  # NEW: penalize answers from timed-out attempts
             -c.errors,
             c.tag_diversity,
             c.tool_attempts,

@@ -30,6 +30,62 @@ _AIMO3_PRIME_VALUATION_ALIAS = "_aimo3_prime_valuation"
 
 _AIMO3_CIRCLE3_ALIAS = "_aimo3_circle3"
 
+
+# Auto-import mappings for common bare names that models often use without imports.
+# Maps bare NAME token -> import statement to inject.
+_AUTO_IMPORTS: dict[str, str] = {
+    # itertools
+    "combinations": "from itertools import combinations",
+    "permutations": "from itertools import permutations",
+    "product": "from itertools import product",
+    "combinations_with_replacement": "from itertools import combinations_with_replacement",
+    "chain": "from itertools import chain",
+    "groupby": "from itertools import groupby",
+    "accumulate": "from itertools import accumulate",
+    # collections
+    "Counter": "from collections import Counter",
+    "defaultdict": "from collections import defaultdict",
+    "deque": "from collections import deque",
+    "OrderedDict": "from collections import OrderedDict",
+    # math
+    "gcd": "from math import gcd",
+    "lcm": "from math import lcm",
+    "factorial": "from math import factorial",
+    "comb": "from math import comb",
+    "perm": "from math import perm",
+    "isqrt": "from math import isqrt",
+    "ceil": "from math import ceil",
+    "floor": "from math import floor",
+    "log": "from math import log",
+    "log2": "from math import log2",
+    "log10": "from math import log10",
+    "sqrt": "from math import sqrt",
+    # sympy number theory
+    "crt": "from sympy.ntheory.modular import crt",
+    "mod_inverse": "from sympy import mod_inverse",
+    "divisors": "from sympy import divisors",
+    "factorint": "from sympy import factorint",
+    "isprime": "from sympy import isprime",
+    "nextprime": "from sympy import nextprime",
+    "primerange": "from sympy import primerange",
+    "primefactors": "from sympy import primefactors",
+    "totient": "from sympy import totient",
+    "mobius": "from sympy import mobius",
+    # functools
+    "reduce": "from functools import reduce",
+    "lru_cache": "from functools import lru_cache",
+    "cache": "from functools import cache",
+    # fractions
+    "Fraction": "from fractions import Fraction",
+    # heapq
+    "heappush": "from heapq import heappush",
+    "heappop": "from heapq import heappop",
+    "heapify": "from heapq import heapify",
+    # bisect
+    "bisect_left": "from bisect import bisect_left",
+    "bisect_right": "from bisect import bisect_right",
+}
+
 _AIMO3_VALUATION_BLOCK = (
     f"from sympy.polys.numberfields import prime_valuation as {_AIMO3_PRIME_VALUATION_ALIAS}\n"
     f"def {_AIMO3_INT_VALUATION_ALIAS}(a, p):\n"
@@ -120,6 +176,73 @@ def _insert_import_after_header_lines(code: str, import_line: str) -> str:
 
     insert = import_line + ("\n" if (not import_line.endswith("\n")) else "")
     return "".join(lines[:i] + [insert] + lines[i:])
+
+
+def _find_bare_names_needing_imports(src: str) -> set[str]:
+    """Find bare NAME tokens that match _AUTO_IMPORTS keys and likely need importing.
+
+    This uses tokenization to avoid matching names in strings/comments.
+    We also check that the name is not:
+    - preceded by '.' (attribute access)
+    - preceded by 'def' or 'class' (function/class definition)
+    - followed by '=' (assignment target)
+    """
+
+    needed: set[str] = set()
+
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
+    except tokenize.TokenizeError:
+        return needed
+
+    # Track names that appear to be defined.
+    # - Names followed by '=' (assignment)
+    # - Names preceded by 'def' or 'class' (function/class definition)
+    defined_names: set[str] = set()
+
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if t.type == tokenize.NAME and t.string in _AUTO_IMPORTS:
+            # Check if preceded by '.' (attribute access) -> skip entirely.
+            if i > 0 and toks[i - 1].type == tokenize.OP and toks[i - 1].string == ".":
+                i += 1
+                continue
+            # Check if preceded by 'def' or 'class' (function/class definition) -> mark as defined.
+            if i > 0 and toks[i - 1].type == tokenize.NAME and toks[i - 1].string in ("def", "class"):
+                defined_names.add(t.string)
+                i += 1
+                continue
+            # Check if followed by '=' (assignment target) -> mark as defined.
+            if i + 1 < len(toks) and toks[i + 1].type == tokenize.OP and toks[i + 1].string == "=":
+                defined_names.add(t.string)
+            else:
+                needed.add(t.string)
+        i += 1
+
+    # Remove names that are defined in the code.
+    return needed - defined_names
+
+
+def _inject_missing_imports(code: str) -> str:
+    """Inject missing imports for common bare names.
+
+    Scans the code for bare NAME tokens that match _AUTO_IMPORTS keys,
+    and injects the corresponding import statements if not already present.
+    """
+
+    needed = _find_bare_names_needing_imports(code)
+    if not needed:
+        return code
+
+    result = code
+    for name in sorted(needed):  # Sort for deterministic output.
+        import_stmt = _AUTO_IMPORTS[name]
+        # Only inject if not already present.
+        if import_stmt not in result:
+            result = _insert_import_after_header_lines(result, import_stmt)
+
+    return result
 
 
 def _rewrite_sp_valuation_tokens(src: str) -> str:
@@ -276,6 +399,10 @@ def rewrite_python_tool_code(code: str) -> str:
     src = str(code or "")
     rewritten = src
 
+    # First: inject missing imports for common bare names.
+    # This runs before other rewrites to ensure imports are available.
+    rewritten = _inject_missing_imports(rewritten)
+
     if "sp.Circle" in rewritten:
         rewritten = _rewrite_sp_circle_three_points(rewritten)
 
@@ -299,3 +426,4 @@ def rewrite_python_tool_code(code: str) -> str:
         rewritten = _insert_import_after_header_lines(rewritten, _AIMO3_VALUATION_BLOCK)
 
     return rewritten
+

@@ -58,3 +58,66 @@ circ = sp.Circle(A, 3)
 """
     out = rewrite_python_tool_code(code)
     assert out == code
+
+
+def test_rewrite_injects_missing_combinations_import():
+    """Auto-inject 'from itertools import combinations' when combinations is used."""
+    code = """for a, b in combinations(range(10), 2):
+    print(a, b)
+"""
+    out = rewrite_python_tool_code(code)
+    assert "from itertools import combinations" in out
+
+
+def test_rewrite_injects_missing_counter_import():
+    """Auto-inject 'from collections import Counter' when Counter is used."""
+    code = """c = Counter([1, 2, 2, 3])
+print(c.most_common())
+"""
+    out = rewrite_python_tool_code(code)
+    assert "from collections import Counter" in out
+
+
+def test_rewrite_injects_multiple_missing_imports():
+    """Auto-inject multiple imports when multiple bare names are used."""
+    code = """for a, b in combinations(range(10), 2):
+    if gcd(a, b) == 1:
+        print(a, b)
+"""
+    out = rewrite_python_tool_code(code)
+    assert "from itertools import combinations" in out
+    assert "from math import gcd" in out
+
+
+def test_rewrite_does_not_inject_for_attribute_access():
+    """Don't inject import for attribute access like itertools.combinations."""
+    code = """import itertools
+for a, b in itertools.combinations(range(10), 2):
+    print(a, b)
+"""
+    out = rewrite_python_tool_code(code)
+    # Should not inject since it's used as attribute, not bare name.
+    assert out == code
+
+
+def test_rewrite_does_not_inject_for_defined_names():
+    """Don't inject import for names that are defined in the code."""
+    code = """def combinations(n, k):
+    return n * k
+print(combinations(5, 3))
+"""
+    out = rewrite_python_tool_code(code)
+    # Should not inject since 'combinations' is defined in the code.
+    assert "from itertools import combinations" not in out
+
+
+def test_rewrite_does_not_inject_if_already_imported():
+    """Don't inject if import already exists."""
+    code = """from itertools import combinations
+for a, b in combinations(range(10), 2):
+    print(a, b)
+"""
+    out = rewrite_python_tool_code(code)
+    # Should not duplicate import.
+    assert out.count("from itertools import combinations") == 1
+

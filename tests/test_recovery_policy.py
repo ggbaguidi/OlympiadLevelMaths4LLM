@@ -17,6 +17,17 @@ def test_should_abort_attempt_consecutive_errors():
     assert should_abort_attempt(python_errors=2, consecutive_python_errors=3, policy=policy)
 
 
+def test_should_abort_attempt_on_timeouts():
+    """Abort attempt when too many tool calls time out."""
+    policy = ToolRecoveryPolicy(
+        abort_after_python_errors=0,
+        abort_after_consecutive_python_errors=0,
+        abort_after_timeouts=2,
+    )
+    assert not should_abort_attempt(python_errors=0, consecutive_python_errors=0, timeout_count=1, policy=policy)
+    assert should_abort_attempt(python_errors=0, consecutive_python_errors=0, timeout_count=2, policy=policy)
+
+
 def test_should_recycle_sandbox_on_exception():
     policy = ToolRecoveryPolicy(recycle_sandbox_after_python_errors=100)
     assert should_recycle_sandbox(python_errors=0, had_exception=True, policy=policy)

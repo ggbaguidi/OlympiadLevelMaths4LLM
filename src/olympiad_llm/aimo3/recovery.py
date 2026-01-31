@@ -17,16 +17,32 @@ class ToolRecoveryPolicy:
     abort_after_python_errors: int = 4
     abort_after_consecutive_python_errors: int = 3
     recycle_sandbox_after_python_errors: int = 4
+    abort_after_timeouts: int = 2  # NEW: abort after this many timeouts in same attempt
 
 
-def should_abort_attempt(*, python_errors: int, consecutive_python_errors: int, policy: ToolRecoveryPolicy) -> bool:
-    """Return True if an attempt should stop early due to tool instability."""
+def should_abort_attempt(
+    *,
+    python_errors: int,
+    consecutive_python_errors: int,
+    timeout_count: int = 0,
+    policy: ToolRecoveryPolicy,
+) -> bool:
+    """Return True if an attempt should stop early due to tool instability.
+
+    Checks for:
+    - Too many total python errors
+    - Too many consecutive python errors
+    - Too many timeouts (wasting time on stuck computations)
+    """
 
     pe = int(python_errors)
     ce = int(consecutive_python_errors)
+    tc = int(timeout_count)
     if int(policy.abort_after_python_errors) > 0 and pe >= int(policy.abort_after_python_errors):
         return True
     if int(policy.abort_after_consecutive_python_errors) > 0 and ce >= int(policy.abort_after_consecutive_python_errors):
+        return True
+    if int(policy.abort_after_timeouts) > 0 and tc >= int(policy.abort_after_timeouts):
         return True
     return False
 

@@ -117,17 +117,40 @@ ENHANCED_TOOL_INSTRUCTION = """Use this tool to execute Python code for mathemat
 
 **BEST PRACTICES:**
 1. Use print() to see results
-2. Always start tool code with the imports you rely on (even if preloaded)
+
+2. **ALWAYS start tool code with explicit imports** (even if preloaded):
+    ```python
+    from itertools import combinations, permutations, product
+    from collections import Counter, defaultdict
+    from math import gcd, factorial, isqrt, comb
+    from functools import reduce, lru_cache
+    import sympy as sp
+    import numpy as np
+    import mpmath as mp
+    ```
+    This prevents NameError when functions like `combinations` or `gcd` are used.
+
 2b. If you truly need a longer-running computation, start the code with a timeout directive:
     - # timeout: 120
+    
 2c. Keep code short and practical: avoid long custom helper functions when a library call or a small loop suffices
+
 3. For large numbers: use modular arithmetic
+
 4. For symbolic: use sp.solve, sp.simplify, sp.factor
+
 5. For numerical (high precision): use mp.mpf / mp.nsum / mp.quad and set mp.mp.dps
+
 5b. For discrete optimization/feasibility: consider OR-Tools CP-SAT:
     - from ortools.sat.python import cp_model
+
 6. Wrap fragile computations in try/except and print intermediate checkpoints
-7. Verify answer is integer in [0, 99999] before boxing
+
+7. **Add early-exit checks**: If intermediate results look wrong, grow unexpectedly large,
+   or take too long, break out early and try a different approach. Don't waste time on
+   computations that aren't converging.
+
+8. Verify answer is integer in [0, 99999] before boxing
 """.strip()
 
 PREFERENCE_PROMPT = (
