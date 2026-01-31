@@ -2,7 +2,7 @@
 Prepare reference CSV for evaluation.
 """
 from typing import Iterable, Optional, Union
-
+import pandas as pd
 
 def prepare_reference_csv(
     input_path: str,
