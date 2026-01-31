@@ -20,11 +20,18 @@ class AttemptStats:
     # Default is +inf meaning "unknown / not computed".
     mean_entropy: float = float("inf")
 
+    # Optional: if set, require a verification marker in tool output to count as verified.
+    # None => use the legacy heuristic (python_calls>0 and python_errors==0).
+    verification_marker_found: bool | None = None
+
     @property
     def tool_verified(self) -> bool:
         """Heuristic: attempt used the tool and tool produced no errors."""
-
-        return self.python_calls > 0 and self.python_errors == 0
+        if self.python_calls <= 0 or self.python_errors > 0:
+            return False
+        if self.verification_marker_found is None:
+            return True
+        return bool(self.verification_marker_found)
 
     @property
     def had_timeout(self) -> bool:

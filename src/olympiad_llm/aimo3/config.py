@@ -122,6 +122,11 @@ class AIMO3Config:
     python_tool_timeout_retry_multiplier: float = 2.0
     python_tool_timeout_retry_min_remaining_s: float = 5.0
 
+    # Tool verification marker policy (first-stage attempts)
+    # If required, a tool run is only considered verified if the python output contains the marker.
+    python_tool_verify_marker: str = "VERIFY_OK"
+    python_tool_verify_require_marker: bool = True
+
     # Timeout handling policy
     # If a python tool call times out, it's often a sign of a "wedged" kernel or an overly heavy computation.
     # These toggles let us fail fast and keep the pool healthy.
@@ -391,6 +396,13 @@ class AIMO3Config:
             AIMO3Config.python_tool_timeout_retry_min_remaining_s,
         )
 
+        python_tool_verify_marker = (
+            os.getenv("AIMO3_PYTHON_TOOL_VERIFY_MARKER", AIMO3Config.python_tool_verify_marker) or ""
+        ).strip() or AIMO3Config.python_tool_verify_marker
+        python_tool_verify_require_marker = (
+            os.getenv("AIMO3_PYTHON_TOOL_VERIFY_REQUIRE_MARKER", "1").strip().lower() not in {"0", "false", "no"}
+        )
+
         abort_attempt_on_python_timeout = (
             os.getenv("AIMO3_ABORT_ATTEMPT_ON_PYTHON_TIMEOUT", "1").strip().lower() not in {"0", "false", "no"}
         )
@@ -629,6 +641,8 @@ class AIMO3Config:
             python_tool_timeout_retry_enabled=python_tool_timeout_retry_enabled,
             python_tool_timeout_retry_multiplier=python_tool_timeout_retry_multiplier,
             python_tool_timeout_retry_min_remaining_s=python_tool_timeout_retry_min_remaining_s,
+            python_tool_verify_marker=python_tool_verify_marker,
+            python_tool_verify_require_marker=python_tool_verify_require_marker,
             abort_attempt_on_python_timeout=abort_attempt_on_python_timeout,
             recycle_sandbox_on_python_timeout=recycle_sandbox_on_python_timeout,
             second_stage_verify_enabled=second_stage_verify_enabled,

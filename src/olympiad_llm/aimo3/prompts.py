@@ -150,7 +150,9 @@ ENHANCED_TOOL_INSTRUCTION = """Use this tool to execute Python code for mathemat
    or take too long, break out early and try a different approach. Don't waste time on
    computations that aren't converging.
 
-8. Verify answer is integer in [0, 99999] before boxing
+8. When a computation *verifies* the final answer, print the line: VERIFY_OK
+
+9. Verify answer is integer in [0, 99999] before boxing
 """.strip()
 
 PREFERENCE_PROMPT = (

@@ -1033,6 +1033,13 @@ class AIMO3Solver:
                 python_errors=python_errors,
                 lean_calls=lean_calls,
                 timeout_count=timeout_count,
+                verification_marker_found=(
+                    any(self._has_verification_marker(out, str(getattr(self.cfg, "python_tool_verify_marker", "") or ""))
+                        for out in transcript_python_outputs)
+                    if bool(getattr(self.cfg, "python_tool_verify_require_marker", False))
+                    and bool(str(getattr(self.cfg, "python_tool_verify_marker", "") or ""))
+                    else None
+                ),
                 mean_entropy=(
                     self._compute_mean_entropy(logprobs_buffer)
                     if bool(getattr(self.cfg, "entropy_weighting_enabled", False))
