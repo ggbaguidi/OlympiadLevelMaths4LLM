@@ -12,13 +12,14 @@ from __future__ import annotations
 
 
 def protocol_suffix() -> str:
-    # Ultra-short protocol: maximize time spent on actual computation
+    # Concise protocol with problem-parsing guidance to avoid misinterpretation
     return (
         "\n\n"
         "RULES:\n"
-        "• Use Python to compute/verify. Don't do arithmetic by hand.\n"
-        "• Test your answer on small cases BEFORE boxing it.\n"
-        "• Final answer: \\boxed{n} where n is an integer in [0,99999].\n"
+        "1. PARSE FIRST: Restate the problem's key definitions, constraints, and what's being counted/computed. Check for edge cases in the wording.\n"
+        "2. COMPUTE: Use Python—don't do arithmetic by hand. Test on small cases first.\n"
+        "3. VERIFY: Confirm your interpretation matches the problem before boxing.\n"
+        "4. Final answer: \\boxed{n} where n ∈ [0,99999].\n"
     )
 
 
