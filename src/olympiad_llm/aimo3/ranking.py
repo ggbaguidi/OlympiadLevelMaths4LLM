@@ -9,11 +9,22 @@ This module is deliberately lightweight and has no optional dependencies.
 """
 
 import math
+import os
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
 from .attempts import AttemptResult
+
+
+def _env_bool(key: str, default: bool = True) -> bool:
+    """Read a boolean from environment variable."""
+    val = os.environ.get(key, "").lower()
+    if val in ("0", "false", "no", "off"):
+        return False
+    if val in ("1", "true", "yes", "on"):
+        return True
+    return default
 
 
 @dataclass(frozen=True)
@@ -232,7 +243,7 @@ def rank_candidates(
     detailed_results: list[Any],
     *,
     filter_to_verified_if_any: bool = True,
-    magnitude_aware: bool = True,
+    magnitude_aware: bool | None = None,
 ) -> list[tuple[int, dict[str, Any]]]:
     """Rank candidate answers.
 
@@ -245,6 +256,9 @@ def rank_candidates(
     most answers are 1-20 but one is 8000+), we boost the outlier to avoid
     picking "easy wrong" small answers when the true answer is large.
     """
+    # Allow disabling magnitude awareness via env var
+    if magnitude_aware is None:
+        magnitude_aware = _env_bool("AIMO3_MAGNITUDE_AWARE_RANKING", default=True)
 
     candidates = aggregate_candidates(detailed_results)
     if not candidates:
