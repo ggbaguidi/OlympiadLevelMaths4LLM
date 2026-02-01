@@ -75,6 +75,32 @@ def _safe_int(x: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _parse_pack_card(tag: str) -> tuple[str, str]:
+    """Parse pack and card from attempt tag like 'standard|pack=generic|card=brute_force_first'."""
+    pack = "none"
+    card = "none"
+    if not tag:
+        return pack, card
+    for part in tag.split("|"):
+        if part.startswith("pack="):
+            pack = part[5:]
+        elif part.startswith("card="):
+            card = part[5:]
+    return pack, card
+
+
+@dataclass
+class PackCardStats:
+    """Statistics for a pack or card."""
+    name: str
+    attempts: int = 0
+    valid: int = 0  # produced a valid answer
+    verified: int = 0  # python_calls>0 and python_errors==0
+    errors: int = 0  # had tool errors
+    chosen: int = 0  # was the winning answer
+    avg_tokens: float = 0.0
+
+
 def load_answers_json(path: Path) -> dict[str, int]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
@@ -87,9 +113,14 @@ def load_answers_json(path: Path) -> dict[str, int]:
     return out
 
 
-def summarize_trace(events: Iterable[dict[str, Any]]) -> list[ProblemSummary]:
+def summarize_trace(
+    events: Iterable[dict[str, Any]],
+    pack_stats: dict[str, PackCardStats] | None = None,
+    card_stats: dict[str, PackCardStats] | None = None,
+) -> list[ProblemSummary]:
     starts: dict[str, dict[str, Any]] = {}
     ends: dict[str, dict[str, Any]] = {}
+    attempt_ends: list[dict[str, Any]] = []  # collect attempt_end events for pack/card stats
 
     for ev in events:
         pid = str(ev.get("problem_id") or "")
@@ -105,6 +136,8 @@ def summarize_trace(events: Iterable[dict[str, Any]]) -> list[ProblemSummary]:
             starts[pid] = ev
         elif et == "solve_end":
             ends[pid] = ev
+        elif et == "attempt_end":
+            attempt_ends.append(ev)
 
     summaries: list[ProblemSummary] = []
     for pid, end in ends.items():
@@ -200,6 +233,45 @@ def summarize_trace(events: Iterable[dict[str, Any]]) -> list[ProblemSummary]:
 
         summaries.append(ps)
 
+    # Collect pack/card statistics from attempt_end events
+    if pack_stats is not None or card_stats is not None:
+        # Build a map of (problem_id, chosen_answer) for determining which attempts were chosen
+        chosen_map: dict[str, int] = {}
+        for pid, end in ends.items():
+            chosen_map[pid] = _safe_int(end.get("chosen"), -999999)
+
+        for ae in attempt_ends:
+            tag = str(ae.get("tag") or "")
+            pack, card = _parse_pack_card(tag)
+            answer = ae.get("answer")
+            pc = _safe_int(ae.get("python_calls"), 0)
+            pe = _safe_int(ae.get("python_errors"), 0)
+            tokens = _safe_int(ae.get("token_count"), 0)
+            pid = str(ae.get("problem_id") or "")
+
+            is_valid = isinstance(answer, int)
+            is_verified = pc > 0 and pe == 0
+            has_errors = pe > 0
+            is_chosen = is_valid and pid in chosen_map and answer == chosen_map[pid]
+
+            for stats_dict, key in [(pack_stats, pack), (card_stats, card)]:
+                if stats_dict is None:
+                    continue
+                if key not in stats_dict:
+                    stats_dict[key] = PackCardStats(name=key)
+                s = stats_dict[key]
+                s.attempts += 1
+                if is_valid:
+                    s.valid += 1
+                if is_verified:
+                    s.verified += 1
+                if has_errors:
+                    s.errors += 1
+                if is_chosen:
+                    s.chosen += 1
+                # Running average for tokens
+                s.avg_tokens = s.avg_tokens + (tokens - s.avg_tokens) / s.attempts
+
     # Stable order: worst first.
     summaries.sort(key=lambda s: (s.risk_score, s.elapsed_s), reverse=True)
     return summaries
@@ -259,7 +331,14 @@ def write_csv(path: Path, summaries: list[ProblemSummary], *, with_correctness: 
             w.writerow(row)
 
 
-def print_report(summaries: list[ProblemSummary], *, answers: dict[str, int] | None = None, top_n: int = 15) -> int:
+def print_report(
+    summaries: list[ProblemSummary],
+    *,
+    answers: dict[str, int] | None = None,
+    top_n: int = 15,
+    pack_stats: dict[str, PackCardStats] | None = None,
+    card_stats: dict[str, PackCardStats] | None = None,
+) -> int:
     total = len(summaries)
     if total == 0:
         print("No solve_end events found.")
@@ -292,6 +371,22 @@ def print_report(summaries: list[ProblemSummary], *, answers: dict[str, int] | N
         correct = (n_correct, n_known)
         if n_known:
             print(f"Known-answer accuracy: {n_correct}/{n_known} = {n_correct/n_known:.3f}")
+
+    # Print pack statistics
+    if pack_stats:
+        print("\n=== Strategy pack statistics ===")
+        print(f"{'Pack':<15} {'Attempts':>8} {'Valid':>6} {'Verified':>8} {'Errors':>6} {'Chosen':>6} {'AvgTok':>7}")
+        for name in sorted(pack_stats.keys()):
+            s = pack_stats[name]
+            print(f"{name:<15} {s.attempts:>8} {s.valid:>6} {s.verified:>8} {s.errors:>6} {s.chosen:>6} {s.avg_tokens:>7.0f}")
+
+    # Print card statistics
+    if card_stats:
+        print("\n=== Strategy card statistics ===")
+        print(f"{'Card':<25} {'Attempts':>8} {'Valid':>6} {'Verified':>8} {'Errors':>6} {'Chosen':>6} {'AvgTok':>7}")
+        for name in sorted(card_stats.keys()):
+            s = card_stats[name]
+            print(f"{name:<25} {s.attempts:>8} {s.valid:>6} {s.verified:>8} {s.errors:>6} {s.chosen:>6} {s.avg_tokens:>7.0f}")
 
     print("\n=== Highest-risk problems (inspect first) ===")
     for s in summaries[: max(1, int(top_n))]:
@@ -354,7 +449,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  solve_end without solve_start: {len(missing_start)}")
         print("")
 
-    summaries = summarize_trace(events)
+    # Collect pack/card statistics
+    pack_stats: dict[str, PackCardStats] = {}
+    card_stats: dict[str, PackCardStats] = {}
+    summaries = summarize_trace(events, pack_stats=pack_stats, card_stats=card_stats)
 
     # Attach correctness if answers provided.
     if answers is not None:
@@ -366,7 +464,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.csv:
         write_csv(Path(args.csv), summaries, with_correctness=answers is not None)
 
-    return print_report(summaries, answers=answers, top_n=args.top)
+    return print_report(summaries, answers=answers, top_n=args.top, pack_stats=pack_stats, card_stats=card_stats)
 
 
 if __name__ == "__main__":
