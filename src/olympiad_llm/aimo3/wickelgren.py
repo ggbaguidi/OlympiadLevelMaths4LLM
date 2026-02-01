@@ -21,77 +21,74 @@ class StrategyCard:
     instructions: list[str]
 
 
+# =============================================================================
+# REWRITTEN STRATEGY CARDS: Concise, concrete, action-oriented
+# Each card is a SHORT directive that biases the model toward a specific approach
+# =============================================================================
+
 GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
     StrategyCard(
-        name="Understand & restate",
+        name="brute_force_first",
         instructions=[
-            "Restate the problem in your own words and define every symbol.",
-            "State precisely what must be computed/proved.",
-            "List constraints and hidden assumptions (domain, integrality, bounds).",
+            "IMMEDIATELY write Python code to compute small cases (n=1,2,3,... or enumerate).",
+            "Print results clearly. Look for a pattern in the output.",
+            "Once you see the pattern, state your conjecture and verify with more cases.",
         ],
     ),
     StrategyCard(
-        name="Represent the problem",
+        name="closed_form_hunt",
         instructions=[
-            "Propose 2 representations (equations/diagram/graph/table/coordinates) and pick one.",
-            "Introduce variables for unknowns; name key quantities.",
-            "Rewrite conditions as explicit algebra/logic statements.",
+            "Compute the first 5-10 values using Python.",
+            "Search OEIS-style: does it match factorials, Catalan, Fibonacci, powers, or binomials?",
+            "Test your closed-form formula on ALL computed cases before finalizing.",
         ],
     ),
     StrategyCard(
-        name="Simplify & solve a toy version",
+        name="modular_arithmetic",
         instructions=[
-            "Solve a smaller/simpler case first (small n, special angles, small primes).",
-            "Look for patterns and formulate a conjecture.",
-            "Then generalize carefully: state what changes and what stays invariant.",
+            "The answer is mod some number. Compute the base value first, then reduce.",
+            "For large exponents: use pow(base, exp, mod) in Python.",
+            "Watch for: Fermat's little theorem, Chinese remainder theorem, lifting the exponent.",
         ],
     ),
     StrategyCard(
-        name="Work backward from the goal",
+        name="case_analysis",
         instructions=[
-            "Assume a candidate structure for the answer and derive necessary conditions.",
-            "Try to reduce the target statement to known lemmas/identities.",
-            "If proving, identify the final step and what would imply it.",
+            "Split the problem into 2-3 cases based on parity, sign, or divisibility.",
+            "Solve each case separately with Python verification.",
+            "Combine cases carefully—don't double-count or miss edge cases.",
         ],
     ),
     StrategyCard(
-        name="Look for invariants / monotonicity",
+        name="work_backwards",
         instructions=[
-            "Identify quantities that remain unchanged under allowed moves.",
-            "If a process is involved, look for monotone measures or potentials.",
-            "Use invariants/monotonicity to bound possibilities and force structure.",
+            "Start from the answer format. What structure must the answer have?",
+            "Work backwards: what conditions force this structure?",
+            "Use Python to check if your backwards reasoning produces valid examples.",
         ],
     ),
     StrategyCard(
-        name="Extremes & contradiction",
+        name="reduce_to_known",
         instructions=[
-            "Consider extreme or minimal counterexample arguments.",
-            "Try bounding with max/min principles or choose an extremal element.",
-            "Derive a contradiction or force a canonical configuration.",
+            "Can this reduce to: GCD/LCM? Binomial coefficient? Sum of divisors? Euler phi?",
+            "Use sympy: factorint, divisors, totient, binomial, factorial.",
+            "Verify the reduction is correct on small examples.",
         ],
     ),
     StrategyCard(
-        name="Symmetry & normalization",
+        name="generate_and_test",
         instructions=[
-            "Exploit symmetry: reorder, relabel, assume WLOG.",
-            "Normalize by scaling/translation/rotation if allowed.",
-            "Seek symmetric polynomials, cyclic sums, or invariant transformations.",
+            "Write Python to generate ALL valid objects (permutations, subsets, sequences).",
+            "Count or filter them according to the problem conditions.",
+            "For large n, find a recurrence or closed form from small-n data.",
         ],
     ),
     StrategyCard(
-        name="Compute, then prove",
+        name="algebraic_manipulation",
         instructions=[
-            "Use the Python tool to compute small cases or search candidates.",
-            "Extract a clean conjecture (closed form, invariant, pattern) and state it explicitly.",
-            "Then prove it rigorously (explain why the computation is evidence, not proof).",
-        ],
-    ),
-    StrategyCard(
-        name="Check & verify",
-        instructions=[
-            "Verify edge cases and constraints (domains, integrality, positivity).",
-            "Cross-check by an independent method or numeric sampling; try to refute your result.",
-            "If checks are inconclusive, do not guess.",
+            "Use sympy to expand, factor, simplify, or solve symbolically.",
+            "Don't do algebra by hand—let the computer handle it.",
+            "Verify symbolic results numerically with concrete values.",
         ],
     ),
 ]
@@ -99,29 +96,27 @@ GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
 
 FE_COMBI_STRATEGY_CARDS: list[StrategyCard] = [
     StrategyCard(
-        name="Functional equation sanity checks",
+        name="fe_substitution",
         instructions=[
-            "Extract immediate consequences: plug in 0, 1, -1, and symmetric inputs like (x,x), (x,0), (0,y).",
-            "Check injectivity/surjectivity patterns and common forms (additive, multiplicative, linear, constant).",
-            "Generate 2 candidate forms; quickly try to disprove them (counterexample search / constraints).",
-            "Use the Python tool to test candidate forms on random small integers/rationals when appropriate.",
+            "Plug in special values: f(0), f(1), f(-1), f(x,x), f(x,0), f(0,y).",
+            "Write Python to test if f is: constant, identity, linear ax+b, multiplicative.",
+            "Find ALL solutions—don't stop at the first one that works.",
         ],
     ),
     StrategyCard(
-        name="Combinatorial invariants & orbits",
+        name="counting_small",
         instructions=[
-            "Look for an invariant or potential function under the described operation.",
-            "If a group action/symmetry is present, consider orbit decomposition or normalization.",
-            "Try extremal arguments: pick a minimal/maximal object and derive forced structure.",
+            "Write Python to enumerate and count for small n (n=1,2,3,4,5).",
+            "Store results in a list. Look for: doubling, factorial growth, polynomial pattern.",
+            "Fit a formula and verify it predicts the next case correctly.",
         ],
     ),
     StrategyCard(
-        name="Double counting & encoding",
+        name="inclusion_exclusion",
         instructions=[
-            "Try a double-counting viewpoint (count the same set in two ways).",
-            "Encode objects as sequences/graphs and use injections/surjections to compare sizes.",
-            "If the answer is an integer, try modular constraints or parity/valuation invariants.",
-            "As a sanity check, compute small cases to confirm the combinatorial model matches the statement.",
+            "Identify what to count and what constraints to satisfy.",
+            "Apply inclusion-exclusion: count(A or B) = count(A) + count(B) - count(A and B).",
+            "Verify with brute-force enumeration on small cases.",
         ],
     ),
 ]
@@ -194,13 +189,10 @@ def select_strategy_pack(
 
 
 def render_strategy_card(card: StrategyCard) -> str:
-    lines = [
-        "Wickelgren-style strategy card (paraphrased):",
-        f"- Focus: {card.name}",
-        "- Micro-rules: propose 2 angles → pick 1; include a toy check; don't claim verification without a check.",
-    ]
+    """Render a strategy card as a SHORT, actionable directive."""
+    lines = [f"STRATEGY [{card.name}]:"]
     for item in card.instructions:
-        lines.append(f"- {item}")
+        lines.append(f"• {item}")
     return "\n".join(lines)
 
 
