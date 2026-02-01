@@ -219,6 +219,16 @@ class AIMO3Config:
     format_recovery_trigger_tokens: int = 2000
     format_recovery_min_remaining_s: float = 20.0
 
+    # Contradiction-driven retry (novel): when attempts produce wildly different answers,
+    # it signals a fundamental misunderstanding. Trigger a special retry that explicitly
+    # tells the model about the disagreement and asks it to re-read the problem carefully.
+    contradiction_retry_enabled: bool = True
+    # Trigger when top answer has <= this many votes AND there are >= N distinct answers
+    contradiction_retry_max_top_votes: int = 2
+    contradiction_retry_min_distinct_answers: int = 3
+    contradiction_retry_min_remaining_s: float = 45.0
+    contradiction_retry_budget_cap_s: float = 90.0
+
     # Finalization (per-attempt): if an attempt did tool work but never emitted a clean final
     # boxed integer, do one short “final answer only” completion to force synthesis.
     # This helps with the common failure mode: last tool call ran, then the attempt ends
@@ -517,6 +527,23 @@ class AIMO3Config:
             "AIMO3_FORMAT_RECOVERY_MIN_REMAINING_S", AIMO3Config.format_recovery_min_remaining_s
         )
 
+        # Contradiction-driven retry
+        contradiction_retry_enabled = (
+            os.getenv("AIMO3_CONTRADICTION_RETRY_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+        )
+        contradiction_retry_max_top_votes = _env_int(
+            "AIMO3_CONTRADICTION_RETRY_MAX_TOP_VOTES", AIMO3Config.contradiction_retry_max_top_votes
+        )
+        contradiction_retry_min_distinct_answers = _env_int(
+            "AIMO3_CONTRADICTION_RETRY_MIN_DISTINCT_ANSWERS", AIMO3Config.contradiction_retry_min_distinct_answers
+        )
+        contradiction_retry_min_remaining_s = _env_float(
+            "AIMO3_CONTRADICTION_RETRY_MIN_REMAINING_S", AIMO3Config.contradiction_retry_min_remaining_s
+        )
+        contradiction_retry_budget_cap_s = _env_float(
+            "AIMO3_CONTRADICTION_RETRY_BUDGET_CAP_S", AIMO3Config.contradiction_retry_budget_cap_s
+        )
+
         finalize_answer_enabled = (
             os.getenv("AIMO3_FINALIZE_ANSWER_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
         )
@@ -615,6 +642,11 @@ class AIMO3Config:
             format_recovery_cap=format_recovery_cap,
             format_recovery_trigger_tokens=format_recovery_trigger_tokens,
             format_recovery_min_remaining_s=format_recovery_min_remaining_s,
+            contradiction_retry_enabled=contradiction_retry_enabled,
+            contradiction_retry_max_top_votes=contradiction_retry_max_top_votes,
+            contradiction_retry_min_distinct_answers=contradiction_retry_min_distinct_answers,
+            contradiction_retry_min_remaining_s=contradiction_retry_min_remaining_s,
+            contradiction_retry_budget_cap_s=contradiction_retry_budget_cap_s,
             finalize_answer_enabled=finalize_answer_enabled,
             finalize_answer_max_tokens=finalize_answer_max_tokens,
             finalize_answer_min_remaining_s=finalize_answer_min_remaining_s,

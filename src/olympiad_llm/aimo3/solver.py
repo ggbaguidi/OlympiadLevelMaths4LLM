@@ -1573,6 +1573,7 @@ class AIMO3Solver:
             "ranked": [{"answer": int(a), **d} for (a, d) in ranked[:10]],
             "second_stage": None,
             "tiebreak": None,
+            "contradiction_retry": None,
         }
         tiebreak_used = False
         runner_ans = None
@@ -1581,6 +1582,69 @@ class AIMO3Solver:
         if len(ranked) >= 2:
             runner_ans, runner_d = ranked[1]
             votes_gap = int(top_d["votes"]) - int(runner_d["votes"])
+
+        # Contradiction-driven retry: when answers are wildly different, re-read the problem
+        n_distinct = len(ranked)
+        top_votes = int(top_d.get("votes", 1))
+        remaining_for_contradiction = deadline - time.time()
+        
+        if (
+            bool(getattr(self.cfg, "contradiction_retry_enabled", True))
+            and n_distinct >= int(getattr(self.cfg, "contradiction_retry_min_distinct_answers", 3))
+            and top_votes <= int(getattr(self.cfg, "contradiction_retry_max_top_votes", 2))
+            and remaining_for_contradiction >= float(getattr(self.cfg, "contradiction_retry_min_remaining_s", 45.0))
+        ):
+            # Build the contradiction prompt
+            distinct_answers = [int(a) for (a, _) in ranked[:5]]
+            contradiction_prompt = (
+                TIR_PROMPT_VERIFICATION
+                + f"\n\n**CRITICAL**: Previous attempts produced CONFLICTING answers: {distinct_answers}\n"
+                + "This suggests a FUNDAMENTAL MISUNDERSTANDING of the problem.\n\n"
+                + "STOP and carefully:\n"
+                + "1. Re-read EVERY word of the problem statement\n"
+                + "2. List ALL constraints explicitly (you likely missed one)\n"
+                + "3. Define ALL terms precisely as stated (don't paraphrase)\n"
+                + "4. Solve from scratch with extreme care\n\n"
+                + "The disagreement means something was misinterpreted. Find it."
+            )
+            if bool(self.cfg.protocol_enabled):
+                contradiction_prompt = with_protocol(contradiction_prompt)
+            
+            cr_budget = min(
+                float(getattr(self.cfg, "contradiction_retry_budget_cap_s", 90.0)),
+                remaining_for_contradiction * 0.5
+            )
+            cr_deadline = time.time() + cr_budget
+            
+            cr_result = self._process_attempt(
+                user_input,
+                contradiction_prompt,
+                attempt_index=88_888,
+                attempt_tag="contradiction_retry|variant=reread|pack=recovery|card=contradiction",
+                stop_event=threading.Event(),
+                deadline=min(cr_deadline, deadline),
+                problem_id=pid,
+            )
+            detailed.append(cr_result)
+            
+            decision["contradiction_retry"] = {
+                "triggered": True,
+                "distinct_answers": distinct_answers,
+                "budget_s": float(cr_budget),
+                "result_answer": (int(cr_result.answer) if isinstance(cr_result.answer, int) else None),
+            }
+            
+            # If contradiction retry found an answer, re-rank
+            if isinstance(cr_result.answer, int):
+                valid.append(cr_result.answer)
+                ranked = self._rank_answers(detailed)
+                if ranked:
+                    top_ans, top_d = ranked[0]
+                    chosen = top_ans
+                    decision["ranked"] = [{"answer": int(a), **d} for (a, d) in ranked[:10]]
+                    if len(ranked) >= 2:
+                        runner_ans, runner_d = ranked[1]
+                        votes_gap = int(top_d["votes"]) - int(runner_d["votes"])
 
         # Second-stage verification can be valuable even when there is only one unique candidate,
         # especially if it lacks any clean tool support.
