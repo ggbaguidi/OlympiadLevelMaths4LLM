@@ -70,3 +70,54 @@ def test_rank_penalizes_timeout_attempts():
     assert ranked[1][0] == 1
     assert ranked[1][1]["timeout_attempts"] == 1
 
+
+def test_rank_magnitude_aware_boosts_outliers():
+    """When answers span wildly different magnitudes, boost large outliers.
+
+    This prevents picking small "easy wrong" answers (e.g., 15) when the true
+    answer is much larger (e.g., 8687). The outlier (e.g., 11549) should rank higher.
+    """
+    from olympiad_llm.aimo3.ranking import rank_candidates
+
+    # Simulate: many small answers (1-20), one large outlier (11549)
+    # Small answers 15, 16 are "verified", outlier 11549 is not
+    results = [
+        AttemptResult(attempt=0, answer=14, stats=AttemptStats(python_calls=5, python_errors=1)),
+        AttemptResult(attempt=1, answer=12, stats=AttemptStats(python_calls=5, python_errors=1)),
+        AttemptResult(attempt=2, answer=11549, stats=AttemptStats(python_calls=5, python_errors=1)),  # Outlier!
+        AttemptResult(attempt=3, answer=11, stats=AttemptStats(python_calls=5, python_errors=1)),
+        AttemptResult(attempt=4, answer=15, stats=AttemptStats(python_calls=5, python_errors=0)),  # Verified
+        AttemptResult(attempt=5, answer=16, stats=AttemptStats(python_calls=5, python_errors=0)),  # Verified
+        AttemptResult(attempt=6, answer=13, stats=AttemptStats(python_calls=5, python_errors=1)),
+        AttemptResult(attempt=7, answer=5, stats=AttemptStats(python_calls=5, python_errors=1)),
+        AttemptResult(attempt=8, answer=6, stats=AttemptStats(python_calls=5, python_errors=1)),
+        AttemptResult(attempt=9, answer=3, stats=AttemptStats(python_calls=5, python_errors=1)),
+        AttemptResult(attempt=10, answer=1, stats=AttemptStats(python_calls=5, python_errors=1)),
+        AttemptResult(attempt=11, answer=4, stats=AttemptStats(python_calls=5, python_errors=1)),
+    ]
+
+    # With magnitude awareness, outlier should win
+    ranked_mag = rank_candidates(results, magnitude_aware=True)
+    assert ranked_mag[0][0] == 11549, f"Expected 11549 to be top, got {ranked_mag[0][0]}"
+
+    # Without magnitude awareness, verified small answers would win
+    ranked_no_mag = rank_candidates(results, magnitude_aware=False)
+    assert ranked_no_mag[0][0] in (15, 16), f"Expected 15 or 16, got {ranked_no_mag[0][0]}"
+
+
+def test_rank_magnitude_aware_no_effect_when_similar_magnitudes():
+    """Magnitude awareness should not affect ranking when all answers are similar."""
+    from olympiad_llm.aimo3.ranking import rank_candidates
+
+    # All answers in same magnitude range (10-30)
+    results = [
+        AttemptResult(attempt=0, answer=10, stats=AttemptStats(python_calls=5, python_errors=1)),
+        AttemptResult(attempt=1, answer=20, stats=AttemptStats(python_calls=5, python_errors=0)),  # Verified
+        AttemptResult(attempt=2, answer=15, stats=AttemptStats(python_calls=5, python_errors=1)),
+        AttemptResult(attempt=3, answer=25, stats=AttemptStats(python_calls=5, python_errors=1)),
+    ]
+
+    ranked = rank_candidates(results, magnitude_aware=True)
+    # Verified answer (20) should still win - no magnitude outliers
+    assert ranked[0][0] == 20
+

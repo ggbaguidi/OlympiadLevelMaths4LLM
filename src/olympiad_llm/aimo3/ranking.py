@@ -9,6 +9,7 @@ This module is deliberately lightweight and has no optional dependencies.
 """
 
 import math
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
@@ -169,10 +170,69 @@ def aggregate_candidates(detailed_results: list[Any]) -> list[CandidateStats]:
     return out
 
 
+def _magnitude_bucket(x: int) -> int:
+    """Return magnitude bucket: 0 for 0, else floor(log10(abs(x)))."""
+    if x == 0:
+        return 0
+    return int(math.floor(math.log10(abs(x) + 1)))
+
+
+def _detect_magnitude_outlier(
+    candidates: list[CandidateStats],
+) -> tuple[bool, int | None, set[int]]:
+    """Detect if there's a magnitude outlier that might be correct.
+
+    Returns (is_suspicious, dominant_bucket, outlier_answers).
+
+    We flag as suspicious when:
+    - Multiple answers cluster in one magnitude bucket (e.g., 1-20)
+    - But one or more answers are in a much higher bucket (e.g., 8000+)
+    - The clustered small answers could be "easy wrong" answers
+
+    This helps avoid picking answer=15 when the true answer is 8687.
+    """
+    if len(candidates) < 3:
+        return False, None, set()
+
+    # Count answers by magnitude bucket
+    bucket_counts: Counter[int] = Counter()
+    bucket_answers: dict[int, list[int]] = {}
+
+    for c in candidates:
+        bucket = _magnitude_bucket(c.answer)
+        bucket_counts[bucket] += c.votes  # Weight by votes
+        if bucket not in bucket_answers:
+            bucket_answers[bucket] = []
+        bucket_answers[bucket].append(c.answer)
+
+    if len(bucket_counts) < 2:
+        return False, None, set()
+
+    # Find dominant bucket (most votes)
+    sorted_buckets = bucket_counts.most_common()
+    dominant_bucket, dominant_votes = sorted_buckets[0]
+
+    # Check for outliers: buckets that are 2+ orders of magnitude higher
+    outlier_answers: set[int] = set()
+    for bucket, answers in bucket_answers.items():
+        if bucket >= dominant_bucket + 2:  # 2+ orders of magnitude higher
+            outlier_answers.update(answers)
+
+    # Flag as suspicious if:
+    # - Dominant bucket has many votes (consensus on small answers)
+    # - But there are outliers with much larger magnitude
+    total_votes = sum(bucket_counts.values())
+    if outlier_answers and dominant_votes >= total_votes * 0.5:
+        return True, dominant_bucket, outlier_answers
+
+    return False, dominant_bucket, set()
+
+
 def rank_candidates(
     detailed_results: list[Any],
     *,
     filter_to_verified_if_any: bool = True,
+    magnitude_aware: bool = True,
 ) -> list[tuple[int, dict[str, Any]]]:
     """Rank candidate answers.
 
@@ -180,14 +240,42 @@ def rank_candidates(
 
     Ranking is *verified-first*: if any candidate has at least one clean tool run,
     we (optionally) discard candidates with verified==0.
+
+    If magnitude_aware=True and answers span wildly different magnitudes (e.g.,
+    most answers are 1-20 but one is 8000+), we boost the outlier to avoid
+    picking "easy wrong" small answers when the true answer is large.
     """
 
     candidates = aggregate_candidates(detailed_results)
     if not candidates:
         return []
 
-    if filter_to_verified_if_any and any(c.verified > 0 for c in candidates):
+    # Detect magnitude outliers before filtering
+    is_suspicious, dominant_bucket, outlier_answers = _detect_magnitude_outlier(candidates)
+
+    # When magnitude is suspicious, don't filter to verified only
+    # because the verified small answers might all be wrong
+    should_filter_verified = filter_to_verified_if_any
+    if magnitude_aware and is_suspicious:
+        # Check if any outlier has tool attempts (even if not fully verified)
+        outlier_candidates = [c for c in candidates if c.answer in outlier_answers]
+        if any(c.tool_attempts > 0 for c in outlier_candidates):
+            # Don't filter - give outliers a chance
+            should_filter_verified = False
+
+    if should_filter_verified and any(c.verified > 0 for c in candidates):
         candidates = [c for c in candidates if c.verified > 0] or candidates
+
+    # Magnitude boost: if suspicious pattern detected, give outliers a significant boost
+    # This helps when most attempts get small wrong answers but one gets a large answer
+    def magnitude_boost(c: CandidateStats) -> tuple[int, int]:
+        """Returns (verified_boost, vote_boost) for sorting."""
+        if not magnitude_aware or not is_suspicious:
+            return (0, 0)
+        if c.answer in outlier_answers:
+            # Strong boost: treat as if it had 1 extra verified + 3 extra votes
+            return (1, 3)
+        return (0, 0)
 
     # Verified-first, then votes.
     # Penalize tool errors and timeouts strongly. Tag diversity is helpful, but should
@@ -195,9 +283,9 @@ def rank_candidates(
     candidates_sorted = sorted(
         candidates,
         key=lambda c: (
-            int(c.verified > 0),
-            c.verified,
-            c.votes,
+            int(c.verified > 0) + magnitude_boost(c)[0],  # Boost verified status
+            c.verified + magnitude_boost(c)[0],
+            c.votes + magnitude_boost(c)[1],  # Add vote boost
             # Confidence tie-breaker (only meaningful if logprobs/entropy was computed).
             c.entropy_score,
             -c.tool_error_attempts,
