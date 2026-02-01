@@ -1244,6 +1244,7 @@ class AIMO3Solver:
                     problem_text=problem,
                     mode=str(getattr(self.cfg, "strategy_pack_mode", "round_robin")),
                     enabled_packs=str(getattr(self.cfg, "strategy_packs", "generic")),
+                    shuffle_cards=bool(getattr(self.cfg, "shuffle_cards", True)),
                 )
                 meta_pack = str(meta.get("pack", "none"))
                 meta_card = str(meta.get("card", "none"))

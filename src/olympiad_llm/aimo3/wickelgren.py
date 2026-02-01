@@ -10,6 +10,8 @@ Goal: reduce prompt brittleness by giving the model a concrete, varied
 "strategy card" each attempt (understand → explore → plan → execute → check).
 """
 
+import hashlib
+import random
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -155,11 +157,41 @@ def detect_fe_combi(problem_text: str | None) -> bool:
     return bool(_FE_COMBI_CUE_RE.search(problem_text or ""))
 
 
-def select_strategy(attempt_index: int, *, pack: str = "generic") -> StrategyCard:
+def _problem_seed(problem_text: str | None) -> int:
+    """Generate a stable seed from problem text for per-problem shuffling."""
+    if not problem_text:
+        return 0
+    h = hashlib.sha1(problem_text.encode("utf-8"), usedforsecurity=False)
+    return int(h.hexdigest()[:8], 16)
+
+
+def select_strategy(
+    attempt_index: int,
+    *,
+    pack: str = "generic",
+    problem_text: str | None = None,
+    shuffle: bool = True,
+) -> StrategyCard:
+    """Select a strategy card for this attempt.
+
+    If shuffle=True (default), cards are shuffled per-problem using a deterministic
+    seed from the problem text. This provides:
+    - Full coverage of all cards within each problem (round-robin through shuffled order)
+    - Diversity across problems (different priority order per problem)
+    - Reproducibility (same problem → same shuffle)
+    """
     p = PACKS.get(pack, PACKS["generic"])
     if not p.cards:
         raise RuntimeError("No strategy cards configured")
-    return p.cards[int(attempt_index) % len(p.cards)]
+
+    cards = list(p.cards)
+
+    if shuffle and problem_text:
+        seed = _problem_seed(problem_text)
+        rng = random.Random(seed)
+        rng.shuffle(cards)
+
+    return cards[int(attempt_index) % len(cards)]
 
 
 def select_strategy_pack(
@@ -203,10 +235,17 @@ def augment_system_prompt_with_meta(
     problem_text: str | None = None,
     mode: str = "round_robin",
     enabled_packs: str | list[str] | None = None,
+    shuffle_cards: bool = True,
 ) -> tuple[str, dict[str, Any]]:
     """Append a strategy card and return (prompt, meta).
 
     Meta includes the selected pack and card name for attempt tagging.
+
+    If shuffle_cards=True (default), cards within each pack are shuffled per-problem
+    using a deterministic seed from the problem text. This ensures:
+    - Full coverage of all cards within each problem
+    - Different priority order across problems (diversity)
+    - Reproducibility (same problem text → same shuffle)
     """
 
     pack = select_strategy_pack(
@@ -215,7 +254,12 @@ def augment_system_prompt_with_meta(
         mode=mode,
         enabled_packs=enabled_packs,
     )
-    card = select_strategy(int(attempt_index), pack=pack)
+    card = select_strategy(
+        int(attempt_index),
+        pack=pack,
+        problem_text=problem_text,
+        shuffle=shuffle_cards,
+    )
     strategy_text = render_strategy_card(card)
     out = strategy_text if not base_prompt else base_prompt.rstrip() + "\n\n" + strategy_text
     return out, {"pack": pack, "card": card.name}

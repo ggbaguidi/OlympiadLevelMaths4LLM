@@ -30,6 +30,9 @@ class AIMO3Config:
     strategy_pack_mode: str = "round_robin"
     # Comma-separated list of enabled packs. Known packs include: generic, fe_combi
     strategy_packs: str = "generic,fe_combi"
+    # If True, shuffle cards per-problem (deterministic but different order per problem).
+    # Ensures full coverage within each problem while varying exploration order across problems.
+    shuffle_cards: bool = True
 
     # Attempt-level protocol (lemmas + verification gate)
     protocol_enabled: bool = True
@@ -329,6 +332,7 @@ class AIMO3Config:
         strategy_packs = (os.getenv("AIMO3_STRATEGY_PACKS", AIMO3Config.strategy_packs) or "").strip()
         if not strategy_packs:
             strategy_packs = AIMO3Config.strategy_packs
+        shuffle_cards = os.getenv("AIMO3_SHUFFLE_CARDS", "1").strip().lower() not in {"0", "false", "no"}
 
         trace_enabled = os.getenv("AIMO3_TRACE", "0").strip().lower() not in {"0", "false", "no"}
         trace_path = (os.getenv("AIMO3_TRACE_PATH", AIMO3Config.trace_path) or "").strip() or AIMO3Config.trace_path
@@ -572,6 +576,7 @@ class AIMO3Config:
             wickelgren_strategies_enabled=wick,
             strategy_pack_mode=strategy_pack_mode,
             strategy_packs=strategy_packs,
+            shuffle_cards=shuffle_cards,
             protocol_enabled=proto,
             display_candidates=disp,
             trace_enabled=trace_enabled,
