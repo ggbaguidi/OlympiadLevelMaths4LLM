@@ -11,6 +11,7 @@ import json
 import math
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -225,6 +226,14 @@ class AIMO3Tool:
         # If it already prints, do nothing.
         if last.startswith("print(") or "print" in last:
             return src
+
+        # CRITICAL: Do not wrap assignment statements - this causes SyntaxError:
+        # print(x = foo()) is invalid (= looks like keyword argument)
+        # Check for assignment: contains '=' but not '==', '!=', '<=', '>=', '+=', etc.
+        if "=" in last:
+            # Match standalone = (assignment) but not compound operators
+            if re.search(r'(?<![=!<>+\-*/%&|^])=(?!=)', last):
+                return src
 
         # Only apply to single-line snippets or when the last line is a top-level expression.
         lines[-1] = f"print({last})"
