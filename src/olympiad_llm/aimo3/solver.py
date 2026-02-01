@@ -223,6 +223,11 @@ class AIMO3Tool:
         if lower_last.endswith(":") or lower_last.startswith(statement_prefixes):
             return src
 
+        # Skip Jupyter magic commands (! for shell, % for magic)
+        # e.g., "!pip install foo" or "%timeit foo()"
+        if last.startswith("!") or last.startswith("%"):
+            return src
+
         # If it already prints, do nothing.
         if last.startswith("print(") or "print" in last:
             return src
