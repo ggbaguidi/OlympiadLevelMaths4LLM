@@ -131,8 +131,13 @@ ENHANCED_TOOL_INSTRUCTION = """Use this tool to execute Python code for mathemat
     ```
     This prevents NameError when functions like `combinations` or `gcd` are used.
 
-2b. If you truly need a longer-running computation, start the code with a timeout directive:
-    - # timeout: 120
+2b. **TIMEOUT WARNING**: Default execution limit is 30 seconds.
+    For expensive computations (brute force, large searches), request more time:
+    ```python
+    # timeout: 120
+    # Your expensive code here...
+    ```
+    Max allowed: 180s. If you don't request enough time, your code will be killed mid-execution.
     
 2c. Keep code short and practical: avoid long custom helper functions when a library call or a small loop suffices
 

@@ -130,7 +130,11 @@ class AIMO3Sandbox:
             if elapsed > effective_timeout:
                 with contextlib.suppress(Exception):
                     self._km.interrupt_kernel()
-                return f"[ERROR] Execution timed out after {effective_timeout} seconds"
+                # Helpful error message that guides the model to use timeout directive
+                hint = ""
+                if effective_timeout < 60:
+                    hint = " TIP: For expensive computations, add '# timeout: 120' as the FIRST line of your code."
+                return f"[ERROR] Execution timed out after {effective_timeout:.0f}s.{hint}"
 
             try:
                 msg = client.get_iopub_msg(timeout=1.0)

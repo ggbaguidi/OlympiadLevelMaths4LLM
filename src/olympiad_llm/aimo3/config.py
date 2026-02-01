@@ -114,7 +114,7 @@ class AIMO3Config:
     notebook_limit: float = 17520.0
     server_timeout: float = 180.0
     session_timeout: float = 960.0
-    jupyter_timeout: float = 10.0
+    jupyter_timeout: float = 30.0
     sandbox_timeout: float = 5.0
 
     # Python tool execution timeout handling
