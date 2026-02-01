@@ -113,6 +113,39 @@ class AIMO3Sandbox:
         # Fallback: return original traceback (ANSI-stripped) if filtering removed everything.
         return "".join(re.sub(r"\x1b\[[0-9;]*m", "", f) for f in traceback)
 
+    @staticmethod
+    def _add_error_hints(error_text: str) -> str:
+        """Add helpful hints for common errors to guide the model."""
+        hints = []
+        
+        # Dict slicing error: fvals[:10] on a dict
+        if "KeyError: slice(" in error_text:
+            hints.append(
+                "TIP: You're trying to slice a dict like a list. "
+                "Use list(d.items())[:10] or {k: d[k] for k in list(d.keys())[:10]}"
+            )
+        
+        # Integer string conversion limit (Python 3.11+)
+        if "Exceeds the limit" in error_text and "int_max_str_digits" in error_text:
+            hints.append(
+                "TIP: Large integer printing limit. Add: import sys; sys.set_int_max_str_digits(0)"
+            )
+        
+        # NameError for common functions
+        if "NameError" in error_text:
+            if "gcd" in error_text:
+                hints.append("TIP: Add 'from math import gcd'")
+            elif "combinations" in error_text or "permutations" in error_text:
+                hints.append("TIP: Add 'from itertools import combinations, permutations'")
+            elif "factorial" in error_text:
+                hints.append("TIP: Add 'from math import factorial'")
+            elif "Counter" in error_text:
+                hints.append("TIP: Add 'from collections import Counter'")
+        
+        if hints:
+            return error_text.rstrip() + "\n\n" + "\n".join(hints)
+        return error_text
+
     def execute(self, code: str, timeout: float | None = None) -> str:
         if self._client is None or self._km is None:
             return "[ERROR] Sandbox is closed."
@@ -162,7 +195,10 @@ class AIMO3Sandbox:
 
             elif msg_type == "error":
                 tb = content.get("traceback", [])
-                stderr_parts.append(self._format_error(tb))
+                formatted_error = self._format_error(tb)
+                # Add helpful hints for common errors
+                formatted_error = self._add_error_hints(formatted_error)
+                stderr_parts.append(formatted_error)
 
             elif msg_type in {"execute_result", "display_data"}:
                 data = content.get("data", {})
