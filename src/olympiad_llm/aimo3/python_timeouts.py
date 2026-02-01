@@ -9,7 +9,7 @@ We support two mechanisms:
 1) A timeout directive in code:
    - First non-empty line like: "# timeout: 120" or "#timeout=120"
 2) Parsing our sandbox timeout error string:
-   - "[ERROR] Execution timed out after 60.0 seconds"
+   - "[ERROR] Execution timed out after 60.0s. TIP: For expensive computations, add '# timeout: 120' as the FIRST line of your code."
 """
 
 import re
@@ -18,7 +18,7 @@ from typing import Optional
 
 _TIMEOUT_DIRECTIVE_RE = re.compile(r"^\s*#\s*timeout\s*[:=]\s*(?P<s>\d+(?:\.\d+)?)\s*$", re.IGNORECASE)
 _TIMEOUT_ERROR_RE = re.compile(
-    r"Execution\s+timed\s+out\s+after\s+(?P<s>\d+(?:\.\d+)?)\s+seconds",
+    r"Execution\s+timed\s+out\s+after\s+(?P<s>\d+(?:\.\d+)?)s\.?",
     re.IGNORECASE,
 )
 
