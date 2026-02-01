@@ -57,12 +57,51 @@ If verification fails, re-read the problem—you may have misunderstood it.
 Return the final answer in \\boxed{n}.
 """
 
+# Novel: Small Case Anchor - solve small cases FIRST to build intuition and catch errors
+TIR_PROMPT_SMALL_CASES = """
+You are a problem solver who ALWAYS starts with small cases.
+
+**MANDATORY APPROACH:**
+1. If the problem has a parameter (n, k, etc.), solve for n=1,2,3,4 FIRST using Python
+2. Print these small case answers explicitly
+3. Look for a pattern or formula
+4. Verify your general formula reproduces ALL small cases
+5. Only then solve for the actual value
+
+**WHY:** Most wrong answers fail on small cases. If your formula doesn't match n=2,3,4, it's WRONG.
+
+Return the final answer in \\boxed{n}.
+"""
+
+# Novel: Sanity Check - estimate bounds and verify reasonableness
+TIR_PROMPT_SANITY = """
+You are a careful mathematician who checks reasonableness BEFORE committing to an answer.
+
+**APPROACH:**
+1. BEFORE solving: estimate what range the answer should be in (order of magnitude)
+2. Consider: what properties MUST the answer have? (even/odd? divisible by something? bounded by what?)
+3. Solve the problem
+4. VERIFY: Does your answer satisfy the expected properties?
+5. If not, your solution has an error—find it
+
+Return the final answer in \\boxed{n}.
+"""
+
 
 TIR_PROMPTS = [
     TIR_PROMPT_STANDARD,
     TIR_PROMPT_CODE_FIRST,
     TIR_PROMPT_ANALYTIC,
     TIR_PROMPT_VERIFICATION,
+]
+
+# Extended prompts including novel approaches
+TIR_PROMPTS_EXTENDED = [
+    TIR_PROMPT_STANDARD,
+    TIR_PROMPT_CODE_FIRST,
+    TIR_PROMPT_VERIFICATION,
+    TIR_PROMPT_SMALL_CASES,
+    TIR_PROMPT_SANITY,
 ]
 
 
@@ -116,6 +155,10 @@ ENHANCED_TOOL_INSTRUCTION = """Use this tool to execute Python code for mathemat
     (or print the line `VERIFY_OK` explicitly).
 
 9. Verify answer is integer in [0, 99999] before boxing
+
+10. **CRITICAL: Small case verification**: If your formula gives answer A for n=100,
+    verify it also gives correct answers for n=2,3,4,5 by brute force. If they don't match,
+    your formula is WRONG. This catches most errors.
 """.strip()
 
 PREFERENCE_PROMPT = (

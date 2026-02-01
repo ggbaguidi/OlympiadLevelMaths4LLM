@@ -22,7 +22,7 @@ from typing import Optional
 
 from .config import AIMO3Config
 from .errors import OptionalDependencyError
-from .prompts import TIR_PROMPT_ANALYTIC, TIR_PROMPT_CODE_FIRST, TIR_PROMPT_STANDARD, TIR_PROMPT_VERIFICATION
+from .prompts import TIR_PROMPT_ANALYTIC, TIR_PROMPT_CODE_FIRST, TIR_PROMPT_STANDARD, TIR_PROMPT_VERIFICATION, TIR_PROMPT_SMALL_CASES, TIR_PROMPT_SANITY
 from .sandbox import AIMO3Sandbox
 from .vllm_server import VLLMServer
 from .wickelgren import augment_system_prompt_with_meta
@@ -1197,8 +1197,10 @@ class AIMO3Solver:
         specs: list[tuple[str, str]] = [
             ("standard", TIR_PROMPT_STANDARD),
             ("code_first", TIR_PROMPT_CODE_FIRST),
-            ("analytic", TIR_PROMPT_ANALYTIC),
             ("verification", TIR_PROMPT_VERIFICATION),
+            ("small_cases", TIR_PROMPT_SMALL_CASES),  # Novel: solve small n first
+            ("sanity", TIR_PROMPT_SANITY),  # Novel: check bounds/properties
+            ("analytic", TIR_PROMPT_ANALYTIC),  # Last (slowest)
         ]
         enabled = [(name, prompt) for (name, prompt) in specs if name not in disabled]
         if not enabled:
