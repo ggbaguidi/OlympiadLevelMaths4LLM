@@ -55,6 +55,12 @@ class AIMO3Sandbox:
 
         # Preload common math stack.
         self.execute(
+            'import sys\n'
+            '# Increase limit for large integer string conversion (Python 3.11+)\n'
+            'try:\n'
+            '    sys.set_int_max_str_digits(0)  # 0 = unlimited\n'
+            'except AttributeError:\n'
+            '    pass  # Python < 3.11\n'
             'import os\n'
             '_lean_bin = os.environ.get("AIMO3_LEAN_BIN_DIR")\n'
             'if _lean_bin and _lean_bin not in os.environ.get("PATH", ""):\n'
