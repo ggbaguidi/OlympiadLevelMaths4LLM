@@ -28,7 +28,7 @@ from .vllm_server import VLLMServer
 from .wickelgren import augment_system_prompt_with_meta
 from .protocol import with_protocol
 from .ranking import rank_candidates
-from .budget import adaptive_verify_budget, compute_attempt_and_verify_deadlines, reserve_fraction_for_budget
+from .budget import adaptive_verify_budget, compute_attempt_and_verify_deadlines, reserve_fraction_for_budget, TimeBudgetTracker
 
 from .answer_extraction import AnswerExtractor
 from .attempts import AttemptResult, AttemptStats
@@ -576,6 +576,14 @@ class AIMO3Solver:
         self._initialize_kernels()
         self.notebook_start_time = time.time()
         self.problems_remaining = int(self.cfg.problems_total)
+        
+        # Dynamic time budgeting: track actual solve times to adjust per-problem budgets
+        self._budget_tracker = TimeBudgetTracker(
+            total_budget_s=float(self.cfg.notebook_limit),
+            total_problems=int(self.cfg.problems_total),
+            base_timeout_s=float(self.cfg.base_problem_timeout),
+            high_timeout_s=float(self.cfg.high_problem_timeout),
+        )
 
         # Notebook-friendly tracing behavior: optionally reset the trace file at startup.
         if bool(getattr(self.cfg, "trace_enabled", False)) and bool(getattr(self.cfg, "trace_reset_on_start", False)):
@@ -1203,16 +1211,22 @@ class AIMO3Solver:
 
         pid = stable_problem_id(problem)
 
-        elapsed_global = time.time() - self.notebook_start_time
-        time_left = float(self.cfg.notebook_limit) - elapsed_global
-        problems_left_others = max(0, int(self.problems_remaining) - 1)
-        reserved = problems_left_others * float(self.cfg.base_problem_timeout)
-
-        slack = max(0.0, time_left - reserved - float(self.cfg.base_problem_timeout))
-        extra = min(slack * 0.50, float(self.cfg.high_problem_timeout) - float(self.cfg.base_problem_timeout))
-        budget = float(self.cfg.base_problem_timeout) + extra
-        budget = min(budget, float(self.cfg.high_problem_timeout))
-        budget = max(budget, float(self.cfg.base_problem_timeout))
+        # Dynamic budget: use tracker if available, fallback to legacy calculation
+        if hasattr(self, '_budget_tracker'):
+            # Sync tracker's view of elapsed time
+            self._budget_tracker.total_time_used_s = time.time() - self.notebook_start_time
+            budget = self._budget_tracker.compute_budget()
+        else:
+            # Legacy static calculation
+            elapsed_global = time.time() - self.notebook_start_time
+            time_left = float(self.cfg.notebook_limit) - elapsed_global
+            problems_left_others = max(0, int(self.problems_remaining) - 1)
+            reserved = problems_left_others * float(self.cfg.base_problem_timeout)
+            slack = max(0.0, time_left - reserved - float(self.cfg.base_problem_timeout))
+            extra = min(slack * 0.50, float(self.cfg.high_problem_timeout) - float(self.cfg.base_problem_timeout))
+            budget = float(self.cfg.base_problem_timeout) + extra
+            budget = min(budget, float(self.cfg.high_problem_timeout))
+            budget = max(budget, float(self.cfg.base_problem_timeout))
 
         now = time.time()
         overall_deadline = now + budget
@@ -1270,6 +1284,15 @@ class AIMO3Solver:
             "workers": int(self.cfg.workers),
             "sandbox_pool_size": int(getattr(self.cfg, "sandbox_pool_size", 0) or 0),
         }
+        # Add dynamic budget tracker info if available
+        if hasattr(self, '_budget_tracker'):
+            bt = self._budget_tracker
+            solve_start_payload["budget_tracker"] = {
+                "problems_solved": bt.problems_solved,
+                "problems_remaining": bt.problems_remaining,
+                "time_banked_s": round(bt.time_banked_s, 1),
+                "avg_solve_time_s": round(bt.avg_solve_time_s, 1),
+            }
         if bool(getattr(self.cfg, "trace_env_enabled", False)) and bool(getattr(self.cfg, "trace_enabled", False)):
             with contextlib.suppress(Exception):
                 env = self._sandbox_env_snapshot()
@@ -1452,6 +1475,11 @@ class AIMO3Solver:
                             _submit_one(fmt_prompt, attempt_idx, attempt_tag)
 
         self.problems_remaining = max(0, int(self.problems_remaining) - 1)
+        
+        # Record actual solve time for dynamic budgeting
+        problem_elapsed = time.time() - problem_start_time
+        if hasattr(self, '_budget_tracker'):
+            self._budget_tracker.record_solve(problem_elapsed)
 
         # Retry if no valid answers.
         if not valid:
