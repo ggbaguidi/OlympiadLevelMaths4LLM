@@ -131,6 +131,13 @@ class AIMO3Sandbox:
                 "TIP: Large integer printing limit. Add: import sys; sys.set_int_max_str_digits(0)"
             )
         
+        # SyntaxError: incomplete input - often caused by comment inside parentheses
+        if "SyntaxError: incomplete input" in error_text or "SyntaxError: '(' was never closed" in error_text:
+            hints.append(
+                "TIP: Check for unclosed parentheses. A common mistake is putting a comment "
+                "inside a function call like print(x # comment) - the # hides the closing )."
+            )
+        
         # NameError for common functions
         if "NameError" in error_text:
             if "gcd" in error_text:

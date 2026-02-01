@@ -240,8 +240,25 @@ class AIMO3Tool:
             if re.search(r'(?<![=!<>+\-*/%&|^])=(?!=)', last):
                 return src
 
+        # Strip trailing comments before wrapping - otherwise print(x # comment) is invalid
+        # because the # hides the closing parenthesis
+        expr = last
+        comment = ""
+        if "#" in last:
+            # Find the comment part (not inside a string)
+            # Simple heuristic: split on # and check if it's likely a comment
+            hash_idx = last.find("#")
+            # Check if # is inside quotes (very rough check)
+            before_hash = last[:hash_idx]
+            if before_hash.count('"') % 2 == 0 and before_hash.count("'") % 2 == 0:
+                expr = last[:hash_idx].rstrip()
+                comment = "  " + last[hash_idx:]
+        
+        if not expr:
+            return src
+
         # Only apply to single-line snippets or when the last line is a top-level expression.
-        lines[-1] = f"print({last})"
+        lines[-1] = f"print({expr}){comment}"
         return "\n".join(lines)
 
     @property
