@@ -1,9 +1,9 @@
 """Prompt protocol helpers for AIMO-3.
 
 This enforces a stable solve loop inside a single attempt:
-- make subgoals explicit (lemmas)
-- run checks
-- only produce \boxed{n} when confident
+- push toward code-verified solutions
+- require verification before boxing
+- produce \boxed{n} with verified answer
 
 This is *in addition* to the outer controller (multi-attempt + voting).
 """
@@ -12,16 +12,13 @@ from __future__ import annotations
 
 
 def protocol_suffix() -> str:
-    # Keep it short: token-efficient and hard to ignore.
+    # Ultra-short protocol: maximize time spent on actual computation
     return (
         "\n\n"
-        "Protocol (follow strictly):\n"
-        "1) Restate the goal. List <=2 candidate approaches, then choose one.\n"
-        "2) List <=3 subgoals/lemmas for the chosen approach.\n"
-        "3) If computation/search helps, use the Python tool (show the check).\n"
-        "4) Before finalizing, run a final sanity test (tool or reasoning).\n"
-        "5) If you are not fully confident, output NOBOX (do not output any \\boxed{...}).\n"
-        "6) If confident, output exactly one final line: \\boxed{n} with integer n in [0,99999].\n"
+        "RULES:\n"
+        "• Use Python to compute/verify. Don't do arithmetic by hand.\n"
+        "• Test your answer on small cases BEFORE boxing it.\n"
+        "• Final answer: \\boxed{n} where n is an integer in [0,99999].\n"
     )
 
 
