@@ -58,6 +58,9 @@ class VLLMServer:
 
         This mirrors the high-LB Kaggle notebook trick: reading shard files once before
         starting vLLM reduces random stalls and first-token latency on cold starts.
+
+        Note: If you used `cleanup.environ_setup_parallel(warm_model=True)`, the warmup
+        already happened in parallel with pip install - this will be a fast no-op (cached).
         """
 
         if not bool(getattr(self.cfg, "preload_model_weights", False)):
@@ -147,6 +150,8 @@ class VLLMServer:
             str(self.cfg.stream_interval),
             "--async-scheduling",
             "--enable-prefix-caching",
+            "--disable-log-stats",
+            "--disable-log-requests",
         ]
 
         self._log_file = open(self.log_path, "w", encoding="utf-8")
