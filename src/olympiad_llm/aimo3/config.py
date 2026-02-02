@@ -232,7 +232,14 @@ class AIMO3Config:
     contradiction_retry_min_distinct_answers: int = 3
     contradiction_retry_min_remaining_s: float = 45.0
     contradiction_retry_budget_cap_s: float = 90.0
-
+    # Conclusion prompting (per-attempt): when the model is generating many tokens without
+    # concluding, inject a nudge message asking it to finalize. This helps with the common
+    # failure mode: model does 20k+ tokens of computation but never outputs \boxed{}.
+    conclude_nudge_enabled: bool = True
+    # Token threshold to trigger the nudge. Set to 0 to disable.
+    conclude_nudge_tokens: int = 16000
+    # Only send one nudge per attempt.
+    conclude_nudge_once: bool = True
     # Finalization (per-attempt): if an attempt did tool work but never emitted a clean final
     # boxed integer, do one short “final answer only” completion to force synthesis.
     # This helps with the common failure mode: last tool call ran, then the attempt ends
@@ -558,6 +565,15 @@ class AIMO3Config:
             "AIMO3_FINALIZE_ANSWER_MIN_REMAINING_S", AIMO3Config.finalize_answer_min_remaining_s
         )
 
+        # Conclusion nudge (intra-attempt prompting to force synthesis)
+        conclude_nudge_enabled = (
+            os.getenv("AIMO3_CONCLUDE_NUDGE_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+        )
+        conclude_nudge_tokens = _env_int("AIMO3_CONCLUDE_NUDGE_TOKENS", AIMO3Config.conclude_nudge_tokens)
+        conclude_nudge_once = (
+            os.getenv("AIMO3_CONCLUDE_NUDGE_ONCE", "1").strip().lower() not in {"0", "false", "no"}
+        )
+
         tiebreak_enabled = os.getenv("AIMO3_TIEBREAK_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
         tiebreak_min_remaining_s = _env_float(
             "AIMO3_TIEBREAK_MIN_REMAINING_S", AIMO3Config.tiebreak_min_remaining_s
@@ -654,6 +670,9 @@ class AIMO3Config:
             finalize_answer_enabled=finalize_answer_enabled,
             finalize_answer_max_tokens=finalize_answer_max_tokens,
             finalize_answer_min_remaining_s=finalize_answer_min_remaining_s,
+            conclude_nudge_enabled=conclude_nudge_enabled,
+            conclude_nudge_tokens=conclude_nudge_tokens,
+            conclude_nudge_once=conclude_nudge_once,
             tiebreak_enabled=tiebreak_enabled,
             tiebreak_min_remaining_s=tiebreak_min_remaining_s,
             tiebreak_budget_cap_s=tiebreak_budget_cap_s,

@@ -696,6 +696,7 @@ class AIMO3Solver:
         timeout_count = 0
         total_tokens = 0
         final_answer: int | None = None
+        conclude_nudge_sent = False  # Track if we've sent the conclusion nudge
         # Keep a tail buffer of the assistant text so we can display candidate solutions.
         text_tail: str = ""
         cap = int(self.cfg.capture_attempt_text_chars)
@@ -958,6 +959,30 @@ class AIMO3Solver:
                     if final_answer is None:
                         final_answer = self._extractor.extract_int_fallback(answer_text)
                     break
+
+                # Conclusion prompting: if tokens exceed threshold and we haven't nudged yet,
+                # inject a message asking the model to conclude with \boxed{}.
+                nudge_threshold = int(getattr(self.cfg, "conclude_nudge_tokens", 0) or 0)
+                nudge_enabled = bool(getattr(self.cfg, "conclude_nudge_enabled", True))
+                nudge_once = bool(getattr(self.cfg, "conclude_nudge_once", True))
+                if (
+                    nudge_enabled
+                    and nudge_threshold > 0
+                    and total_tokens >= nudge_threshold
+                    and (not nudge_once or not conclude_nudge_sent)
+                ):
+                    conclude_nudge_sent = True
+                    h = _require_harmony()
+                    Message = h["Message"]
+                    Role = h["Role"]
+                    conversation.messages.append(
+                        Message.from_role_and_content(
+                            Role.USER,
+                            "You have done extensive computation. Please now synthesize your findings and "
+                            "state your final integer answer in \\boxed{N} format. If you need one more "
+                            "verification step, do it briefly, then conclude.",
+                        )
+                    )
 
                 # NOTE: python tool calls are handled above by draining all calls in the batch.
 
