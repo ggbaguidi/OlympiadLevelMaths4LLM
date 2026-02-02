@@ -614,6 +614,11 @@ class AIMO3Solver:
             total_problems=int(self.cfg.problems_total),
             base_timeout_s=float(self.cfg.base_problem_timeout),
             high_timeout_s=float(self.cfg.high_problem_timeout),
+            # Adaptive extension settings
+            flex_pool_fraction=float(getattr(self.cfg, "adaptive_budget_flex_pool_fraction", 0.15)),
+            max_extension_multiplier=float(getattr(self.cfg, "adaptive_budget_max_extension", 2.0)),
+            hardness_trigger_fraction=float(getattr(self.cfg, "adaptive_budget_hardness_trigger", 0.5)),
+            hardness_min_distinct_answers=int(getattr(self.cfg, "adaptive_budget_min_distinct", 3)),
         )
 
         # Notebook-friendly tracing behavior: optionally reset the trace file at startup.
@@ -1330,6 +1335,7 @@ class AIMO3Solver:
         detailed: list[AttemptResult] = []
         valid: list[int] = []
         stop_event = threading.Event()
+        extension_granted = False  # Track if we've already extended budget for this problem
 
         solve_start_payload = {
             "event": "solve_start",
@@ -1351,6 +1357,9 @@ class AIMO3Solver:
                 "problems_remaining": bt.problems_remaining,
                 "time_banked_s": round(bt.time_banked_s, 1),
                 "avg_solve_time_s": round(bt.avg_solve_time_s, 1),
+                "flex_pool_total_s": round(bt.flex_pool_total_s, 1),
+                "flex_pool_remaining_s": round(bt.flex_pool_remaining_s, 1),
+                "extensions_granted": bt.extensions_granted,
             }
         if bool(getattr(self.cfg, "trace_env_enabled", False)) and bool(getattr(self.cfg, "trace_enabled", False)):
             with contextlib.suppress(Exception):
@@ -1460,6 +1469,45 @@ class AIMO3Solver:
                     detailed.append(r)
                     if r.answer is not None and isinstance(r.answer, int):
                         valid.append(r.answer)
+
+                    # Adaptive budget extension: check for hardness signals and extend if needed
+                    if (
+                        bool(getattr(self.cfg, "adaptive_budget_enabled", True))
+                        and hasattr(self, "_budget_tracker")
+                        and not extension_granted
+                        and not stop_event.is_set()
+                    ):
+                        time_spent = time.time() - problem_start_time
+                        n_distinct = len(set(valid)) if valid else 0
+                        consensus_min_answers = int(getattr(self.cfg, "adaptive_budget_consensus_min_answers", 3))
+                        consensus_min_votes = int(getattr(self.cfg, "adaptive_budget_consensus_min_votes", 2))
+                        has_consensus = (
+                            len(valid) >= consensus_min_answers
+                            and max(valid.count(a) for a in set(valid)) >= consensus_min_votes
+                        ) if valid else False
+                        
+                        extension = self._budget_tracker.request_extension(
+                            time_spent_s=time_spent,
+                            current_budget_s=budget,
+                            n_distinct_answers=n_distinct,
+                            has_consensus=has_consensus,
+                        )
+                        if extension > 0:
+                            extension_granted = True
+                            # Extend both deadlines
+                            attempt_deadline += extension
+                            deadline += extension
+                            overall_deadline += extension
+                            self._trace.record({
+                                "event": "budget_extension",
+                                "problem_id": pid,
+                                "extension_s": round(extension, 1),
+                                "new_budget_s": round(budget + extension, 1),
+                                "time_spent_s": round(time_spent, 1),
+                                "n_distinct_answers": n_distinct,
+                                "has_consensus": has_consensus,
+                                "flex_pool_remaining_s": round(self._budget_tracker.flex_pool_remaining_s, 1),
+                            })
 
                     if self._should_early_stop(detailed):
                         stop_event.set()

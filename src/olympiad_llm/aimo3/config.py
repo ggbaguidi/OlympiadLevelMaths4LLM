@@ -140,6 +140,23 @@ class AIMO3Config:
     # Set to 1 when debugging a single hard problem locally.
     problems_total: int = 50
 
+    # Adaptive budget extension: reserve a flex pool for hard problems.
+    # When a problem shows hardness signals (no consensus after 50% of base budget),
+    # draw extra time from the flex pool.
+    adaptive_budget_enabled: bool = True
+    # Fraction of total notebook time reserved as flex pool
+    adaptive_budget_flex_pool_fraction: float = 0.15
+    # Max extension multiplier (e.g., 2.0 = can double base budget for hard problems)
+    adaptive_budget_max_extension: float = 2.0
+    # Trigger extension check after this fraction of base budget spent
+    adaptive_budget_hardness_trigger: float = 0.5
+    # Min distinct answers to consider "no consensus"
+    adaptive_budget_min_distinct: int = 3
+    # Consensus detection: minimum total answers before checking
+    adaptive_budget_consensus_min_answers: int = 3
+    # Consensus detection: minimum votes for one answer to count as consensus
+    adaptive_budget_consensus_min_votes: int = 2
+
     # Server reuse / probing
     # If True, attempt to connect to an already-running OpenAI-compatible server
     # on the configured port and reuse it instead of starting another vLLM process.
@@ -453,6 +470,29 @@ class AIMO3Config:
 
         problems_total = _env_int("AIMO3_PROBLEMS_TOTAL", AIMO3Config.problems_total)
 
+        # Adaptive budget extension
+        adaptive_budget_enabled = (
+            os.getenv("AIMO3_ADAPTIVE_BUDGET_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+        )
+        adaptive_budget_flex_pool_fraction = _env_float(
+            "AIMO3_ADAPTIVE_BUDGET_FLEX_POOL_FRACTION", AIMO3Config.adaptive_budget_flex_pool_fraction
+        )
+        adaptive_budget_max_extension = _env_float(
+            "AIMO3_ADAPTIVE_BUDGET_MAX_EXTENSION", AIMO3Config.adaptive_budget_max_extension
+        )
+        adaptive_budget_hardness_trigger = _env_float(
+            "AIMO3_ADAPTIVE_BUDGET_HARDNESS_TRIGGER", AIMO3Config.adaptive_budget_hardness_trigger
+        )
+        adaptive_budget_min_distinct = _env_int(
+            "AIMO3_ADAPTIVE_BUDGET_MIN_DISTINCT", AIMO3Config.adaptive_budget_min_distinct
+        )
+        adaptive_budget_consensus_min_answers = _env_int(
+            "AIMO3_ADAPTIVE_BUDGET_CONSENSUS_MIN_ANSWERS", AIMO3Config.adaptive_budget_consensus_min_answers
+        )
+        adaptive_budget_consensus_min_votes = _env_int(
+            "AIMO3_ADAPTIVE_BUDGET_CONSENSUS_MIN_VOTES", AIMO3Config.adaptive_budget_consensus_min_votes
+        )
+
         # Startup knobs (useful in Kaggle when model load can take >3 minutes).
         # If the user didn't set AIMO3_SERVER_TIMEOUT explicitly and we're using a Kaggle input model,
         # default to a longer timeout (large checkpoints can easily take 6-12 minutes to load).
@@ -715,4 +755,11 @@ class AIMO3Config:
             verification_reserve_cap=verify_reserve_cap,
             verification_reserve_min=verify_reserve_min,
             problems_total=problems_total,
+            adaptive_budget_enabled=adaptive_budget_enabled,
+            adaptive_budget_flex_pool_fraction=adaptive_budget_flex_pool_fraction,
+            adaptive_budget_max_extension=adaptive_budget_max_extension,
+            adaptive_budget_hardness_trigger=adaptive_budget_hardness_trigger,
+            adaptive_budget_min_distinct=adaptive_budget_min_distinct,
+            adaptive_budget_consensus_min_answers=adaptive_budget_consensus_min_answers,
+            adaptive_budget_consensus_min_votes=adaptive_budget_consensus_min_votes,
         )
