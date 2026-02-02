@@ -32,3 +32,20 @@ def test_autoprint_does_not_touch_indented_last_line():
 """
     out = AIMO3Tool._ensure_last_print(code)  # noqa: SLF001
     assert out == code
+
+
+def test_autoprint_handles_trailing_comments():
+    """Trailing comments must not end up inside print() which causes SyntaxError."""
+    # Without this fix: print(table[:10] # just test) - broken because # hides closing paren
+    code = "table[:10] # just test"
+    out = AIMO3Tool._ensure_last_print(code)  # noqa: SLF001
+    # Comment should be moved outside: print(table[:10])  # just test
+    assert out == "print(table[:10])  # just test"
+
+
+def test_autoprint_preserves_hash_in_strings():
+    """Hash inside strings is not a comment, should not be extracted."""
+    # Assignment, so should not be wrapped at all
+    code = 's = "hello # world"'
+    out = AIMO3Tool._ensure_last_print(code)  # noqa: SLF001
+    assert out == code
