@@ -665,7 +665,8 @@ class AIMO3Solver:
     @property
     def _extractor(self) -> AnswerExtractor:
         # Centralize extraction behavior (range, formatting).
-        return AnswerExtractor(aimo_lo=0, aimo_hi=99999)
+        strict = bool(getattr(self.cfg, "strict_fallback_extraction", True))
+        return AnswerExtractor(aimo_lo=0, aimo_hi=99999, strict_fallback=strict)
 
     def _process_attempt(
         self,

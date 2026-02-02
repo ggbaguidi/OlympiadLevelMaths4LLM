@@ -122,6 +122,7 @@ class AnswerExtractor:
 
     aimo_lo: int = 0
     aimo_hi: int = 99999
+    strict_fallback: bool = True  # Only use hint-based fallback, not any integer
 
     def extract_boxed_int(self, text: str) -> int | None:
         """Return the last valid \boxed{int} in [aimo_lo, aimo_hi], else None."""
@@ -173,7 +174,11 @@ class AnswerExtractor:
 
         t = text or ""
         hinted = list(_FINAL_INT_HINT_RE.findall(t))
-        candidates = hinted if hinted else list(_ANY_INT_RE.findall(t))
+        # If strict_fallback is enabled, only use hint-based matches (avoid random integers)
+        if self.strict_fallback:
+            candidates = hinted
+        else:
+            candidates = hinted if hinted else list(_ANY_INT_RE.findall(t))
         if not candidates:
             return None
 

@@ -211,6 +211,10 @@ class AIMO3Config:
     recovery_mode: str = "auto"
     recovery_micro_tool_call_cap: int = 2
 
+    # Answer extraction: if True, only extract unboxed integers when near explicit "answer" language.
+    # If False, falls back to any integer in text (can pick up random numbers from reasoning).
+    strict_fallback_extraction: bool = True
+
     # Extraction/format recovery (general): if the model produced lots of tokens but we couldn't
     # extract an integer answer, schedule a short attempt focused purely on producing the final
     # boxed integer.
