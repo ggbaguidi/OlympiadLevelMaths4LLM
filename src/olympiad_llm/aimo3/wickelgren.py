@@ -35,6 +35,7 @@ GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
             "IMMEDIATELY write Python code to compute small cases (n=1,2,3,... or enumerate).",
             "Print results clearly. Look for a pattern in the output.",
             "Once you see the pattern, state your conjecture and verify with more cases.",
+            "Return the final answer in \\boxed{n}, where n ∈ [0, 99999].",
         ],
     ),
     StrategyCard(
@@ -43,6 +44,7 @@ GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
             "Compute the first 5-10 values using Python.",
             "Search OEIS-style: does it match factorials, Catalan, Fibonacci, powers, or binomials?",
             "Test your closed-form formula on ALL computed cases before finalizing.",
+            "Return the final answer in \\boxed{n}, where n ∈ [0, 99999].",
         ],
     ),
     StrategyCard(
@@ -51,6 +53,7 @@ GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
             "The answer is mod some number. Compute the base value first, then reduce.",
             "For large exponents: use pow(base, exp, mod) in Python.",
             "Watch for: Fermat's little theorem, Chinese remainder theorem, lifting the exponent.",
+            "Return the final answer in \\boxed{n}, where n ∈ [0, 99999].",
         ],
     ),
     StrategyCard(
@@ -59,6 +62,7 @@ GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
             "Split the problem into 2-3 cases based on parity, sign, or divisibility.",
             "Solve each case separately with Python verification.",
             "Combine cases carefully—don't double-count or miss edge cases.",
+            "Return the final answer in \\boxed{n}, where n ∈ [0, 99999].",
         ],
     ),
     StrategyCard(
@@ -67,6 +71,7 @@ GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
             "Start from the answer format. What structure must the answer have?",
             "Work backwards: what conditions force this structure?",
             "Use Python to check if your backwards reasoning produces valid examples.",
+            "Return the final answer in \\boxed{n}, where n ∈ [0, 99999].",
         ],
     ),
     StrategyCard(
@@ -75,6 +80,7 @@ GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
             "Can this reduce to: GCD/LCM? Binomial coefficient? Sum of divisors? Euler phi?",
             "Use sympy: factorint, divisors, totient, binomial, factorial.",
             "Verify the reduction is correct on small examples.",
+            "Return the final answer in \\boxed{n}, where n ∈ [0, 99999].",
         ],
     ),
     StrategyCard(
@@ -83,6 +89,7 @@ GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
             "Write Python to generate ALL valid objects (permutations, subsets, sequences).",
             "Count or filter them according to the problem conditions.",
             "For large n, find a recurrence or closed form from small-n data.",
+            "Return the final answer in \\boxed{n}, where n ∈ [0, 99999].",
         ],
     ),
     StrategyCard(
@@ -91,6 +98,7 @@ GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
             "Use sympy to expand, factor, simplify, or solve symbolically.",
             "Don't do algebra by hand—let the computer handle it.",
             "Verify symbolic results numerically with concrete values.",
+            "Return the final answer in \\boxed{n}, where n ∈ [0, 99999}.",
         ],
     ),
 ]
@@ -103,6 +111,7 @@ FE_COMBI_STRATEGY_CARDS: list[StrategyCard] = [
             "Plug in special values: f(0), f(1), f(-1), f(x,x), f(x,0), f(0,y).",
             "Write Python to test if f is: constant, identity, linear ax+b, multiplicative.",
             "Find ALL solutions—don't stop at the first one that works.",
+            "Return the final answer in \\boxed{n}, where n ∈ [0, 99999].",
         ],
     ),
     StrategyCard(
@@ -111,6 +120,7 @@ FE_COMBI_STRATEGY_CARDS: list[StrategyCard] = [
             "Write Python to enumerate and count for small n (n=1,2,3,4,5).",
             "Store results in a list. Look for: doubling, factorial growth, polynomial pattern.",
             "Fit a formula and verify it predicts the next case correctly.",
+            "Return the final answer in \\boxed{n}, where n ∈ [0, 99999}.",
         ],
     ),
     StrategyCard(
@@ -119,6 +129,7 @@ FE_COMBI_STRATEGY_CARDS: list[StrategyCard] = [
             "Identify what to count and what constraints to satisfy.",
             "Apply inclusion-exclusion: count(A or B) = count(A) + count(B) - count(A and B).",
             "Verify with brute-force enumeration on small cases.",
+            "Return the final answer in \\boxed{n}, where n ∈ [0, 99999].",
         ],
     ),
 ]
