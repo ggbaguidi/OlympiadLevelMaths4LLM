@@ -180,6 +180,17 @@ class AIMO3Config:
     # for the leading candidate before we stop early.
     # Set to 0 to revert to vote-only early stopping.
     early_stop_min_verified: int = 1
+    
+    # Easy problem early exit: if we get consensus quickly, stop and bank time
+    # This helps accumulate flex pool time for harder problems
+    easy_exit_enabled: bool = True
+    # Time threshold: if we reach consensus within this many seconds, exit early
+    easy_exit_time_threshold_s: float = 60.0
+    # Min votes for easy exit (can be lower than regular early_stop since we require verified)
+    easy_exit_min_votes: int = 3
+    # Require at least this many verified attempts for easy exit
+    easy_exit_min_verified: int = 2
+    
     attempts: int = 8
     workers: int = 16
 
@@ -409,6 +420,16 @@ class AIMO3Config:
         workers = _env_int("AIMO3_WORKERS", AIMO3Config.workers)
         early_stop = _env_int("AIMO3_EARLY_STOP", AIMO3Config.early_stop)
         early_stop_min_verified = _env_int("AIMO3_EARLY_STOP_MIN_VERIFIED", AIMO3Config.early_stop_min_verified)
+
+        # Easy problem early exit
+        easy_exit_enabled = (
+            os.getenv("AIMO3_EASY_EXIT_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+        )
+        easy_exit_time_threshold_s = _env_float(
+            "AIMO3_EASY_EXIT_TIME_THRESHOLD_S", AIMO3Config.easy_exit_time_threshold_s
+        )
+        easy_exit_min_votes = _env_int("AIMO3_EASY_EXIT_MIN_VOTES", AIMO3Config.easy_exit_min_votes)
+        easy_exit_min_verified = _env_int("AIMO3_EASY_EXIT_MIN_VERIFIED", AIMO3Config.easy_exit_min_verified)
 
         turns = _env_int("AIMO3_TURNS", AIMO3Config.turns)
 
@@ -731,6 +752,10 @@ class AIMO3Config:
             code_first_phase_s=code_first_phase_s,
             early_stop=early_stop,
             early_stop_min_verified=early_stop_min_verified,
+            easy_exit_enabled=easy_exit_enabled,
+            easy_exit_time_threshold_s=easy_exit_time_threshold_s,
+            easy_exit_min_votes=easy_exit_min_votes,
+            easy_exit_min_verified=easy_exit_min_verified,
             turns=turns,
             base_problem_timeout=base_problem_timeout,
             high_problem_timeout=high_problem_timeout,

@@ -503,15 +503,16 @@ class AIMO3Solver:
             return float("inf")
         return total_entropy / float(token_count)
 
-    def _should_early_stop(self, detailed: list[AttemptResult]) -> bool:
+    def _should_early_stop(self, detailed: list[AttemptResult], time_spent_s: float = float('inf')) -> bool:
         """Quality-aware early stop.
 
         Default behavior requires at least one clean tool run for the leading candidate
         before early stopping. This reduces the "wrong but popular" failure mode.
+        
+        Easy exit mode: if we get consensus quickly (<60s) with verified support,
+        stop aggressively to bank time for harder problems.
         """
 
-        need = max(0, int(self.cfg.early_stop_min_verified))
-        target_votes = max(1, int(self.cfg.early_stop))
         ranked_all = rank_candidates(detailed, filter_to_verified_if_any=False)
         if not ranked_all:
             return False
@@ -520,6 +521,20 @@ class AIMO3Solver:
         _ = top_ans
         votes = int(top_d.get("votes", 0))
         verified = int(top_d.get("verified", 0))
+        
+        # Easy exit: aggressive early stop for problems solved quickly with good verification
+        if (
+            bool(getattr(self.cfg, "easy_exit_enabled", True))
+            and time_spent_s < float(getattr(self.cfg, "easy_exit_time_threshold_s", 60.0))
+            and votes >= int(getattr(self.cfg, "easy_exit_min_votes", 3))
+            and verified >= int(getattr(self.cfg, "easy_exit_min_verified", 2))
+        ):
+            return True
+        
+        # Standard early stop logic
+        need = max(0, int(self.cfg.early_stop_min_verified))
+        target_votes = max(1, int(self.cfg.early_stop))
+        
         if votes < target_votes:
             return False
         if need <= 0:
@@ -1509,7 +1524,9 @@ class AIMO3Solver:
                                 "flex_pool_remaining_s": round(self._budget_tracker.flex_pool_remaining_s, 1),
                             })
 
-                    if self._should_early_stop(detailed):
+                    # Pass time_spent for easy exit logic
+                    time_spent_for_early_stop = time.time() - problem_start_time
+                    if self._should_early_stop(detailed, time_spent_s=time_spent_for_early_stop):
                         stop_event.set()
                         # Best-effort cancellation of remaining work.
                         for f in list(futures):
