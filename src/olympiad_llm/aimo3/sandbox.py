@@ -76,6 +76,7 @@ class AIMO3Sandbox:
             'import random\n'
             'import itertools\n'
             'import collections\n'
+            'import fractions\n'
             "import sympy as sp\n"
             "import numpy as np\n"
             "import mpmath as mp\n"
@@ -138,9 +139,11 @@ class AIMO3Sandbox:
                 "inside a function call like print(x # comment) - the # hides the closing )."
             )
         
-        # NameError for common functions
+        # NameError for common functions/modules
         if "NameError" in error_text:
-            if "gcd" in error_text:
+            if "fractions" in error_text:
+                hints.append("TIP: Add 'import fractions' or 'from fractions import Fraction'")
+            elif "gcd" in error_text:
                 hints.append("TIP: Add 'from math import gcd'")
             elif "combinations" in error_text or "permutations" in error_text:
                 hints.append("TIP: Add 'from itertools import combinations, permutations'")
@@ -247,6 +250,7 @@ class AIMO3Sandbox:
             'import random\n'
             'import itertools\n'
             'import collections\n'
+            'import fractions\n'
             "import sympy as sp\n"
             "import numpy as np\n"
             "import mpmath as mp\n"
