@@ -152,6 +152,15 @@ class AIMO3Sandbox:
             elif "Counter" in error_text:
                 hints.append("TIP: Add 'from collections import Counter'")
         
+        # mpmath findroot tolerance error - tolerance is too strict at high precision
+        if "ValueError" in error_text and "Could not find root within given tolerance" in error_text:
+            hints.append(
+                "TIP: mpmath findroot tolerance is too strict. Either:\n"
+                "  1. Lower precision: mp.dps = 18\n"
+                "  2. Set explicit tolerance: mp.findroot(f, x0, tol=1e-12)\n"
+                "  3. Use verify=False: mp.findroot(f, x0, verify=False)"
+            )
+        
         if hints:
             return error_text.rstrip() + "\n\n" + "\n".join(hints)
         return error_text
@@ -256,7 +265,7 @@ class AIMO3Sandbox:
             "import mpmath as mp\n"
             "from fractions import Fraction\n"
             'import mpmath\n'
-            'mpmath.mp.dps = 64\n'
+            'mpmath.mp.dps = 18\n'
             "try:\n"
             "    import ortools  # noqa: F401\n"
             "    from ortools.sat.python import cp_model  # noqa: F401\n"
