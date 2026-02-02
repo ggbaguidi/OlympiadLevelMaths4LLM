@@ -81,7 +81,7 @@ class AIMO3Sandbox:
             "import mpmath as mp\n"
             "from fractions import Fraction\n"
             'import mpmath\n'
-            'mpmath.mp.dps = 18\n'
+            'mpmath.mp.dps = 64\n'
             "try:\n"
             "    import ortools  # noqa: F401\n"
             "    from ortools.sat.python import cp_model  # noqa: F401\n"
@@ -226,6 +226,12 @@ class AIMO3Sandbox:
         self.execute("%reset -f")
         self.execute("import gc; gc.collect()")
         self.execute(
+            'import sys\n'
+            '# Increase limit for large integer string conversion (Python 3.11+)\n'
+            'try:\n'
+            '    sys.set_int_max_str_digits(0)  # 0 = unlimited\n'
+            'except AttributeError:\n'
+            '    pass  # Python < 3.11\n'
             'import os\n'
             '_lean_bin = os.environ.get("AIMO3_LEAN_BIN_DIR")\n'
             'if _lean_bin and _lean_bin not in os.environ.get("PATH", ""):\n'
@@ -246,7 +252,7 @@ class AIMO3Sandbox:
             "import mpmath as mp\n"
             "from fractions import Fraction\n"
             'import mpmath\n'
-            'mpmath.mp.dps = 18\n'
+            'mpmath.mp.dps = 64\n'
             "try:\n"
             "    import ortools  # noqa: F401\n"
             "    from ortools.sat.python import cp_model  # noqa: F401\n"
