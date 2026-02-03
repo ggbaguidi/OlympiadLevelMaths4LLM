@@ -794,6 +794,8 @@ class AIMO3Solver:
                     stream=True,
                     extra_body={
                         "min_p": self.cfg.min_p,
+                        "top_p": self.cfg.top_p,
+                        "top_k": self.cfg.top_k,
                         "stop_token_ids": self.stop_token_ids,
                         "return_token_ids": True,
                     },
@@ -1055,6 +1057,8 @@ class AIMO3Solver:
                             stream=False,
                             extra_body={
                                 "min_p": self.cfg.min_p,
+                                "top_p": self.cfg.top_p,
+                                "top_k": self.cfg.top_k,
                                 "stop_token_ids": self.stop_token_ids,
                                 "return_token_ids": False,
                             },

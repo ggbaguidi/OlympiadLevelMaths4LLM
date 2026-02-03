@@ -287,6 +287,8 @@ class AIMO3Config:
     gpu_memory_utilization: float = 0.96
     temperature: float = 0.95
     min_p: float = 0.05
+    top_p: float = 1.0  # Nucleus sampling (1.0 = disabled)
+    top_k: int = -1     # Top-k sampling (-1 = disabled)
 
             # Optional: per-role temperature schedule (general)
     # If a value is None, the solver will fall back to `temperature`.
@@ -568,6 +570,8 @@ class AIMO3Config:
         # Decoding knobs
         temperature = _env_float("AIMO3_TEMPERATURE", AIMO3Config.temperature)
         min_p = _env_float("AIMO3_MIN_P", AIMO3Config.min_p)
+        top_p = _env_float("AIMO3_TOP_P", AIMO3Config.top_p)
+        top_k = _env_int("AIMO3_TOP_K", AIMO3Config.top_k)
 
         entropy_weighting_enabled = (
             os.getenv("AIMO3_ENTROPY_WEIGHTING_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
@@ -739,6 +743,8 @@ class AIMO3Config:
             tiebreak_budget_cap_s=tiebreak_budget_cap_s,
             temperature=temperature,
             min_p=min_p,
+            top_p=top_p,
+            top_k=top_k,
             entropy_weighting_enabled=entropy_weighting_enabled,
             top_logprobs=top_logprobs,
             temperature_exploration=temperature_exploration,
