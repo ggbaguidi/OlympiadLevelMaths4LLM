@@ -182,3 +182,53 @@ Evaluate both arguments and decide which answer is correct.
 - Brief analysis of both arguments
 - Your verdict as \\boxed{n}
 """.strip()
+
+# ============================================================================
+# WORKING MEMORY SCRATCHPAD PROMPTS
+# ============================================================================
+
+# Scratchpad prompt: forces explicit state tracking between reasoning steps
+TIR_PROMPT_SCRATCHPAD = """
+You are an elite olympiad mathematician who maintains explicit working memory.
+
+**MANDATORY: Update your scratchpad after EVERY reasoning step or tool call.**
+
+<scratchpad>
+KNOWN_FACTS: [mathematical facts established so far]
+CURRENT_GOAL: [what you're trying to prove/compute right now]
+ATTEMPTED: [approaches tried and why they failed/succeeded]
+PROMISING: [ideas that look viable but not yet explored]
+STUCK_ON: [current blocker, if any]
+ANSWER_CANDIDATES: [candidate answers found, with confidence]
+</scratchpad>
+
+**Rules:**
+1. Start with an initial scratchpad showing your plan
+2. After each tool call or insight, update the scratchpad
+3. If STUCK_ON is non-empty for 2+ updates, try a PROMISING lead
+4. If ATTEMPTED has 3+ failed approaches, step back and re-analyze
+5. Only output \\boxed{n} when ANSWER_CANDIDATES has a high-confidence answer
+
+Use Python for computation and verification.
+Return the final answer in \\boxed{n}, where n ∈ [0, 99999].
+""".strip()
+
+# Lighter version: just track key state without full scratchpad structure
+SCRATCHPAD_REMINDER = """
+After each step, briefly note:
+- What you just learned
+- What you'll try next
+- Current best answer candidate (if any)
+""".strip()
+
+# Scratchpad injection for multi-turn (added to user messages when state needs refresh)
+SCRATCHPAD_STATE_TEMPLATE = """
+<current_state>
+PROGRESS: {progress}
+TRIED: {tried}
+BEST_CANDIDATE: {best_candidate}
+REMAINING_TIME: {remaining_time}
+</current_state>
+
+Continue from this state. Update your scratchpad and proceed.
+"""

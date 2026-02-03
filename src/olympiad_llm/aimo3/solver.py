@@ -28,6 +28,7 @@ from .prompts import (
     TIR_PROMPT_VERIFICATION, TIR_PROMPT_SMALL_CASES, TIR_PROMPT_SANITY,
     TIR_PROMPT_CONSTRAINT_DISCOVERY, CONSTRAINT_DISCOVERY_PREFIX,
     ADVERSARY_CRITIQUE_PROMPT, ADVERSARY_DEFEND_PROMPT, ADVERSARY_ARBITER_PROMPT,
+    TIR_PROMPT_SCRATCHPAD, SCRATCHPAD_REMINDER,
 )
 from .sandbox import AIMO3Sandbox
 from .vllm_server import VLLMServer
@@ -1442,6 +1443,7 @@ class AIMO3Solver:
             ("small_cases", TIR_PROMPT_SMALL_CASES),  # Novel: solve small n first
             ("sanity", TIR_PROMPT_SANITY),  # Novel: check bounds/properties
             ("constraint_discovery", TIR_PROMPT_CONSTRAINT_DISCOVERY),  # Novel: analyze before solving
+            ("scratchpad", TIR_PROMPT_SCRATCHPAD),  # Novel: explicit working memory
             ("analytic", TIR_PROMPT_ANALYTIC),  # Last (slowest)
         ]
         
@@ -1452,6 +1454,10 @@ class AIMO3Solver:
         if not bool(getattr(cfg, "constraint_discovery_enabled", True)):
             enabled = [(name, prompt) for (name, prompt) in enabled if name != "constraint_discovery"]
         
+        # If scratchpad is disabled globally, remove it
+        if not bool(getattr(cfg, "scratchpad_enabled", True)):
+            enabled = [(name, prompt) for (name, prompt) in enabled if name != "scratchpad"]
+        
         if not enabled:
             enabled = [("standard", TIR_PROMPT_STANDARD)]
         return enabled
@@ -1459,14 +1465,21 @@ class AIMO3Solver:
     def solve_problem(self, problem: str) -> int:
         problem_start_time = time.time()
         
-        # Optionally inject constraint discovery prefix into user prompt
-        # This forces the model to analyze problem structure before solving
+        # Build user prompt with optional enhancements
+        user_input = problem
+        
+        # Optionally inject constraint discovery prefix
         if bool(getattr(self.cfg, "constraint_discovery_enabled", True)) and \
            bool(getattr(self.cfg, "constraint_discovery_prefix_enabled", True)):
-            user_input = f"{CONSTRAINT_DISCOVERY_PREFIX}{problem} {self.cfg.preference_prompt}"
-        else:
-            user_input = f"{problem} {self.cfg.preference_prompt}"
-
+            user_input = f"{CONSTRAINT_DISCOVERY_PREFIX}{user_input}"
+        
+        # Optionally inject scratchpad reminder
+        if bool(getattr(self.cfg, "scratchpad_enabled", True)) and \
+           bool(getattr(self.cfg, "scratchpad_reminder_enabled", True)):
+            user_input = f"{user_input}\n\n{SCRATCHPAD_REMINDER}"
+        
+        # Add preference prompt
+        user_input = f"{user_input} {self.cfg.preference_prompt}"
         pid = stable_problem_id(problem)
 
         # Dynamic budget: use tracker if available, fallback to legacy calculation

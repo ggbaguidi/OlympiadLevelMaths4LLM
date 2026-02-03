@@ -233,6 +233,14 @@ class AIMO3Config:
     # Inject a discovery prefix into the user prompt for all attempts
     constraint_discovery_prefix_enabled: bool = True
 
+    # Working Memory Scratchpad (novel): force explicit state tracking between reasoning steps.
+    # Prevents circular reasoning, tracks attempted approaches, maintains focus on goals.
+    scratchpad_enabled: bool = True
+    # Use the dedicated scratchpad prompt for some attempts
+    scratchpad_prompt_fraction: float = 0.20  # 20% of attempts use scratchpad prompt
+    # Inject lightweight scratchpad reminder into user prompts
+    scratchpad_reminder_enabled: bool = True
+
     # Recovery attempts (general robustness)
     # If an attempt aborts due to tool errors (or is very error-heavy), optionally schedule
     # an extra "recovery" attempt to salvage a valid answer.
@@ -582,6 +590,17 @@ class AIMO3Config:
             os.getenv("AIMO3_CONSTRAINT_DISCOVERY_PREFIX_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
         )
 
+        # Working memory scratchpad (novel approach for multi-step reasoning)
+        scratchpad_enabled = (
+            os.getenv("AIMO3_SCRATCHPAD_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+        )
+        scratchpad_prompt_fraction = _env_float(
+            "AIMO3_SCRATCHPAD_PROMPT_FRACTION", AIMO3Config.scratchpad_prompt_fraction
+        )
+        scratchpad_reminder_enabled = (
+            os.getenv("AIMO3_SCRATCHPAD_REMINDER_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+        )
+
         recovery_attempts_enabled = (
             os.getenv("AIMO3_RECOVERY_ATTEMPTS_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
         )
@@ -769,6 +788,9 @@ class AIMO3Config:
             constraint_discovery_enabled=constraint_discovery_enabled,
             constraint_discovery_prompt_fraction=constraint_discovery_prompt_fraction,
             constraint_discovery_prefix_enabled=constraint_discovery_prefix_enabled,
+            scratchpad_enabled=scratchpad_enabled,
+            scratchpad_prompt_fraction=scratchpad_prompt_fraction,
+            scratchpad_reminder_enabled=scratchpad_reminder_enabled,
             recovery_attempts_enabled=recovery_attempts_enabled,
             recovery_attempts_cap=recovery_attempts_cap,
             recovery_trigger_python_errors=recovery_trigger_python_errors,
