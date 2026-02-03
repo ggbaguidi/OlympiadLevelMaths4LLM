@@ -23,7 +23,11 @@ from typing import Optional
 
 from .config import AIMO3Config
 from .errors import OptionalDependencyError
-from .prompts import TIR_PROMPT_ANALYTIC, TIR_PROMPT_CODE_FIRST, TIR_PROMPT_STANDARD, TIR_PROMPT_VERIFICATION, TIR_PROMPT_SMALL_CASES, TIR_PROMPT_SANITY
+from .prompts import (
+    TIR_PROMPT_ANALYTIC, TIR_PROMPT_CODE_FIRST, TIR_PROMPT_STANDARD, 
+    TIR_PROMPT_VERIFICATION, TIR_PROMPT_SMALL_CASES, TIR_PROMPT_SANITY,
+    TIR_PROMPT_CONSTRAINT_DISCOVERY, CONSTRAINT_DISCOVERY_PREFIX,
+)
 from .sandbox import AIMO3Sandbox
 from .vllm_server import VLLMServer
 from .wickelgren import augment_system_prompt_with_meta
@@ -1270,6 +1274,9 @@ class AIMO3Solver:
 
         Controlled by cfg.disabled_prompts (comma-separated list).
         Always returns at least one spec (falls back to standard).
+        
+        If constraint_discovery is enabled, includes the discovery prompt
+        based on constraint_discovery_prompt_fraction.
         """
 
         disabled_raw = str(getattr(cfg, "disabled_prompts", "") or "")
@@ -1281,16 +1288,31 @@ class AIMO3Solver:
             ("verification", TIR_PROMPT_VERIFICATION),
             ("small_cases", TIR_PROMPT_SMALL_CASES),  # Novel: solve small n first
             ("sanity", TIR_PROMPT_SANITY),  # Novel: check bounds/properties
+            ("constraint_discovery", TIR_PROMPT_CONSTRAINT_DISCOVERY),  # Novel: analyze before solving
             ("analytic", TIR_PROMPT_ANALYTIC),  # Last (slowest)
         ]
+        
+        # Filter disabled prompts
         enabled = [(name, prompt) for (name, prompt) in specs if name not in disabled]
+        
+        # If constraint discovery is disabled globally, remove it
+        if not bool(getattr(cfg, "constraint_discovery_enabled", True)):
+            enabled = [(name, prompt) for (name, prompt) in enabled if name != "constraint_discovery"]
+        
         if not enabled:
             enabled = [("standard", TIR_PROMPT_STANDARD)]
         return enabled
 
     def solve_problem(self, problem: str) -> int:
         problem_start_time = time.time()
-        user_input = f"{problem} {self.cfg.preference_prompt}"
+        
+        # Optionally inject constraint discovery prefix into user prompt
+        # This forces the model to analyze problem structure before solving
+        if bool(getattr(self.cfg, "constraint_discovery_enabled", True)) and \
+           bool(getattr(self.cfg, "constraint_discovery_prefix_enabled", True)):
+            user_input = f"{CONSTRAINT_DISCOVERY_PREFIX}{problem} {self.cfg.preference_prompt}"
+        else:
+            user_input = f"{problem} {self.cfg.preference_prompt}"
 
         pid = stable_problem_id(problem)
 

@@ -224,6 +224,15 @@ class AIMO3Config:
     # Recycling means closing it and creating a fresh sandbox to keep the pool healthy.
     recycle_sandbox_after_python_errors: int = 4
 
+    # Constraint Discovery (novel): force the model to analyze problem structure before solving.
+    # This helps with hard problems where jumping straight to computation leads to wrong approaches.
+    # The model must first identify: answer type, constraints, impossible values, candidate techniques.
+    constraint_discovery_enabled: bool = True
+    # Use the dedicated constraint discovery prompt for some attempts
+    constraint_discovery_prompt_fraction: float = 0.25  # 25% of attempts use discovery prompt
+    # Inject a discovery prefix into the user prompt for all attempts
+    constraint_discovery_prefix_enabled: bool = True
+
     # Recovery attempts (general robustness)
     # If an attempt aborts due to tool errors (or is very error-heavy), optionally schedule
     # an extra "recovery" attempt to salvage a valid answer.
@@ -550,6 +559,17 @@ class AIMO3Config:
             "AIMO3_RECYCLE_SANDBOX_AFTER_PYTHON_ERRORS", AIMO3Config.recycle_sandbox_after_python_errors
         )
 
+        # Constraint discovery (novel approach for hard problems)
+        constraint_discovery_enabled = (
+            os.getenv("AIMO3_CONSTRAINT_DISCOVERY_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+        )
+        constraint_discovery_prompt_fraction = _env_float(
+            "AIMO3_CONSTRAINT_DISCOVERY_PROMPT_FRACTION", AIMO3Config.constraint_discovery_prompt_fraction
+        )
+        constraint_discovery_prefix_enabled = (
+            os.getenv("AIMO3_CONSTRAINT_DISCOVERY_PREFIX_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+        )
+
         recovery_attempts_enabled = (
             os.getenv("AIMO3_RECOVERY_ATTEMPTS_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
         )
@@ -717,6 +737,9 @@ class AIMO3Config:
             abort_attempt_after_python_errors=abort_attempt_after_python_errors,
             abort_attempt_after_consecutive_python_errors=abort_attempt_after_consecutive_python_errors,
             recycle_sandbox_after_python_errors=recycle_sandbox_after_python_errors,
+            constraint_discovery_enabled=constraint_discovery_enabled,
+            constraint_discovery_prompt_fraction=constraint_discovery_prompt_fraction,
+            constraint_discovery_prefix_enabled=constraint_discovery_prefix_enabled,
             recovery_attempts_enabled=recovery_attempts_enabled,
             recovery_attempts_cap=recovery_attempts_cap,
             recovery_trigger_python_errors=recovery_trigger_python_errors,

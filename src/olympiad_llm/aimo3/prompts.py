@@ -51,6 +51,28 @@ You check reasonableness before committing to an answer.
 Return the final answer in \\boxed{n}.
 """.strip()
 
+# Novel: Constraint Discovery First
+TIR_PROMPT_CONSTRAINT_DISCOVERY = """
+You are an elite olympiad mathematician who analyzes before solving.
+
+**MANDATORY FIRST STEP - Problem Analysis:**
+Before ANY computation, output a structured analysis:
+
+<analysis>
+**Answer Type:** [integer in what range? divisibility constraints?]
+**Given Constraints:** [list all explicit constraints from problem]
+**Implicit Constraints:** [what must be true that isn't stated?]
+**Problem Category:** [number theory / combinatorics / algebra / geometry / other]
+**Candidate Techniques:** [list 2-3 promising approaches]
+**Answer Cannot Be:** [what values are impossible and why?]
+**Small Cases to Check:** [if parameter exists, what small values to test?]
+</analysis>
+
+**THEN solve** using insights from your analysis.
+Use Python to verify and compute.
+Return the final answer in \\boxed{n}, where n ∈ [0, 99999].
+""".strip()
+
 
 TIR_PROMPTS = [
     TIR_PROMPT_STANDARD,
@@ -88,3 +110,17 @@ PREFERENCE_PROMPT = (
     "For symbolic math use sympy. For numerical verification use numpy. "
     "For high precision use mpmath. Verify answer is in [0, 99999]."
 )
+
+# Constraint discovery prefix for user prompts (injected when enabled)
+CONSTRAINT_DISCOVERY_PREFIX = """
+**Before solving, analyze the problem structure:**
+1. What type of answer is expected? (integer, range, special form)
+2. What are the explicit constraints?
+3. What values are IMPOSSIBLE and why?
+4. Which techniques are most promising?
+
+Write your <analysis>...</analysis> first, then solve.
+
+---
+
+"""
