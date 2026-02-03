@@ -27,6 +27,7 @@ from .prompts import (
     TIR_PROMPT_ANALYTIC, TIR_PROMPT_CODE_FIRST, TIR_PROMPT_STANDARD, 
     TIR_PROMPT_VERIFICATION, TIR_PROMPT_SMALL_CASES, TIR_PROMPT_SANITY,
     TIR_PROMPT_CONSTRAINT_DISCOVERY, CONSTRAINT_DISCOVERY_PREFIX,
+    ADVERSARY_CRITIQUE_PROMPT, ADVERSARY_DEFEND_PROMPT, ADVERSARY_ARBITER_PROMPT,
 )
 from .sandbox import AIMO3Sandbox
 from .vllm_server import VLLMServer
@@ -1268,6 +1269,158 @@ class AIMO3Solver:
             return None
         return best_cand
 
+    def _adversarial_debate(
+        self,
+        user_input: str,
+        candidate: int,
+        candidate_reasoning: str | None,
+        debate_deadline: float,
+        problem_id: str | None = None,
+    ) -> tuple[int | None, dict]:
+        """Run adversarial debate on a candidate answer.
+        
+        Process:
+        1. Adversary critiques the candidate answer
+        2. If flaw found, defender responds
+        3. If answers differ, arbiter decides
+        
+        Returns:
+            (final_answer, debate_info_dict)
+        """
+        debate_info: dict = {
+            "original_candidate": candidate,
+            "critique_found_flaw": False,
+            "revised_answer": None,
+            "arbiter_decision": None,
+        }
+        
+        if time.time() >= debate_deadline:
+            return None, debate_info
+        
+        stop_event = threading.Event()
+        rounds = max(1, int(getattr(self.cfg, "adversarial_debate_rounds", 1)))
+        use_arbiter = bool(getattr(self.cfg, "adversarial_debate_use_arbiter", True))
+        
+        current_answer = candidate
+        current_reasoning = candidate_reasoning or f"The answer is {candidate}."
+        
+        for round_idx in range(rounds):
+            if time.time() >= debate_deadline:
+                break
+            
+            # Phase 1: Adversary critiques
+            critique_problem = (
+                f"{user_input}\n\n"
+                f"---\n"
+                f"**PROPOSED SOLUTION:**\n"
+                f"Answer: {current_answer}\n"
+                f"Reasoning: {current_reasoning[:2000] if current_reasoning else 'Not provided'}\n"
+                f"---\n\n"
+                f"Your task: Find flaws in this solution. "
+                f"Use Python to check edge cases and verify claims. "
+                f"Output FLAW_FOUND if you find an error, or NO_FLAW_FOUND if the solution is correct."
+            )
+            
+            attempt_idx = 20000 + round_idx * 10
+            critique_result = self._process_attempt(
+                critique_problem,
+                ADVERSARY_CRITIQUE_PROMPT,
+                attempt_idx,
+                f"adversary_critique:round={round_idx}",
+                stop_event,
+                debate_deadline,
+                problem_id,
+            )
+            
+            critique_text = critique_result.output_text or ""
+            flaw_found = "FLAW_FOUND" in critique_text.upper() and "NO_FLAW" not in critique_text.upper()
+            
+            debate_info[f"round_{round_idx}_critique"] = {
+                "flaw_found": flaw_found,
+                "text_snippet": critique_text[-500:] if critique_text else None,
+            }
+            
+            if not flaw_found:
+                # No flaw found, answer stands
+                continue
+            
+            debate_info["critique_found_flaw"] = True
+            
+            # Phase 2: Defender responds to critique
+            if time.time() >= debate_deadline:
+                break
+                
+            defend_problem = (
+                f"{user_input}\n\n"
+                f"---\n"
+                f"**YOUR ORIGINAL ANSWER:** {current_answer}\n"
+                f"**CRITIQUE:** {critique_text[-1500:]}\n"
+                f"---\n\n"
+                f"Respond to the critique. If it's valid, revise your answer. "
+                f"If it's wrong, explain why and maintain your answer. "
+                f"Output your final answer as \\boxed{{n}}."
+            )
+            
+            defend_result = self._process_attempt(
+                defend_problem,
+                ADVERSARY_DEFEND_PROMPT,
+                attempt_idx + 1,
+                f"adversary_defend:round={round_idx}",
+                stop_event,
+                debate_deadline,
+                problem_id,
+            )
+            
+            defend_answer = defend_result.answer
+            defend_text = defend_result.output_text or ""
+            
+            debate_info[f"round_{round_idx}_defend"] = {
+                "revised": defend_answer is not None and defend_answer != current_answer,
+                "new_answer": defend_answer,
+            }
+            
+            if defend_answer is not None and defend_answer != current_answer:
+                debate_info["revised_answer"] = defend_answer
+                
+                # Phase 3: Arbiter decides if answers differ and arbiter is enabled
+                if use_arbiter and time.time() < debate_deadline:
+                    arbiter_problem = (
+                        f"{user_input}\n\n"
+                        f"---\n"
+                        f"**ANSWER A:** {current_answer}\n"
+                        f"**ANSWER B:** {defend_answer}\n"
+                        f"**DEBATE CONTEXT:**\n"
+                        f"A critique found a potential flaw in Answer A.\n"
+                        f"The defender proposed Answer B in response.\n"
+                        f"---\n\n"
+                        f"You are the arbiter. Verify both answers independently using Python. "
+                        f"Choose the correct one and output \\boxed{{n}}."
+                    )
+                    
+                    arbiter_result = self._process_attempt(
+                        arbiter_problem,
+                        ADVERSARY_ARBITER_PROMPT,
+                        attempt_idx + 2,
+                        f"adversary_arbiter:round={round_idx}",
+                        stop_event,
+                        debate_deadline,
+                        problem_id,
+                    )
+                    
+                    arbiter_answer = arbiter_result.answer
+                    debate_info["arbiter_decision"] = arbiter_answer
+                    
+                    if arbiter_answer is not None:
+                        current_answer = arbiter_answer
+                        current_reasoning = arbiter_result.output_text
+                else:
+                    # No arbiter, accept defender's revision
+                    current_answer = defend_answer
+                    current_reasoning = defend_text
+        
+        debate_info["final_answer"] = current_answer
+        return current_answer, debate_info
+
     @staticmethod
     def _enabled_prompt_specs(cfg: AIMO3Config) -> list[tuple[str, str]]:
         """Return enabled (name, prompt) pairs for first-stage rotation.
@@ -1896,6 +2049,52 @@ class AIMO3Solver:
                 "candidates": [int(top_ans), int(runner_ans)],
                 "choice": (int(tb_res.answer) if isinstance(tb_res.answer, int) else None),
                 "used": bool(tiebreak_used),
+            }
+
+        # Adversarial debate: when verification/tiebreak didn't resolve uncertainty,
+        # run an adversarial critique-defend cycle on the top answer.
+        # This catches subtle reasoning errors that simple verification misses.
+        remaining3 = deadline - time.time()
+        adversarial_used = False
+        if (
+            bool(getattr(self.cfg, "adversarial_debate_enabled", True))
+            and verified_choice is None  # Second-stage didn't decide
+            and not tiebreak_used  # Tiebreak didn't help either
+            and remaining3 >= float(getattr(self.cfg, "adversarial_debate_min_remaining_s", 30.0))
+            and int(top_d.get("verified", 0)) <= 0  # Top answer lacks strong verification
+        ):
+            debate_budget = min(
+                float(getattr(self.cfg, "adversarial_debate_budget_cap_s", 60.0)),
+                remaining3 * 0.70
+            )
+            debate_deadline = time.time() + max(10.0, debate_budget)
+            
+            # Get reasoning from top attempt for the critique
+            top_reasoning = None
+            for r in detailed:
+                if r.answer == top_ans and r.output_text:
+                    top_reasoning = r.output_text
+                    break
+            
+            debate_answer, debate_info = self._adversarial_debate(
+                user_input,
+                candidate=int(top_ans),
+                candidate_reasoning=top_reasoning,
+                debate_deadline=debate_deadline,
+                problem_id=pid,
+            )
+            
+            if debate_answer is not None and debate_answer != top_ans:
+                chosen = debate_answer
+                adversarial_used = True
+            
+            decision["adversarial_debate"] = {
+                "enabled": True,
+                "budget_s": float(debate_budget),
+                "original": int(top_ans),
+                "final": int(debate_answer) if debate_answer is not None else None,
+                "changed": adversarial_used,
+                "info": debate_info,
             }
 
         self._trace.record(

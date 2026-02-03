@@ -345,6 +345,18 @@ class AIMO3Config:
     second_stage_verify_workers_cap: int = 2
     second_stage_verify_attempt_base: int = 10_000
 
+    # Adversarial debate verification (novel): when second-stage verify is inconclusive,
+    # run an adversarial debate where one agent critiques and another defends.
+    # This catches subtle errors that simple verification misses.
+    adversarial_debate_enabled: bool = True
+    # Trigger when: second-stage verify didn't decide AND we have time AND top answers are close
+    adversarial_debate_min_remaining_s: float = 30.0
+    adversarial_debate_budget_cap_s: float = 60.0
+    # Number of critique-defend rounds
+    adversarial_debate_rounds: int = 1
+    # If critique finds flaw, run arbiter to pick between original and revised answer
+    adversarial_debate_use_arbiter: bool = True
+
     @staticmethod
     def from_env() -> "AIMO3Config":
         def _env_present(name: str) -> bool:
@@ -665,6 +677,23 @@ class AIMO3Config:
         )
         tiebreak_budget_cap_s = _env_float("AIMO3_TIEBREAK_BUDGET_CAP_S", AIMO3Config.tiebreak_budget_cap_s)
 
+        # Adversarial debate configuration
+        adversarial_debate_enabled = (
+            os.getenv("AIMO3_ADVERSARIAL_DEBATE_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+        )
+        adversarial_debate_min_remaining_s = _env_float(
+            "AIMO3_ADVERSARIAL_DEBATE_MIN_REMAINING_S", AIMO3Config.adversarial_debate_min_remaining_s
+        )
+        adversarial_debate_budget_cap_s = _env_float(
+            "AIMO3_ADVERSARIAL_DEBATE_BUDGET_CAP_S", AIMO3Config.adversarial_debate_budget_cap_s
+        )
+        adversarial_debate_rounds = _env_int(
+            "AIMO3_ADVERSARIAL_DEBATE_ROUNDS", AIMO3Config.adversarial_debate_rounds
+        )
+        adversarial_debate_use_arbiter = (
+            os.getenv("AIMO3_ADVERSARIAL_DEBATE_USE_ARBITER", "1").strip().lower() not in {"0", "false", "no"}
+        )
+
         second_stage_verify_marker = os.getenv(
             "AIMO3_SECOND_STAGE_MARKER", AIMO3Config.second_stage_verify_marker
         ).strip() or AIMO3Config.second_stage_verify_marker
@@ -764,6 +793,11 @@ class AIMO3Config:
             tiebreak_enabled=tiebreak_enabled,
             tiebreak_min_remaining_s=tiebreak_min_remaining_s,
             tiebreak_budget_cap_s=tiebreak_budget_cap_s,
+            adversarial_debate_enabled=adversarial_debate_enabled,
+            adversarial_debate_min_remaining_s=adversarial_debate_min_remaining_s,
+            adversarial_debate_budget_cap_s=adversarial_debate_budget_cap_s,
+            adversarial_debate_rounds=adversarial_debate_rounds,
+            adversarial_debate_use_arbiter=adversarial_debate_use_arbiter,
             temperature=temperature,
             min_p=min_p,
             top_p=top_p,

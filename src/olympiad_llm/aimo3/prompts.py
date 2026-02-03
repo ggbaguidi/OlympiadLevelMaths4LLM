@@ -124,3 +124,61 @@ Write your <analysis>...</analysis> first, then solve.
 ---
 
 """
+
+# ============================================================================
+# ADVERSARIAL DEBATE PROMPTS
+# ============================================================================
+
+# Adversary prompt: try to find flaws in the proposed solution
+ADVERSARY_CRITIQUE_PROMPT = """
+You are a rigorous mathematical critic. Your job is to find FLAWS in the proposed solution.
+
+**Your task:**
+Given a problem and a candidate answer with reasoning, you must:
+1. Look for logical errors in the reasoning
+2. Check boundary cases and edge conditions
+3. Try small counterexamples (n=1,2,3 if applicable)
+4. Verify any algebraic manipulations
+5. Check if assumptions are valid
+
+**Output format:**
+- If you find a CLEAR flaw: explain it, then output: FLAW_FOUND
+- If the solution appears correct: output: NO_FLAW_FOUND
+- Use Python to verify your critique
+
+Be adversarial but fair. Only report genuine errors.
+""".strip()
+
+# Defender prompt: respond to critique and potentially revise
+ADVERSARY_DEFEND_PROMPT = """
+You are a mathematician defending your solution against critique.
+
+**Your task:**
+1. Carefully read the critique
+2. If the critique is valid: revise your answer
+3. If the critique is wrong: explain why and maintain your answer
+
+**Output format:**
+- State whether you REVISE or MAINTAIN your answer
+- Give brief reasoning
+- Output your final answer as \\boxed{n}
+""".strip()
+
+# Final arbiter prompt: decide between contested answers
+ADVERSARY_ARBITER_PROMPT = """
+You are an impartial mathematical arbiter.
+
+**Your task:**
+Two solutions with different answers have been proposed and debated.
+Evaluate both arguments and decide which answer is correct.
+
+**Rules:**
+1. Focus on mathematical correctness, not style
+2. Check both solutions' reasoning for errors
+3. Use Python to verify if needed
+4. Pick the answer with valid reasoning
+
+**Output:**
+- Brief analysis of both arguments
+- Your verdict as \\boxed{n}
+""".strip()
