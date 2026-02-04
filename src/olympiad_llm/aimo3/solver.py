@@ -721,6 +721,7 @@ class AIMO3Solver:
         stop_event: threading.Event,
         deadline: float,
         problem_id: str | None = None,
+        retriever_used: bool = False,
     ) -> AttemptResult:
         if stop_event.is_set() or time.time() > deadline:
             return AttemptResult(
@@ -1194,6 +1195,7 @@ class AIMO3Solver:
                 "timeout_count": int(getattr(result.stats, "timeout_count", 0) or 0),
                 "aborted_for_tool_errors": bool(aborted_for_tool_errors),
                 "had_exception": bool(had_exception),
+                "retriever_used": bool(retriever_used),
                 "assistant_final": self._truncate("\n\n".join(transcript_assistant_final).strip(), max_chars) if max_chars > 0 else "\n\n".join(transcript_assistant_final).strip(),
                 "assistant_commentary": self._truncate("\n\n".join(transcript_assistant_commentary).strip(), max_chars) if max_chars > 0 else "\n\n".join(transcript_assistant_commentary).strip(),
                 "python_calls_text": _cap_list(transcript_python_calls),
@@ -1514,6 +1516,9 @@ class AIMO3Solver:
                 # Graceful degradation: don't fail the solve if retrieval fails
                 pass
         
+        # Flag indicating retriever was actually used (for trace stats)
+        _retriever_used = bool(retrieved_context)
+        
         # Inject retrieved knowledge at the beginning
         if retrieved_context:
             user_input = f"{retrieved_context}{user_input}"
@@ -1605,6 +1610,10 @@ class AIMO3Solver:
             "attempts": int(self.cfg.attempts),
             "workers": int(self.cfg.workers),
             "sandbox_pool_size": int(getattr(self.cfg, "sandbox_pool_size", 0) or 0),
+            # Retriever status for this problem
+            "retriever_enabled": self._retriever is not None,
+            "retriever_used": bool(retrieved_context),
+            "retriever_stats": retriever_metadata if retriever_metadata else None,
         }
         # Add dynamic budget tracker info if available
         if hasattr(self, '_budget_tracker'):
@@ -1657,6 +1666,7 @@ class AIMO3Solver:
                         stop_event,
                         attempt_deadline,
                         pid,
+                        _retriever_used,
                     )
                 )
 
@@ -1892,6 +1902,7 @@ class AIMO3Solver:
                         stop_event,
                         retry_deadline,
                         pid,
+                        _retriever_used,
                     )
                     for (sys_prompt, attempt_idx, attempt_tag) in retry_tasks
                 ]
@@ -1990,6 +2001,7 @@ class AIMO3Solver:
                 stop_event=threading.Event(),
                 deadline=min(cr_deadline, deadline),
                 problem_id=pid,
+                retriever_used=_retriever_used,
             )
             detailed.append(cr_result)
             
@@ -2099,6 +2111,7 @@ class AIMO3Solver:
                 stop_event=threading.Event(),
                 deadline=min(tb_deadline, deadline),
                 problem_id=pid,
+                retriever_used=_retriever_used,
             )
             detailed.append(tb_res)
             if isinstance(tb_res.answer, int) and tb_res.answer in {int(top_ans), int(runner_ans)}:
