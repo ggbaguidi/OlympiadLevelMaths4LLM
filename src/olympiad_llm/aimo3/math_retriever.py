@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import pickle
 import time
 from dataclasses import dataclass
@@ -21,6 +22,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -165,7 +168,7 @@ class MathRetriever:
         top_k: int = 5,
         concept_types: list[str] | None = None,
         min_score: float = 0.0,
-    ) -> list[RetrievalResult]:
+    ) -> tuple[list[RetrievalResult], dict[str, Any]]:
         """
         Retrieve top-k most relevant concepts for a query.
         
@@ -176,8 +179,13 @@ class MathRetriever:
             min_score: Minimum similarity score threshold
             
         Returns:
-            List of RetrievalResult sorted by relevance (highest first)
+            Tuple of (results, metadata) where:
+            - results: List of RetrievalResult sorted by relevance (highest first)
+            - metadata: Dict with timing and stats (retrieval_time_ms, query_len, results_count, etc.)
         """
+        start_time = time.time()
+        query_len = len(query)
+        
         # Encode query
         query_emb = self.encode_query(query)
         query_emb_norm = query_emb / (np.linalg.norm(query_emb) + 1e-9)
@@ -210,7 +218,24 @@ class MathRetriever:
                 rank=rank + 1,
             ))
         
-        return results
+        elapsed_ms = (time.time() - start_time) * 1000
+        
+        # Return results and metadata for tracing
+        metadata = {
+            "retrieval_time_ms": round(elapsed_ms, 2),
+            "query_len": query_len,
+            "results_count": len(results),
+            "top_k_requested": top_k,
+            "min_score_threshold": min_score,
+            "concept_types_filtered": concept_types is not None,
+            "avg_score": round(np.mean([r.score for r in results]), 3) if results else 0.0,
+        }
+        
+        logger.debug(
+            f"Retrieved {len(results)} concepts for {query_len}-char query in {elapsed_ms:.1f}ms"
+        )
+        
+        return results, metadata
     
     def retrieve_for_problem(
         self,
@@ -218,11 +243,13 @@ class MathRetriever:
         top_k: int = 5,
         include_examples: bool = True,
         include_definitions: bool = True,
-    ) -> str:
+    ) -> tuple[str, dict[str, Any]]:
         """
         Retrieve relevant concepts and format for prompt injection.
         
-        Returns a formatted string ready to inject into the LLM prompt.
+        Returns tuple of (formatted_string, metadata) where:
+        - formatted_string: Ready to inject into the LLM prompt
+        - metadata: Retrieval stats for tracing
         """
         # Filter concept types based on preferences
         concept_types = None
@@ -233,7 +260,7 @@ class MathRetriever:
             if include_examples:
                 concept_types.append("example")
         
-        results = self.retrieve(
+        results, metadata = self.retrieve(
             query=problem,
             top_k=top_k,
             concept_types=concept_types,
@@ -241,14 +268,14 @@ class MathRetriever:
         )
         
         if not results:
-            return ""
+            return "", metadata
         
         lines = ["**Potentially Relevant Mathematical Concepts:**", ""]
         for r in results:
             lines.append(f"- {r.concept.to_prompt_format()}")
             lines.append("")
         
-        return "\n".join(lines)
+        return "\n".join(lines), metadata
 
 
 def benchmark_retrieval(kb_dir: str, test_queries: list[str] | None = None):

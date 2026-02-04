@@ -1488,36 +1488,28 @@ class AIMO3Solver:
         
         # Optionally inject retrieved mathematical knowledge (RAG)
         retrieved_context = ""
+        retriever_metadata = {}
         if self._retriever is not None:
             try:
                 top_k = int(getattr(self.cfg, "retriever_top_k", 5))
                 include_examples = bool(getattr(self.cfg, "retriever_include_examples", True))
                 include_definitions = bool(getattr(self.cfg, "retriever_include_definitions", True))
-                min_score = float(getattr(self.cfg, "retriever_min_score", 0.35))
                 
-                # Retrieve relevant concepts
-                concept_types = None
-                if not include_examples or not include_definitions:
-                    concept_types = ["theorem", "lemma", "corollary", "proposition", "axiom"]
-                    if include_definitions:
-                        concept_types.append("definition")
-                    if include_examples:
-                        concept_types.append("example")
-                
-                results = self._retriever.retrieve(
-                    query=problem,
+                # Retrieve relevant concepts with timing
+                retrieved_context, retriever_metadata = self._retriever.retrieve_for_problem(
+                    problem=problem,
                     top_k=top_k,
-                    concept_types=concept_types,
-                    min_score=min_score,
+                    include_examples=include_examples,
+                    include_definitions=include_definitions,
                 )
                 
-                if results:
-                    concept_lines = []
-                    for r in results:
-                        concept_lines.append(f"- {r.concept.to_prompt_format()}")
-                    retrieved_context = RETRIEVED_KNOWLEDGE_PREFIX.format(
-                        concepts="\n".join(concept_lines)
-                    )
+                if retriever_metadata:
+                    # Log retriever stats to trace
+                    self._trace.record({
+                        "event": "retriever_used",
+                        "problem_id": stable_problem_id(problem),
+                        "retriever_stats": retriever_metadata,
+                    })
             except Exception:  # noqa: BLE001
                 # Graceful degradation: don't fail the solve if retrieval fails
                 pass
