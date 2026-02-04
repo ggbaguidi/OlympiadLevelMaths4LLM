@@ -53,6 +53,7 @@ from .tool_drain import iter_tool_calls
 from .python_timeouts import parse_timeout_directive, parse_timeout_error
 from .python_rewrite import rewrite_python_tool_code
 
+from .math_retriever import MathRetriever
 
 def _require_openai():
     try:
@@ -663,7 +664,6 @@ class AIMO3Solver:
             cpu_only = bool(getattr(self.cfg, "retriever_cpu_only", True))
             if kb_path:
                 try:
-                    from .math_retriever import MathRetriever
                     self._retriever = MathRetriever.load(kb_path, model_path=model_path, cpu_only=cpu_only)
                     # Warm up the embedding model to avoid first-query latency
                     if bool(getattr(self.cfg, "retriever_warmup_on_init", True)):
