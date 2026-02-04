@@ -29,6 +29,7 @@ REQUIRED_LIBRARIES = [
     "openai_harmony",
     "mpmath",
     "ortools",
+    "sentence-transformers"
 ]
 
 
