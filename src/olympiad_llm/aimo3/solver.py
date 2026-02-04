@@ -662,16 +662,24 @@ class AIMO3Solver:
             kb_path = str(getattr(self.cfg, "retriever_knowledge_base_path", "") or "")
             model_path = str(getattr(self.cfg, "retriever_model_path", "") or "") or None
             cpu_only = bool(getattr(self.cfg, "retriever_cpu_only", True))
+            print(f"[Retriever] Attempting to load from kb_path={kb_path}, model_path={model_path}, cpu_only={cpu_only}")
             if kb_path:
                 try:
+                    from .math_retriever import MathRetriever
                     self._retriever = MathRetriever.load(kb_path, model_path=model_path, cpu_only=cpu_only)
+                    print(f"[Retriever] ✓ Loaded {len(self._retriever.concepts)} concepts")
                     # Warm up the embedding model to avoid first-query latency
                     if bool(getattr(self.cfg, "retriever_warmup_on_init", True)):
+                        print("[Retriever] Warming up embedding model...")
                         _ = self._retriever.encode_query("warmup query")
+                        print("[Retriever] ✓ Warmup complete")
                 except Exception as e:  # noqa: BLE001
-                    import warnings
-                    warnings.warn(f"Failed to load math retriever from {kb_path}: {e}")
+                    import traceback
+                    print(f"[Retriever] ✗ Failed to load: {e}")
+                    traceback.print_exc()
                     self._retriever = None
+            else:
+                print("[Retriever] ✗ kb_path is empty, skipping")
 
     def close(self) -> None:
         if hasattr(self, "sandbox_pool"):
