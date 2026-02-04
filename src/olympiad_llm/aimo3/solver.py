@@ -28,7 +28,7 @@ from .prompts import (
     TIR_PROMPT_VERIFICATION, TIR_PROMPT_SMALL_CASES, TIR_PROMPT_SANITY,
     TIR_PROMPT_CONSTRAINT_DISCOVERY, CONSTRAINT_DISCOVERY_PREFIX,
     ADVERSARY_CRITIQUE_PROMPT, ADVERSARY_DEFEND_PROMPT, ADVERSARY_ARBITER_PROMPT,
-    TIR_PROMPT_SCRATCHPAD, SCRATCHPAD_REMINDER,
+    TIR_PROMPT_SCRATCHPAD, SCRATCHPAD_REMINDER, RETRIEVED_KNOWLEDGE_PREFIX,
 )
 from .sandbox import AIMO3Sandbox
 from .vllm_server import VLLMServer
@@ -654,6 +654,24 @@ class AIMO3Solver:
             path=str(getattr(self.cfg, "trace_path", "aimo3_trace.jsonl")),
             include_problem_text=bool(getattr(self.cfg, "trace_include_problem_text", False)),
         )
+
+        # Initialize math knowledge retriever (RAG) if enabled
+        self._retriever = None
+        if bool(getattr(self.cfg, "retriever_enabled", False)):
+            kb_path = str(getattr(self.cfg, "retriever_knowledge_base_path", "") or "")
+            model_path = str(getattr(self.cfg, "retriever_model_path", "") or "") or None
+            cpu_only = bool(getattr(self.cfg, "retriever_cpu_only", True))
+            if kb_path:
+                try:
+                    from .math_retriever import MathRetriever
+                    self._retriever = MathRetriever.load(kb_path, model_path=model_path, cpu_only=cpu_only)
+                    # Warm up the embedding model to avoid first-query latency
+                    if bool(getattr(self.cfg, "retriever_warmup_on_init", True)):
+                        _ = self._retriever.encode_query("warmup query")
+                except Exception as e:  # noqa: BLE001
+                    import warnings
+                    warnings.warn(f"Failed to load math retriever from {kb_path}: {e}")
+                    self._retriever = None
 
     def close(self) -> None:
         if hasattr(self, "sandbox_pool"):
@@ -1467,6 +1485,46 @@ class AIMO3Solver:
         
         # Build user prompt with optional enhancements
         user_input = problem
+        
+        # Optionally inject retrieved mathematical knowledge (RAG)
+        retrieved_context = ""
+        if self._retriever is not None:
+            try:
+                top_k = int(getattr(self.cfg, "retriever_top_k", 5))
+                include_examples = bool(getattr(self.cfg, "retriever_include_examples", True))
+                include_definitions = bool(getattr(self.cfg, "retriever_include_definitions", True))
+                min_score = float(getattr(self.cfg, "retriever_min_score", 0.35))
+                
+                # Retrieve relevant concepts
+                concept_types = None
+                if not include_examples or not include_definitions:
+                    concept_types = ["theorem", "lemma", "corollary", "proposition", "axiom"]
+                    if include_definitions:
+                        concept_types.append("definition")
+                    if include_examples:
+                        concept_types.append("example")
+                
+                results = self._retriever.retrieve(
+                    query=problem,
+                    top_k=top_k,
+                    concept_types=concept_types,
+                    min_score=min_score,
+                )
+                
+                if results:
+                    concept_lines = []
+                    for r in results:
+                        concept_lines.append(f"- {r.concept.to_prompt_format()}")
+                    retrieved_context = RETRIEVED_KNOWLEDGE_PREFIX.format(
+                        concepts="\n".join(concept_lines)
+                    )
+            except Exception:  # noqa: BLE001
+                # Graceful degradation: don't fail the solve if retrieval fails
+                pass
+        
+        # Inject retrieved knowledge at the beginning
+        if retrieved_context:
+            user_input = f"{retrieved_context}{user_input}"
         
         # Optionally inject constraint discovery prefix
         if bool(getattr(self.cfg, "constraint_discovery_enabled", True)) and \

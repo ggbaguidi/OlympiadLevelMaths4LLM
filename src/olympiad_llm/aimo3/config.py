@@ -353,6 +353,19 @@ class AIMO3Config:
     second_stage_verify_workers_cap: int = 2
     second_stage_verify_attempt_base: int = 10_000
 
+    # Math knowledge retriever (RAG): inject relevant mathematical concepts from a
+    # pre-built knowledge base into the prompt. Helps with theorems, definitions, etc.
+    # The knowledge base must be pre-computed using scripts/extract_math_concepts.py
+    retriever_enabled: bool = False  # Disabled by default (requires knowledge base)
+    retriever_knowledge_base_path: str = ""  # Path to knowledge base directory
+    retriever_model_path: str = ""  # Local path to sentence-transformer model (for offline/Kaggle)
+    retriever_cpu_only: bool = True  # Force CPU-only inference (recommended for Kaggle)
+    retriever_top_k: int = 5  # Number of concepts to retrieve
+    retriever_min_score: float = 0.35  # Minimum similarity threshold
+    retriever_include_examples: bool = True  # Include example problems
+    retriever_include_definitions: bool = True  # Include definitions
+    retriever_warmup_on_init: bool = True  # Pre-load embedding model at solver init
+
     # Adversarial debate verification (novel): when second-stage verify is inconclusive,
     # run an adversarial debate where one agent critiques and another defends.
     # This catches subtle errors that simple verification misses.
@@ -696,6 +709,27 @@ class AIMO3Config:
         )
         tiebreak_budget_cap_s = _env_float("AIMO3_TIEBREAK_BUDGET_CAP_S", AIMO3Config.tiebreak_budget_cap_s)
 
+        # Math knowledge retriever (RAG) configuration
+        retriever_enabled = (
+            os.getenv("AIMO3_RETRIEVER_ENABLED", "0").strip().lower() not in {"0", "false", "no"}
+        )
+        retriever_knowledge_base_path = (os.getenv("AIMO3_RETRIEVER_KB_PATH", "") or "").strip()
+        retriever_model_path = (os.getenv("AIMO3_RETRIEVER_MODEL_PATH", "") or "").strip()
+        retriever_top_k = _env_int("AIMO3_RETRIEVER_TOP_K", AIMO3Config.retriever_top_k)
+        retriever_min_score = _env_float("AIMO3_RETRIEVER_MIN_SCORE", AIMO3Config.retriever_min_score)
+        retriever_include_examples = (
+            os.getenv("AIMO3_RETRIEVER_INCLUDE_EXAMPLES", "1").strip().lower() not in {"0", "false", "no"}
+        )
+        retriever_include_definitions = (
+            os.getenv("AIMO3_RETRIEVER_INCLUDE_DEFINITIONS", "1").strip().lower() not in {"0", "false", "no"}
+        )
+        retriever_cpu_only = (
+            os.getenv("AIMO3_RETRIEVER_CPU_ONLY", "1").strip().lower() not in {"0", "false", "no"}
+        )
+        retriever_warmup_on_init = (
+            os.getenv("AIMO3_RETRIEVER_WARMUP_ON_INIT", "1").strip().lower() not in {"0", "false", "no"}
+        )
+
         # Adversarial debate configuration
         adversarial_debate_enabled = (
             os.getenv("AIMO3_ADVERSARIAL_DEBATE_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
@@ -815,6 +849,15 @@ class AIMO3Config:
             tiebreak_enabled=tiebreak_enabled,
             tiebreak_min_remaining_s=tiebreak_min_remaining_s,
             tiebreak_budget_cap_s=tiebreak_budget_cap_s,
+            retriever_enabled=retriever_enabled,
+            retriever_knowledge_base_path=retriever_knowledge_base_path,
+            retriever_model_path=retriever_model_path,
+            retriever_cpu_only=retriever_cpu_only,
+            retriever_top_k=retriever_top_k,
+            retriever_min_score=retriever_min_score,
+            retriever_include_examples=retriever_include_examples,
+            retriever_include_definitions=retriever_include_definitions,
+            retriever_warmup_on_init=retriever_warmup_on_init,
             adversarial_debate_enabled=adversarial_debate_enabled,
             adversarial_debate_min_remaining_s=adversarial_debate_min_remaining_s,
             adversarial_debate_budget_cap_s=adversarial_debate_budget_cap_s,

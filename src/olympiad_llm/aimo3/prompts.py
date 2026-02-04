@@ -111,6 +111,19 @@ PREFERENCE_PROMPT = (
     "For high precision use mpmath. Verify answer is in [0, 99999]."
 )
 
+# Retrieved knowledge prefix template (injected when retriever is enabled)
+# The {concepts} placeholder is replaced with actual retrieved content
+RETRIEVED_KNOWLEDGE_PREFIX = """
+**Reference Material (potentially relevant mathematical concepts):**
+
+{concepts}
+
+**Note:** Use these references only if directly applicable. The problem may require different techniques.
+
+---
+
+"""
+
 # Constraint discovery prefix for user prompts (injected when enabled)
 CONSTRAINT_DISCOVERY_PREFIX = """
 **Before solving, analyze the problem structure:**
