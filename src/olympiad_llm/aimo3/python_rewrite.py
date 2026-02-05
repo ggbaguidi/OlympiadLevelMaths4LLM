@@ -192,7 +192,7 @@ def _find_bare_names_needing_imports(src: str) -> set[str]:
 
     try:
         toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
-    except tokenize.TokenizeError:
+    except tokenize.TokenError:
         return needed
 
     # Track names that appear to be defined.
