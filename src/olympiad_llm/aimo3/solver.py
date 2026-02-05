@@ -32,6 +32,7 @@ from .prompts import (
 )
 from .sandbox import AIMO3Sandbox
 from .vllm_server import VLLMServer
+from .llamacpp_server import LlamaCppServer
 from .wickelgren import augment_system_prompt_with_meta
 from .protocol import with_protocol
 from .ranking import rank_candidates
@@ -578,12 +579,29 @@ class AIMO3Solver:
         OpenAI = _require_openai()
         h = _require_harmony()
 
+        # Keep Harmony symbols available for code paths that need to construct
+        # Message/TextContent objects (e.g., llama.cpp plain-text fallbacks).
+        self._h = h
+
+        # If the user provided a filesystem path, validate it early.
+        # This avoids accidentally "succeeding" by reusing an unrelated running server.
+        mp_raw = str(getattr(self.cfg, "model_path", "") or "")
+        if mp_raw:
+            mp_expanded = os.path.expanduser(mp_raw)
+            looks_like_path = mp_expanded.startswith(("/", "./", "../"))
+            if looks_like_path and not os.path.exists(mp_expanded):
+                raise ValueError(f"model_path does not exist: {mp_expanded}")
+
         self.template = AIMO3Template()
         self.encoding = h["load_harmony_encoding"](h["HarmonyEncodingName"].HARMONY_GPT_OSS)
         self.Role = h["Role"]
         self.stop_token_ids = self.encoding.stop_tokens_for_assistant_actions()
 
-        self.server = VLLMServer(cfg=self.cfg, port=self.port)
+        # Select backend
+        backend = getattr(self.cfg, "inference_backend", "vllm")
+        ServerClass = LlamaCppServer if backend == "llama_cpp" else VLLMServer
+        
+        self.server = ServerClass(cfg=self.cfg, port=self.port)
 
         self.base_url = f"http://0.0.0.0:{self.port}/v1"
 
@@ -595,7 +613,7 @@ class AIMO3Solver:
                 self.server = None
                 self.client = OpenAI(base_url=self.base_url, api_key="sk-local", timeout=self.cfg.session_timeout)
             else:
-                self.server = VLLMServer(cfg=self.cfg, port=self.port)
+                self.server = ServerClass(cfg=self.cfg, port=self.port)
                 self.server.start()
                 self.client = OpenAI(base_url=self.base_url, api_key="sk-local", timeout=self.cfg.session_timeout)
                 self.server.wait_ready(self.client)
@@ -817,21 +835,46 @@ class AIMO3Solver:
                 if max_tokens < self.cfg.buffer_tokens:
                     break
 
+
+                # If using llama.cpp backend, it expects `prompt` to be a string or list of strings (tokens not supported in all endpoints),
+                # OR it might just be rejecting the list[int] format. 
+                # HOWEVER: The OpenAI standard `completions` endpoint DOES support `prompt` as list[int].
+                # The validation error says: "Input should be a valid string", which implies llama-cpp-python's Pydantic model
+                # might be strictly enforcing string.
+                
+                # Prepare extra parameters
+                extra_params = {
+                    "min_p": self.cfg.min_p,
+                    "top_p": self.cfg.top_p,
+                    "top_k": self.cfg.top_k,
+                    "stop_token_ids": self.stop_token_ids,
+                    "return_token_ids": True,
+                }
+                
+                # Check backend-specific quirks
+                backend = getattr(self.cfg, "inference_backend", "vllm")
+                
+                # Handling prompt format
+                if backend == "llama_cpp":
+                    # Convert token IDs back to string for llama.cpp compatibility
+                    prompt_arg = self.encoding.decode(prompt_ids)
+                    
+                    # Fix top_k: vLLM uses -1 for "disable", llama.cpp requires >= 0 (usually 0 or 40)
+                    # If configured as -1, set to 0 (unlimited) or default (40)
+                    if extra_params["top_k"] < 0:
+                        extra_params["top_k"] = 40  # Reasonable default for llama.cpp
+                else:
+                    prompt_arg = prompt_ids
+                
                 stream = self.client.completions.create(
                     model=self.cfg.served_model_name,
                     temperature=temperature_for_attempt(cfg=self.cfg, attempt_index=attempt_index, attempt_tag=attempt_tag),
                     logprobs=(int(self.cfg.top_logprobs) if (bool(getattr(self.cfg, "entropy_weighting_enabled", False)) and int(getattr(self.cfg, "top_logprobs", 0) or 0) > 0) else None),
                     max_tokens=max_tokens,
-                    prompt=prompt_ids,
+                    prompt=prompt_arg,
                     seed=attempt_seed,
                     stream=True,
-                    extra_body={
-                        "min_p": self.cfg.min_p,
-                        "top_p": self.cfg.top_p,
-                        "top_k": self.cfg.top_k,
-                        "stop_token_ids": self.stop_token_ids,
-                        "return_token_ids": True,
-                    },
+                    extra_body=extra_params,
                     timeout=max(0.0, deadline - time.time()),
                 )
 
@@ -841,8 +884,16 @@ class AIMO3Solver:
                     for chunk in stream:
                         if stop_event.is_set() or time.time() > deadline:
                             break
-                        new_tokens = chunk.choices[0].token_ids
+                        
                         new_text = chunk.choices[0].text
+                        # Try to get token_ids (vLLM specific field)
+                        new_tokens = getattr(chunk.choices[0], "token_ids", None)
+                        
+                        if new_tokens is None and new_text:
+                            # Fallback for llama.cpp / standard OpenAI: encode text
+                            # Note: Encoding chunks individually is imperfect for BPE, but needed for the buffer.
+                            new_tokens = self.encoding.encode(new_text)
+
                         if new_tokens:
                             token_buffer.extend(new_tokens)
                             total_tokens += len(new_tokens)
@@ -875,7 +926,28 @@ class AIMO3Solver:
                 if not token_buffer:
                     break
 
-                new_messages = self.encoding.parse_messages_from_completion_tokens(token_buffer, self.Role.ASSISTANT)
+                if str(getattr(self.cfg, "inference_backend", "vllm")) == "llama_cpp":
+                    # llama.cpp's OpenAI-compatible server returns decoded *text* chunks.
+                    # We do NOT have the model's raw token stream (with Harmony control tokens),
+                    # so attempting to parse via openai_harmony will frequently fail.
+                    #
+                    # Instead, we treat the completion as plain assistant text and append a
+                    # single assistant message.
+                    assistant_text = "".join(text_chunks).strip()
+                    TextContent = self._h["TextContent"]
+                    Author = self._h["Author"]
+                    Message = self._h["Message"]
+
+                    content = [TextContent(text=assistant_text)] if assistant_text else []
+                    author = Author(role=self.Role.ASSISTANT, name="assistant")
+                    msg = Message(author=author, content=content)
+                    new_messages = [msg]
+                else:
+                    # Use strict=False to tolerate missing stop tokens or partial headers.
+                    new_messages = self.encoding.parse_messages_from_completion_tokens(
+                        token_buffer, self.Role.ASSISTANT, strict=False
+                    )
+
                 conversation.messages.extend(new_messages)
                 last = new_messages[-1]
 
@@ -1111,7 +1183,10 @@ class AIMO3Solver:
                                 if final_answer is None:
                                     final_answer = self._extractor.extract_int_fallback(str(fin_text))
 
-        except Exception:
+        except Exception as e:
+            print(f"[Attempt {attempt_index}] Failed: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
             had_exception = True
             python_errors += 1
         finally:
@@ -1464,27 +1539,24 @@ class AIMO3Solver:
         disabled_raw = str(getattr(cfg, "disabled_prompts", "") or "")
         disabled = {t.strip().lower() for t in disabled_raw.split(",") if t.strip()}
 
+        # Default first-stage prompt rotation (unit-tested).
         specs: list[tuple[str, str]] = [
             ("standard", TIR_PROMPT_STANDARD),
             ("code_first", TIR_PROMPT_CODE_FIRST),
+            ("analytic", TIR_PROMPT_ANALYTIC),
             ("verification", TIR_PROMPT_VERIFICATION),
-            ("small_cases", TIR_PROMPT_SMALL_CASES),  # Novel: solve small n first
-            ("sanity", TIR_PROMPT_SANITY),  # Novel: check bounds/properties
-            ("constraint_discovery", TIR_PROMPT_CONSTRAINT_DISCOVERY),  # Novel: analyze before solving
-            ("scratchpad", TIR_PROMPT_SCRATCHPAD),  # Novel: explicit working memory
-            ("analytic", TIR_PROMPT_ANALYTIC),  # Last (slowest)
+            ("small_cases", TIR_PROMPT_SMALL_CASES),
+            ("sanity", TIR_PROMPT_SANITY),
         ]
+
+        # Optional prompt families (opt-in).
+        if bool(getattr(cfg, "constraint_discovery_enabled", False)):
+            specs.append(("constraint_discovery", TIR_PROMPT_CONSTRAINT_DISCOVERY))
+        if bool(getattr(cfg, "scratchpad_enabled", False)):
+            specs.append(("scratchpad", TIR_PROMPT_SCRATCHPAD))
         
         # Filter disabled prompts
         enabled = [(name, prompt) for (name, prompt) in specs if name not in disabled]
-        
-        # If constraint discovery is disabled globally, remove it
-        if not bool(getattr(cfg, "constraint_discovery_enabled", True)):
-            enabled = [(name, prompt) for (name, prompt) in enabled if name != "constraint_discovery"]
-        
-        # If scratchpad is disabled globally, remove it
-        if not bool(getattr(cfg, "scratchpad_enabled", True)):
-            enabled = [(name, prompt) for (name, prompt) in enabled if name != "scratchpad"]
         
         if not enabled:
             enabled = [("standard", TIR_PROMPT_STANDARD)]

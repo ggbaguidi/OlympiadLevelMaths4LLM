@@ -85,6 +85,14 @@ class AIMO3Config:
     kv_cache_dtype: str = "fp8_e4m3"
     dtype: str = "auto"
 
+    # Combined logging path for vLLM or other server logs
+    server_log_path: str = "server.log"
+
+    # Inference server backend: "vllm" (default) or "llama_cpp"
+    inference_backend: str = "vllm"
+    # Number of GPU layers to offload for llama.cpp (-1 = all, 0 = CPU only)
+    llama_cpp_n_gpu_layers: int = -1
+
     # Optional: warm OS page cache by reading model shards before starting vLLM.
     # This reduces cold-start stalls and first-token latency in notebook runtimes.
     preload_model_weights: bool = False
@@ -415,8 +423,11 @@ class AIMO3Config:
         if profile not in {"", "default", "full", "lean"}:
             profile = ""
 
-        model_path = os.getenv("AIMO3_MODEL_PATH", "")
+        model_path = os.path.expanduser(os.getenv("AIMO3_MODEL_PATH", ""))
         served_model_name = os.getenv("AIMO3_SERVED_MODEL_NAME", "gpt-oss")
+        inference_backend = (os.getenv("AIMO3_INFERENCE_BACKEND", AIMO3Config.inference_backend) or "").strip()
+        llama_cpp_n_gpu_layers = _env_int("AIMO3_LLAMA_CPP_N_GPU_LAYERS", AIMO3Config.llama_cpp_n_gpu_layers)
+
         reuse = os.getenv("AIMO3_REUSE_EXISTING_SERVER", "1").strip().lower() not in {"0", "false", "no"}
         wick = os.getenv("AIMO3_WICKELGREN", "1").strip().lower() not in {"0", "false", "no"}
         strategy_pack_mode = (os.getenv("AIMO3_STRATEGY_PACK_MODE", AIMO3Config.strategy_pack_mode) or "").strip()
@@ -428,7 +439,7 @@ class AIMO3Config:
         shuffle_cards = os.getenv("AIMO3_SHUFFLE_CARDS", "1").strip().lower() not in {"0", "false", "no"}
 
         trace_enabled = os.getenv("AIMO3_TRACE", "0").strip().lower() not in {"0", "false", "no"}
-        trace_path = (os.getenv("AIMO3_TRACE_PATH", AIMO3Config.trace_path) or "").strip() or AIMO3Config.trace_path
+        trace_path = os.path.expanduser((os.getenv("AIMO3_TRACE_PATH", AIMO3Config.trace_path) or "").strip() or AIMO3Config.trace_path)
         trace_include_problem_text = (
             os.getenv("AIMO3_TRACE_INCLUDE_PROBLEM_TEXT", "0").strip().lower() not in {"0", "false", "no"}
         )
@@ -713,8 +724,8 @@ class AIMO3Config:
         retriever_enabled = (
             os.getenv("AIMO3_RETRIEVER_ENABLED", "0").strip().lower() not in {"0", "false", "no"}
         )
-        retriever_knowledge_base_path = (os.getenv("AIMO3_RETRIEVER_KB_PATH", "") or "").strip()
-        retriever_model_path = (os.getenv("AIMO3_RETRIEVER_MODEL_PATH", "") or "").strip()
+        retriever_knowledge_base_path = os.path.expanduser((os.getenv("AIMO3_RETRIEVER_KB_PATH", "") or "").strip())
+        retriever_model_path = os.path.expanduser((os.getenv("AIMO3_RETRIEVER_MODEL_PATH", "") or "").strip())
         retriever_top_k = _env_int("AIMO3_RETRIEVER_TOP_K", AIMO3Config.retriever_top_k)
         retriever_min_score = _env_float("AIMO3_RETRIEVER_MIN_SCORE", AIMO3Config.retriever_min_score)
         retriever_include_examples = (
@@ -787,6 +798,8 @@ class AIMO3Config:
             preload_model_weights=preload_model_weights,
             preload_model_workers=preload_model_workers,
             reuse_existing_server=reuse,
+            inference_backend=inference_backend,
+            llama_cpp_n_gpu_layers=llama_cpp_n_gpu_layers,
             wickelgren_strategies_enabled=wick,
             strategy_pack_mode=strategy_pack_mode,
             strategy_packs=strategy_packs,
