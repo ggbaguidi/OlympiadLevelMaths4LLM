@@ -1025,10 +1025,23 @@ class AIMO3Solver:
                         msg = Message(author=author, content=content)
                         new_messages = [msg]
                 else:
-                    # Use strict=False to tolerate missing stop tokens or partial headers.
-                    new_messages = self.encoding.parse_messages_from_completion_tokens(
-                        token_buffer, self.Role.ASSISTANT, strict=False
-                    )
+                    # vLLM should provide valid Harmony completion tokens, but in practice we can
+                    # still observe truncated/partial outputs (deadline, client disconnects, etc.).
+                    # Never crash the whole attempt on a parse failure; fall back to plain text.
+                    try:
+                        new_messages = self.encoding.parse_messages_from_completion_tokens(
+                            token_buffer, self.Role.ASSISTANT, strict=True
+                        )
+                    except Exception:  # noqa: BLE001
+                        assistant_text = "".join(text_chunks).strip()
+                        TextContent = self._h["TextContent"]
+                        Author = self._h["Author"]
+                        Message = self._h["Message"]
+
+                        content = [TextContent(text=assistant_text)] if assistant_text else []
+                        author = Author(role=self.Role.ASSISTANT, name="assistant")
+                        msg = Message(author=author, content=content)
+                        new_messages = [msg]
 
                 conversation.messages.extend(new_messages)
                 last = new_messages[-1]
