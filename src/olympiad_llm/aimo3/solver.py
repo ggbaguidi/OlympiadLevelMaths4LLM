@@ -727,10 +727,30 @@ class AIMO3Solver:
 
         # Creating many kernels in parallel can trigger port selection races in notebook runtimes.
         # Limit concurrency during initialization, while still creating the full pool size.
+        created = 0
         with ThreadPoolExecutor(max_workers=init_workers) as ex:
             futures = [ex.submit(_create) for _ in range(pool_size)]
             for f in as_completed(futures):
-                self.sandbox_pool.put(f.result())
+                try:
+                    sb = f.result()
+                except Exception:  # noqa: BLE001
+                    # Transient kernel startup issues happen; we'll fill the pool below.
+                    continue
+                self.sandbox_pool.put(sb)
+                created += 1
+
+        # Best-effort: fill any missing slots sequentially (reduces port collision races).
+        # Keep this bounded so we don't hang forever on a broken environment.
+        missing = max(0, int(pool_size) - int(created))
+        fill_attempts = 0
+        while missing > 0 and fill_attempts < max(2 * int(pool_size), 4):
+            fill_attempts += 1
+            try:
+                self.sandbox_pool.put(_create())
+                missing -= 1
+            except Exception:  # noqa: BLE001
+                # Give the OS a moment to release ports.
+                time.sleep(0.05)
 
     @property
     def _extractor(self) -> AnswerExtractor:
@@ -866,82 +886,144 @@ class AIMO3Solver:
                 else:
                     prompt_arg = prompt_ids
                 
-                stream = self.client.completions.create(
-                    model=self.cfg.served_model_name,
-                    temperature=temperature_for_attempt(cfg=self.cfg, attempt_index=attempt_index, attempt_tag=attempt_tag),
-                    logprobs=(int(self.cfg.top_logprobs) if (bool(getattr(self.cfg, "entropy_weighting_enabled", False)) and int(getattr(self.cfg, "top_logprobs", 0) or 0) > 0) else None),
-                    max_tokens=max_tokens,
-                    prompt=prompt_arg,
-                    seed=attempt_seed,
-                    stream=True,
-                    extra_body=extra_params,
-                    timeout=max(0.0, deadline - time.time()),
-                )
-
                 token_buffer: list[int] = []
                 text_chunks: list[str] = []
+
+                use_stream = backend != "llama_cpp"
+                stream = None
                 try:
-                    for chunk in stream:
-                        if stop_event.is_set() or time.time() > deadline:
-                            break
-                        
-                        new_text = chunk.choices[0].text
-                        # Try to get token_ids (vLLM specific field)
-                        new_tokens = getattr(chunk.choices[0], "token_ids", None)
-                        
-                        if new_tokens is None and new_text:
-                            # Fallback for llama.cpp / standard OpenAI: encode text
-                            # Note: Encoding chunks individually is imperfect for BPE, but needed for the buffer.
-                            new_tokens = self.encoding.encode(new_text)
+                    if use_stream:
+                        stream = self.client.completions.create(
+                            model=self.cfg.served_model_name,
+                            temperature=temperature_for_attempt(
+                                cfg=self.cfg, attempt_index=attempt_index, attempt_tag=attempt_tag
+                            ),
+                            logprobs=(
+                                int(self.cfg.top_logprobs)
+                                if (
+                                    bool(getattr(self.cfg, "entropy_weighting_enabled", False))
+                                    and int(getattr(self.cfg, "top_logprobs", 0) or 0) > 0
+                                )
+                                else None
+                            ),
+                            max_tokens=max_tokens,
+                            prompt=prompt_arg,
+                            seed=attempt_seed,
+                            stream=True,
+                            extra_body=extra_params,
+                            timeout=max(0.0, deadline - time.time()),
+                        )
 
-                        if new_tokens:
-                            token_buffer.extend(new_tokens)
-                            total_tokens += len(new_tokens)
-                            text_chunks.append(new_text)
-                            if new_text:
-                                text_tail = (text_tail + new_text)
-                                if cap > 0 and len(text_tail) > cap:
-                                    text_tail = text_tail[-cap:]
-
-                            # Optional: collect top-k logprobs for entropy.
-                            if bool(getattr(self.cfg, "entropy_weighting_enabled", False)):
-                                with contextlib.suppress(Exception):
-                                    lp = chunk.choices[0].logprobs
-                                    tlp = getattr(lp, "top_logprobs", None)
-                                    if tlp:
-                                        # vLLM returns a list[dict[token->logprob]]
-                                        logprobs_buffer.extend(list(tlp))
-                        if "}" in new_text:
-                            search_text = "".join(text_chunks[-self.cfg.search_tokens :])
-                            ans = self._extractor.extract_boxed_int(search_text)
-                            if ans is not None:
-                                final_answer = ans
+                        for chunk in stream:
+                            if stop_event.is_set() or time.time() > deadline:
                                 break
+
+                            new_text = chunk.choices[0].text
+                            # Try to get token_ids (vLLM specific field)
+                            new_tokens = getattr(chunk.choices[0], "token_ids", None)
+
+                            if new_tokens is None and new_text:
+                                # Fallback for servers that don't return token_ids.
+                                # Note: chunk-wise encoding is imperfect for BPE, but needed for the buffer.
+                                # Treat any special-token-like substrings as normal text in this fallback.
+                                new_tokens = self.encoding.encode(new_text, disallowed_special=())
+
+                            if new_tokens:
+                                token_buffer.extend(new_tokens)
+                                total_tokens += len(new_tokens)
+                                text_chunks.append(new_text)
+                                if new_text:
+                                    text_tail = (text_tail + new_text)
+                                    if cap > 0 and len(text_tail) > cap:
+                                        text_tail = text_tail[-cap:]
+
+                                # Optional: collect top-k logprobs for entropy.
+                                if bool(getattr(self.cfg, "entropy_weighting_enabled", False)):
+                                    with contextlib.suppress(Exception):
+                                        lp = chunk.choices[0].logprobs
+                                        tlp = getattr(lp, "top_logprobs", None)
+                                        if tlp:
+                                            # vLLM returns a list[dict[token->logprob]]
+                                            logprobs_buffer.extend(list(tlp))
+
+                            if "}" in new_text:
+                                search_text = "".join(text_chunks[-self.cfg.search_tokens :])
+                                ans = self._extractor.extract_boxed_int(search_text)
+                                if ans is not None:
+                                    final_answer = ans
+                                    break
+                    else:
+                        # llama.cpp: avoid streaming to prevent server-side noisy disconnect errors
+                        # when we stop early (deadline/early-extraction).
+                        resp = self.client.completions.create(
+                            model=self.cfg.served_model_name,
+                            temperature=temperature_for_attempt(
+                                cfg=self.cfg, attempt_index=attempt_index, attempt_tag=attempt_tag
+                            ),
+                            max_tokens=max_tokens,
+                            prompt=prompt_arg,
+                            seed=attempt_seed,
+                            stream=False,
+                            extra_body=extra_params,
+                            timeout=max(0.0, deadline - time.time()),
+                        )
+                        new_text = str(getattr(resp.choices[0], "text", "") or "")
+                        if new_text:
+                            text_chunks.append(new_text)
+                            # Try to reconstruct Harmony token stream from the decoded text.
+                            # gpt-oss style models may emit control tokens like <|message|> which must be
+                            # encoded as special tokens to be parseable by openai_harmony.
+                            new_tokens: list[int] = []
+                            with contextlib.suppress(Exception):
+                                new_tokens = self.encoding.encode(new_text, allowed_special="all")
+                            if not new_tokens:
+                                # As a last resort, encode treating specials as normal text.
+                                with contextlib.suppress(Exception):
+                                    new_tokens = self.encoding.encode(new_text, disallowed_special=())
+
+                            if new_tokens:
+                                token_buffer.extend(new_tokens)
+                                total_tokens += len(new_tokens)
+                            text_tail = (text_tail + new_text)
+                            if cap > 0 and len(text_tail) > cap:
+                                text_tail = text_tail[-cap:]
+
+                            if "}" in new_text:
+                                # Use tail window for answer extraction.
+                                search_text = new_text[-max(0, int(self.cfg.search_tokens)) :]
+                                ans = self._extractor.extract_boxed_int(search_text)
+                                if ans is not None:
+                                    final_answer = ans
                 finally:
-                    with contextlib.suppress(Exception):
-                        stream.close()
+                    if stream is not None:
+                        with contextlib.suppress(Exception):
+                            stream.close()
 
                 if final_answer is not None:
                     break
-                if not token_buffer:
+                if not token_buffer and not text_chunks:
                     break
 
                 if str(getattr(self.cfg, "inference_backend", "vllm")) == "llama_cpp":
-                    # llama.cpp's OpenAI-compatible server returns decoded *text* chunks.
-                    # We do NOT have the model's raw token stream (with Harmony control tokens),
-                    # so attempting to parse via openai_harmony will frequently fail.
-                    #
-                    # Instead, we treat the completion as plain assistant text and append a
-                    # single assistant message.
-                    assistant_text = "".join(text_chunks).strip()
-                    TextContent = self._h["TextContent"]
-                    Author = self._h["Author"]
-                    Message = self._h["Message"]
+                    # Prefer Harmony parsing (enables tool calls) when the model emits the expected
+                    # control tokens (e.g., <|message|>). If parsing fails, fall back to plain text.
+                    new_messages = None
+                    if token_buffer:
+                        with contextlib.suppress(Exception):
+                            new_messages = self.encoding.parse_messages_from_completion_tokens(
+                                token_buffer, self.Role.ASSISTANT, strict=False
+                            )
 
-                    content = [TextContent(text=assistant_text)] if assistant_text else []
-                    author = Author(role=self.Role.ASSISTANT, name="assistant")
-                    msg = Message(author=author, content=content)
-                    new_messages = [msg]
+                    if not new_messages:
+                        assistant_text = "".join(text_chunks).strip()
+                        TextContent = self._h["TextContent"]
+                        Author = self._h["Author"]
+                        Message = self._h["Message"]
+
+                        content = [TextContent(text=assistant_text)] if assistant_text else []
+                        author = Author(role=self.Role.ASSISTANT, name="assistant")
+                        msg = Message(author=author, content=content)
+                        new_messages = [msg]
                 else:
                     # Use strict=False to tolerate missing stop tokens or partial headers.
                     new_messages = self.encoding.parse_messages_from_completion_tokens(

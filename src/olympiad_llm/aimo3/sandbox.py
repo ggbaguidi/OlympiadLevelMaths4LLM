@@ -43,15 +43,47 @@ class AIMO3Sandbox:
 
         # IMPORTANT: don't hardcode ports.
         # In managed notebook runtimes (Kaggle/Colab), fixed port ranges are often already in use.
-        # Let jupyter_client pick ephemeral free ports to avoid ZMQError: Address already in use.
-        self._km = KernelManager()
+        # Let jupyter_client pick ephemeral free ports.
+        #
+        # Still, rare port-collision races can occur (or stale kernels may hold ports after Ctrl-C).
+        # Be robust: retry a few times on startup failures.
+        max_start_attempts = 6
+        last_err: Exception | None = None
+        for attempt in range(1, max_start_attempts + 1):
+            km = None
+            client = None
+            try:
+                km = KernelManager()
+                km.start_kernel(extra_arguments=["--Application.log_level=CRITICAL"])
+                client = km.blocking_client()
+                client.start_channels()
+                client.wait_for_ready(timeout=self._default_timeout)
 
-        # Start kernel quietly.
-        self._km.start_kernel(extra_arguments=["--Application.log_level=CRITICAL"])
-        self._client = self._km.blocking_client()
-        self._client.start_channels()
-        self._client.wait_for_ready(timeout=self._default_timeout)
-        self._owns_kernel = True
+                self._km = km
+                self._client = client
+                self._owns_kernel = True
+                last_err = None
+                break
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                # Best-effort cleanup before retrying.
+                with contextlib.suppress(Exception):
+                    if client is not None:
+                        client.stop_channels()
+                with contextlib.suppress(Exception):
+                    if km is not None:
+                        km.shutdown_kernel(now=True)
+                with contextlib.suppress(Exception):
+                    if km is not None:
+                        km.cleanup_resources()
+
+                # Small backoff; collisions tend to resolve quickly.
+                time.sleep(min(0.25, 0.05 * attempt))
+
+        if self._client is None or self._km is None:
+            raise RuntimeError(
+                f"Failed to start Jupyter kernel after {max_start_attempts} attempts: {last_err}"
+            )
 
         # Preload common math stack.
         self.execute(
