@@ -994,6 +994,12 @@ class AIMO3Solver:
                                 ans = self._extractor.extract_boxed_int(search_text)
                                 if ans is not None:
                                     final_answer = ans
+                                    break
+                except httpx.ReadTimeout:
+                    had_timeout = True
+                    timeout_count += 1
+                except Exception:  # noqa: BLE001
+                    had_exception = True
                 finally:
                     if stream is not None:
                         with contextlib.suppress(Exception):
