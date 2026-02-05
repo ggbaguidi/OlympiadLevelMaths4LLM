@@ -16,6 +16,7 @@ import subprocess
 import sys
 import threading
 import time
+import httpx
 from collections import Counter, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
