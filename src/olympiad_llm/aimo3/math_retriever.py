@@ -143,18 +143,89 @@ class MathRetriever:
     def _get_encoder(self):
         """Lazy-load the sentence transformer encoder (CPU only by default)."""
         if self._encoder is None:
-            try:
-                from sentence_transformers import SentenceTransformer
-                # Use local model path if provided (offline/Kaggle), otherwise download by name
-                model_id = self.model_path if self.model_path else self.model_name
-                device = "cpu" if self.cpu_only else None  # None = auto-detect
-                self._encoder = SentenceTransformer(model_id, device=device)
-            except ImportError:
-                raise ImportError(
-                    "sentence-transformers required for query encoding. "
-                    "Install with: pip install sentence-transformers"
-                )
+            model_id = self.model_path if self.model_path else self.model_name
+            device = "cpu" if self.cpu_only else "cuda"
+            
+            # For local paths (Kaggle offline), use direct transformers loading
+            # This avoids sentence-transformers format issues
+            if self.model_path and self.model_path.startswith("/"):
+                self._encoder = self._load_direct_transformer(model_id, device)
+            else:
+                # For model names (online), use sentence-transformers
+                self._encoder = self._load_sentence_transformer(model_id, device)
+        
         return self._encoder
+    
+    def _load_direct_transformer(self, model_path: str, device: str):
+        """Load transformer model directly (for Kaggle offline mode)."""
+        import torch
+        from transformers import AutoModel, AutoTokenizer, AutoConfig, BertConfig
+        
+        print(f"[Retriever] Loading transformer directly from {model_path}")
+        
+        # Load config and patch model_type if missing
+        try:
+            config = AutoConfig.from_pretrained(model_path)
+        except ValueError:
+            print("[Retriever] AutoConfig failed to detect model type, falling back to BertConfig")
+            config = BertConfig.from_pretrained(model_path)
+        
+        if not hasattr(config, 'model_type') or config.model_type is None:
+            # MiniLM models are BERT-based
+            config.model_type = "bert"
+        
+        model = AutoModel.from_pretrained(model_path, config=config)
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        model = model.to(device)
+        model.eval()
+        
+        embedding_dim = config.hidden_size
+        
+        # Create wrapper with mean pooling
+        class DirectTransformerEncoder:
+            def __init__(self, model, tokenizer, device, dim):
+                self.model = model
+                self.tokenizer = tokenizer
+                self.device = device
+                self.embedding_dim = dim
+            
+            def encode(self, sentences, convert_to_numpy=True, **kwargs):
+                if isinstance(sentences, str):
+                    sentences = [sentences]
+                inputs = self.tokenizer(
+                    sentences, padding=True, truncation=True,
+                    max_length=512, return_tensors="pt"
+                )
+                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
+                # Mean pooling
+                attention_mask = inputs["attention_mask"]
+                token_embeddings = outputs.last_hidden_state
+                mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+                sum_embeddings = torch.sum(token_embeddings * mask_expanded, dim=1)
+                sum_mask = torch.clamp(mask_expanded.sum(dim=1), min=1e-9)
+                embeddings = sum_embeddings / sum_mask
+                if convert_to_numpy:
+                    return embeddings.cpu().numpy()
+                return embeddings
+        
+        encoder = DirectTransformerEncoder(model, tokenizer, device, embedding_dim)
+        print(f"[Retriever] ✓ Loaded transformer with {embedding_dim}d embeddings")
+        return encoder
+    
+    def _load_sentence_transformer(self, model_name: str, device: str):
+        """Load model via sentence-transformers (for online/named models)."""
+        try:
+            from sentence_transformers import SentenceTransformer
+            encoder = SentenceTransformer(model_name, device=device)
+            print(f"[Retriever] ✓ Loaded SentenceTransformer: {model_name}")
+            return encoder
+        except ImportError:
+            raise ImportError(
+                "sentence-transformers required for query encoding. "
+                "Install with: pip install sentence-transformers"
+            )
     
     def encode_query(self, query: str) -> np.ndarray:
         """Encode a query string to embedding."""

@@ -18,7 +18,8 @@ from typing import Any
 IS_KAGGLE = os.path.exists("/kaggle/input")
 PACKAGE_MANAGER = os.getenv("AIMO3_PACKAGE_MANAGER", "pip")
 UNINSTALL_PACKAGES_COMMAND = ["uninstall", "--yes"]
-CONFLICTING_LIBRARIES = ["tensorflow", "matplotlib", "keras", "scikit-learn"]
+# Note: scikit-learn was removed from conflicts because sentence-transformers requires it
+CONFLICTING_LIBRARIES = ["tensorflow", "matplotlib", "keras"]
 
 REQUIRED_LIBRARIES = [
     "torch",
@@ -29,7 +30,8 @@ REQUIRED_LIBRARIES = [
     "openai_harmony",
     "mpmath",
     "ortools",
-    "sentence-transformers"
+    "sentence-transformers",
+    "scikit-learn",  # Required by sentence-transformers
 ]
 
 
