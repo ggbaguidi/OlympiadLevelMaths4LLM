@@ -293,6 +293,14 @@ class AIMO3Config:
     conclude_nudge_tokens: int = 16000
     # Only send one nudge per attempt.
     conclude_nudge_once: bool = True
+    # Hard-problem robustness: when we ask the model to conclude (nudge/finalization),
+    # prepend the *last N* python tool outputs. This helps prevent the model from
+    # "losing the thread" after long tool-heavy exploration.
+    recent_python_outputs_in_conclusion_enabled: bool = True
+    recent_python_outputs_in_conclusion_n: int = 5
+    # Per-output character cap (0 => unlimited). Keep this bounded to avoid blowing
+    # up context on verbose tracebacks / large prints.
+    recent_python_outputs_in_conclusion_max_chars: int = 2000
     # Finalization (per-attempt): if an attempt did tool work but never emitted a clean final
     # boxed integer, do one short “final answer only” completion to force synthesis.
     # This helps with the common failure mode: last tool call ran, then the attempt ends
@@ -713,6 +721,17 @@ class AIMO3Config:
         conclude_nudge_once = (
             os.getenv("AIMO3_CONCLUDE_NUDGE_ONCE", "1").strip().lower() not in {"0", "false", "no"}
         )
+        recent_python_outputs_in_conclusion_enabled = (
+            os.getenv("AIMO3_RECENT_PYTHON_OUTPUTS_IN_CONCLUSION_ENABLED", "1").strip().lower()
+            not in {"0", "false", "no"}
+        )
+        recent_python_outputs_in_conclusion_n = _env_int(
+            "AIMO3_RECENT_PYTHON_OUTPUTS_IN_CONCLUSION_N", AIMO3Config.recent_python_outputs_in_conclusion_n
+        )
+        recent_python_outputs_in_conclusion_max_chars = _env_int(
+            "AIMO3_RECENT_PYTHON_OUTPUTS_IN_CONCLUSION_MAX_CHARS",
+            AIMO3Config.recent_python_outputs_in_conclusion_max_chars,
+        )
 
         tiebreak_enabled = os.getenv("AIMO3_TIEBREAK_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
         tiebreak_min_remaining_s = _env_float(
@@ -859,6 +878,9 @@ class AIMO3Config:
             conclude_nudge_enabled=conclude_nudge_enabled,
             conclude_nudge_tokens=conclude_nudge_tokens,
             conclude_nudge_once=conclude_nudge_once,
+            recent_python_outputs_in_conclusion_enabled=recent_python_outputs_in_conclusion_enabled,
+            recent_python_outputs_in_conclusion_n=recent_python_outputs_in_conclusion_n,
+            recent_python_outputs_in_conclusion_max_chars=recent_python_outputs_in_conclusion_max_chars,
             tiebreak_enabled=tiebreak_enabled,
             tiebreak_min_remaining_s=tiebreak_min_remaining_s,
             tiebreak_budget_cap_s=tiebreak_budget_cap_s,

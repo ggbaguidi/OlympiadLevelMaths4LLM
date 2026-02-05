@@ -802,6 +802,37 @@ class AIMO3Solver:
         transcript_python_calls: list[str] = []
         transcript_python_outputs: list[str] = []
 
+        def _recent_python_outputs_block() -> str:
+            """Format last N python tool outputs for a synthesis/conclusion nudge."""
+
+            if not bool(getattr(self.cfg, "recent_python_outputs_in_conclusion_enabled", True)):
+                return ""
+            if not transcript_python_outputs:
+                return ""
+
+            try:
+                n = int(getattr(self.cfg, "recent_python_outputs_in_conclusion_n", 5) or 5)
+            except Exception:  # noqa: BLE001
+                n = 5
+            n = max(1, n)
+
+            try:
+                per_item_cap = int(getattr(self.cfg, "recent_python_outputs_in_conclusion_max_chars", 0) or 0)
+            except Exception:  # noqa: BLE001
+                per_item_cap = 0
+            per_item_cap = max(0, per_item_cap)
+
+            outs = transcript_python_outputs[-n:]
+            parts: list[str] = []
+            parts.append(f"Recent python tool outputs (last {len(outs)}, most recent last):")
+            for i, out in enumerate(outs, start=1):
+                s = (str(out) if out is not None else "").strip()
+                if per_item_cap > 0:
+                    s = self._truncate(s, per_item_cap)
+                # Keep outputs visually separated and easy to scan.
+                parts.append(f"--- output {i} ---\n{s}" if s else f"--- output {i} ---\n[EMPTY]")
+            return "\n\n".join(parts).strip()
+
         logprobs_buffer: list[object] = []
 
         attempt_seed = int(math.pow(self.cfg.seed + attempt_index, 2))
@@ -1204,12 +1235,17 @@ class AIMO3Solver:
                     h = _require_harmony()
                     Message = h["Message"]
                     Role = h["Role"]
+
+                    recent = _recent_python_outputs_block()
+                    prefix = (recent + "\n\n") if recent else ""
                     conversation.messages.append(
                         Message.from_role_and_content(
                             Role.USER,
-                            "You have done extensive computation. Please now synthesize your findings and "
-                            "state your final integer answer in \\boxed{N} format. If you need one more "
-                            "verification step, do it briefly, then conclude.",
+                            prefix
+                            + "You have done extensive computation. Please now synthesize your findings and "
+                            "state your final integer answer in \\boxed{N} format. Use the recent python tool "
+                            "outputs above as ground truth. If you need one more verification step, do it briefly, "
+                            "then conclude.",
                         )
                     )
 
@@ -1241,10 +1277,14 @@ class AIMO3Solver:
                     h = _require_harmony()
                     Message = h["Message"]
                     Role = h["Role"]
+
+                    recent = _recent_python_outputs_block()
+                    prefix = (recent + "\n\n") if recent else ""
                     conversation.messages.append(
                         Message.from_role_and_content(
                             Role.USER,
-                            "Finalization: output ONLY one line of the form \\\\boxed{N} where N is the final integer answer. "
+                            prefix
+                            + "Finalization: output ONLY one line of the form \\\\boxed{N} where N is the final integer answer. "
                             "Do NOT call the python tool. If you cannot determine the answer, output NOBOX.",
                         )
                     )
