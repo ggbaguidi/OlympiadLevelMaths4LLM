@@ -17,8 +17,20 @@ def test_summarize_trace_basic_parsing_and_risk():
             "chosen": 7,
             "elapsed_s": 12.0,
             "attempts": [
-                {"attempt": 1, "answer": 7, "python_calls": 2, "python_errors": 0, "tag": "standard"},
-                {"attempt": 2, "answer": 8, "python_calls": 0, "python_errors": 0, "tag": "analytic"},
+                {
+                    "attempt": 1,
+                    "answer": 7,
+                    "python_calls": 2,
+                    "python_errors": 0,
+                    "tag": "standard",
+                },
+                {
+                    "attempt": 2,
+                    "answer": 8,
+                    "python_calls": 0,
+                    "python_errors": 0,
+                    "tag": "analytic",
+                },
             ],
             "decision": {
                 "ranked": [
@@ -45,8 +57,28 @@ def test_summarize_trace_basic_parsing_and_risk():
 
 def test_summarize_trace_marks_unverified_as_riskier():
     events = [
-        {"event": "solve_end", "problem_id": "p1", "status": "ok", "chosen": 1, "elapsed_s": 1.0, "attempts": [], "decision": {"ranked": [{"answer": 1, "votes": 1, "verified": 0, "tag_diversity": 1}] }},
-        {"event": "solve_end", "problem_id": "p2", "status": "ok", "chosen": 2, "elapsed_s": 1.0, "attempts": [], "decision": {"ranked": [{"answer": 2, "votes": 1, "verified": 1, "tag_diversity": 1}] }},
+        {
+            "event": "solve_end",
+            "problem_id": "p1",
+            "status": "ok",
+            "chosen": 1,
+            "elapsed_s": 1.0,
+            "attempts": [],
+            "decision": {
+                "ranked": [{"answer": 1, "votes": 1, "verified": 0, "tag_diversity": 1}]
+            },
+        },
+        {
+            "event": "solve_end",
+            "problem_id": "p2",
+            "status": "ok",
+            "chosen": 2,
+            "elapsed_s": 1.0,
+            "attempts": [],
+            "decision": {
+                "ranked": [{"answer": 2, "votes": 1, "verified": 1, "tag_diversity": 1}]
+            },
+        },
     ]
 
     s = summarize_trace(events)
@@ -58,7 +90,17 @@ def test_summarize_trace_marks_unverified_as_riskier():
 def test_summarize_trace_accepts_event_type_key():
     events = [
         {"event_type": "solve_start", "problem_id": "abc", "budget_s": 10.0},
-        {"event_type": "solve_end", "problem_id": "abc", "status": "ok", "chosen": 1, "elapsed_s": 1.0, "attempts": [], "decision": {"ranked": [{"answer": 1, "votes": 1, "verified": 1, "tag_diversity": 1}] }},
+        {
+            "event_type": "solve_end",
+            "problem_id": "abc",
+            "status": "ok",
+            "chosen": 1,
+            "elapsed_s": 1.0,
+            "attempts": [],
+            "decision": {
+                "ranked": [{"answer": 1, "votes": 1, "verified": 1, "tag_diversity": 1}]
+            },
+        },
     ]
     s = summarize_trace(events)
     assert len(s) == 1

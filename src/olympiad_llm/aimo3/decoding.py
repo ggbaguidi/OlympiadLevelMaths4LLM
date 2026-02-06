@@ -9,7 +9,9 @@ parameters based on the *role* of an attempt (exploration vs verification, etc).
 from .config import AIMO3Config
 
 
-def temperature_for_attempt(*, cfg: AIMO3Config, attempt_index: int, attempt_tag: str | None) -> float:
+def temperature_for_attempt(
+    *, cfg: AIMO3Config, attempt_index: int, attempt_tag: str | None
+) -> float:
     """Choose a temperature based on attempt role.
 
     Priority (most specific first):
@@ -36,7 +38,8 @@ def temperature_for_attempt(*, cfg: AIMO3Config, attempt_index: int, attempt_tag
         "verification" in tag
         or tag.startswith("second_stage_verify")
         or tag.startswith("tiebreak")
-        or "cand=" in tag and "second_stage_verify" in tag
+        or "cand=" in tag
+        and "second_stage_verify" in tag
     ):
         return _fallback(cfg.temperature_verification)
 

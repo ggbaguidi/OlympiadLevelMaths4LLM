@@ -16,7 +16,9 @@ import re
 from typing import Optional
 
 
-_TIMEOUT_DIRECTIVE_RE = re.compile(r"^\s*#\s*timeout\s*[:=]\s*(?P<s>\d+(?:\.\d+)?)\s*$", re.IGNORECASE)
+_TIMEOUT_DIRECTIVE_RE = re.compile(
+    r"^\s*#\s*timeout\s*[:=]\s*(?P<s>\d+(?:\.\d+)?)\s*$", re.IGNORECASE
+)
 _TIMEOUT_ERROR_RE = re.compile(
     # Accept both formats:
     #   "... after 60.0s" (current sandbox)

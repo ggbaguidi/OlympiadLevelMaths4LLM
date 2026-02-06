@@ -91,7 +91,13 @@ def _coerce_attempt(record: Any) -> AttemptResult | None:
         # Attempt number isn't needed for aggregation.
         from ..attempts import AttemptStats  # local import to avoid cycles
 
-        return AttemptResult(attempt=0, answer=answer, stats=AttemptStats(token_count=tok, python_calls=calls, python_errors=errors))
+        return AttemptResult(
+            attempt=0,
+            answer=answer,
+            stats=AttemptStats(
+                token_count=tok, python_calls=calls, python_errors=errors
+            ),
+        )
 
     return None
 
@@ -155,7 +161,9 @@ def aggregate_candidates(detailed_results: list[Any]) -> list[CandidateStats]:
             ent = float("inf")
         if ent > 0.0 and ent != float("inf") and not math.isnan(ent):
             # Use a soft cap to avoid single ultra-low values dominating.
-            entropy_score_sum[a] = float(entropy_score_sum.get(a, 0.0)) + (1.0 / max(ent, 1e-9))
+            entropy_score_sum[a] = float(entropy_score_sum.get(a, 0.0)) + (
+                1.0 / max(ent, 1e-9)
+            )
 
         if getattr(ar, "tag", None):
             tags[a].add(str(ar.tag))
@@ -265,7 +273,9 @@ def rank_candidates(
         return []
 
     # Detect magnitude outliers before filtering
-    is_suspicious, dominant_bucket, outlier_answers = _detect_magnitude_outlier(candidates)
+    is_suspicious, dominant_bucket, outlier_answers = _detect_magnitude_outlier(
+        candidates
+    )
 
     # When magnitude is suspicious, don't filter to verified only
     # because the verified small answers might all be wrong

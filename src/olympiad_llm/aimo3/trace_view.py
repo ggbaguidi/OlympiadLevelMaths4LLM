@@ -138,11 +138,21 @@ def _print_attempt(a: AttemptTranscript) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="View AIMO-3 per-attempt transcripts from a trace JSONL.")
-    ap.add_argument("--path", default="aimo3_trace.jsonl", help="Path to the trace JSONL")
-    ap.add_argument("--problem-id", default=None, help="Filter to a specific problem_id")
-    ap.add_argument("--attempt", type=int, default=None, help="Filter to a specific attempt number")
-    ap.add_argument("--answer", type=int, default=None, help="Filter to a specific extracted answer")
+    ap = argparse.ArgumentParser(
+        description="View AIMO-3 per-attempt transcripts from a trace JSONL."
+    )
+    ap.add_argument(
+        "--path", default="aimo3_trace.jsonl", help="Path to the trace JSONL"
+    )
+    ap.add_argument(
+        "--problem-id", default=None, help="Filter to a specific problem_id"
+    )
+    ap.add_argument(
+        "--attempt", type=int, default=None, help="Filter to a specific attempt number"
+    )
+    ap.add_argument(
+        "--answer", type=int, default=None, help="Filter to a specific extracted answer"
+    )
     ap.add_argument("--max", type=int, default=50, help="Max attempts to print")
     args = ap.parse_args(argv)
 
@@ -159,7 +169,9 @@ def main(argv: list[str] | None = None) -> int:
             break
 
     if n == 0:
-        print("No attempt_end events found (did you enable AIMO3_TRACE and AIMO3_TRACE_ATTEMPTS?).")
+        print(
+            "No attempt_end events found (did you enable AIMO3_TRACE and AIMO3_TRACE_ATTEMPTS?)."
+        )
     return 0
 
 

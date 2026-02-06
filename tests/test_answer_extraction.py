@@ -65,6 +65,7 @@ def test_extract_int_fallback_last_int_in_range():
     txt = "Some numbers 12 99 100000 and then 777"
     assert ex.extract_int_fallback(txt) == 777
 
+
 def test_extract_int_fallback_no_valid_int_none():
     ex = AnswerExtractor(aimo_lo=0, aimo_hi=50)
     txt = "Some numbers 60 99 100000 and then 77"

@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from olympiad_llm.aimo3.lean_toolchain import ensure_lean_toolchain, lean_smoke_test, detect_lean_invocation
+from olympiad_llm.aimo3.lean_toolchain import (
+    ensure_lean_toolchain,
+    lean_smoke_test,
+    detect_lean_invocation,
+)
 
 
 def _make_dummy_lean_archive(tmp_path: Path) -> Path:
@@ -50,7 +54,9 @@ def _make_dummy_lean_tar(tmp_path: Path) -> Path:
     return out
 
 
-def test_ensure_lean_toolchain_extracts_and_sets_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_ensure_lean_toolchain_extracts_and_sets_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     archive = _make_dummy_lean_archive(tmp_path)
 
     # Ensure we don't accidentally pick up a real lean/lake from the host.
@@ -76,7 +82,9 @@ def test_ensure_lean_toolchain_extracts_and_sets_path(tmp_path: Path, monkeypatc
     assert os.environ.get("PATH", "").startswith(info.bin_dir)
 
 
-def test_ensure_lean_toolchain_accepts_tar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_ensure_lean_toolchain_accepts_tar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     archive = _make_dummy_lean_tar(tmp_path)
 
     monkeypatch.setenv("PATH", "")
@@ -98,7 +106,9 @@ def test_ensure_lean_toolchain_accepts_tar(tmp_path: Path, monkeypatch: pytest.M
     assert os.environ.get("PATH", "").startswith(info.bin_dir)
 
 
-def test_ensure_lean_toolchain_missing_archive_non_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_ensure_lean_toolchain_missing_archive_non_strict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setenv("PATH", "")
     monkeypatch.delenv("AIMO3_LEAN_BIN_DIR", raising=False)
 
@@ -116,7 +126,9 @@ def test_ensure_lean_toolchain_missing_archive_non_strict(tmp_path: Path, monkey
     assert info.installed is False
 
 
-def test_ensure_lean_toolchain_missing_archive_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_ensure_lean_toolchain_missing_archive_strict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setenv("PATH", "")
     monkeypatch.delenv("AIMO3_LEAN_BIN_DIR", raising=False)
 
@@ -132,7 +144,9 @@ def test_ensure_lean_toolchain_missing_archive_strict(tmp_path: Path, monkeypatc
         )
 
 
-def test_ensure_lean_toolchain_accepts_extracted_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_ensure_lean_toolchain_accepts_extracted_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     # Create an extracted-like layout (no tar.gz present)
     dataset = tmp_path / "lean4_offline_bundle"
     bin_dir = dataset / "lean-4.14.0-linux" / "lean-4.14.0-linux" / "bin"
@@ -163,7 +177,9 @@ def test_ensure_lean_toolchain_accepts_extracted_dir(tmp_path: Path, monkeypatch
     assert os.environ.get("PATH", "").startswith(str(bin_dir))
 
 
-def test_lean_smoke_test_ok_with_dummy_exe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_lean_smoke_test_ok_with_dummy_exe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     # Create dummy lean/lake binaries on PATH.
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)

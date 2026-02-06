@@ -1,4 +1,7 @@
-from olympiad_llm.aimo3.python_timeouts import parse_timeout_directive, parse_timeout_error
+from olympiad_llm.aimo3.python_timeouts import (
+    parse_timeout_directive,
+    parse_timeout_error,
+)
 
 
 def test_parse_timeout_directive_basic():

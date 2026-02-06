@@ -1,8 +1,10 @@
 """
 Prepare reference CSV for evaluation.
 """
+
 from typing import Iterable, Optional, Union
 import pandas as pd
+
 
 def prepare_reference_csv(
     input_path: str,
@@ -44,11 +46,7 @@ def prepare_reference_csv(
         df = df[df["id"].isin(problem_ids)]
 
     # Store ground truth answers (if present)
-    ground_truth = (
-        dict(zip(df["id"], df["answer"]))
-        if "answer" in df.columns
-        else {}
-    )
+    ground_truth = dict(zip(df["id"], df["answer"])) if "answer" in df.columns else {}
 
     # Remove answers and save
     df_filtered = df.drop("answer", axis=1, errors="ignore")

@@ -272,7 +272,11 @@ def augment_system_prompt_with_meta(
         shuffle=shuffle_cards,
     )
     strategy_text = render_strategy_card(card)
-    out = strategy_text if not base_prompt else base_prompt.rstrip() + "\n\n" + strategy_text
+    out = (
+        strategy_text
+        if not base_prompt
+        else base_prompt.rstrip() + "\n\n" + strategy_text
+    )
     return out, {"pack": pack, "card": card.name}
 
 

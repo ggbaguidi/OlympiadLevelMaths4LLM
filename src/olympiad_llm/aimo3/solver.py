@@ -18,18 +18,31 @@ import threading
 import time
 import httpx
 from collections import Counter, defaultdict, deque
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    as_completed,
+    TimeoutError as FuturesTimeoutError,
+)
 from dataclasses import dataclass
 from typing import Optional
 
 from .config import AIMO3Config
 from .errors import OptionalDependencyError
 from .prompts import (
-    TIR_PROMPT_ANALYTIC, TIR_PROMPT_CODE_FIRST, TIR_PROMPT_STANDARD, 
-    TIR_PROMPT_VERIFICATION, TIR_PROMPT_SMALL_CASES, TIR_PROMPT_SANITY,
-    TIR_PROMPT_CONSTRAINT_DISCOVERY, CONSTRAINT_DISCOVERY_PREFIX,
-    ADVERSARY_CRITIQUE_PROMPT, ADVERSARY_DEFEND_PROMPT, ADVERSARY_ARBITER_PROMPT,
-    TIR_PROMPT_SCRATCHPAD, SCRATCHPAD_REMINDER, RETRIEVED_KNOWLEDGE_PREFIX,
+    TIR_PROMPT_ANALYTIC,
+    TIR_PROMPT_CODE_FIRST,
+    TIR_PROMPT_STANDARD,
+    TIR_PROMPT_VERIFICATION,
+    TIR_PROMPT_SMALL_CASES,
+    TIR_PROMPT_SANITY,
+    TIR_PROMPT_CONSTRAINT_DISCOVERY,
+    CONSTRAINT_DISCOVERY_PREFIX,
+    ADVERSARY_CRITIQUE_PROMPT,
+    ADVERSARY_DEFEND_PROMPT,
+    ADVERSARY_ARBITER_PROMPT,
+    TIR_PROMPT_SCRATCHPAD,
+    SCRATCHPAD_REMINDER,
+    RETRIEVED_KNOWLEDGE_PREFIX,
 )
 from .sandbox import AIMO3Sandbox
 from .vllm_server import VLLMServer
@@ -37,7 +50,12 @@ from .llamacpp_server import LlamaCppServer
 from .wickelgren import augment_system_prompt_with_meta
 from .protocol import with_protocol
 from .ranking import rank_candidates
-from .budget import adaptive_verify_budget, compute_attempt_and_verify_deadlines, reserve_fraction_for_budget, TimeBudgetTracker
+from .budget import (
+    adaptive_verify_budget,
+    compute_attempt_and_verify_deadlines,
+    reserve_fraction_for_budget,
+    TimeBudgetTracker,
+)
 
 from .answer_extraction import AnswerExtractor
 from .attempts import AttemptResult, AttemptStats
@@ -57,11 +75,14 @@ from .python_rewrite import rewrite_python_tool_code
 
 from .math_retriever import MathRetriever
 
+
 def _require_openai():
     try:
         from openai import OpenAI  # type: ignore
     except Exception as e:  # noqa: BLE001
-        raise OptionalDependencyError("AIMO3Solver requires 'openai'. Install extras: pip install .[aimo3]") from e
+        raise OptionalDependencyError(
+            "AIMO3Solver requires 'openai'. Install extras: pip install .[aimo3]"
+        ) from e
     return OpenAI
 
 
@@ -137,13 +158,19 @@ class AIMO3Template:
         if "DeveloperContent" in self._h:
             DeveloperContent = self._h["DeveloperContent"]
             with contextlib.suppress(Exception):
-                developer_content = DeveloperContent.new().with_instructions(developer_prompt)
+                developer_content = DeveloperContent.new().with_instructions(
+                    developer_prompt
+                )
 
         if developer_content is not None:
-            developer_message = Message.from_role_and_content(Role.DEVELOPER, developer_content)
+            developer_message = Message.from_role_and_content(
+                Role.DEVELOPER, developer_content
+            )
         else:
             # Compatibility fallback for older openai_harmony builds.
-            developer_message = Message.from_role_and_content(Role.DEVELOPER, developer_prompt)
+            developer_message = Message.from_role_and_content(
+                Role.DEVELOPER, developer_prompt
+            )
 
         user_message = Message.from_role_and_content(Role.USER, user_prompt)
         return [system_message, developer_message, user_message]
@@ -162,7 +189,9 @@ class AIMO3Tool:
         self._h = _require_harmony()
         self._local_jupyter_timeout = float(local_jupyter_timeout)
         self._tool_prompt = tool_prompt
-        self._tool_timeout_cap_s = None if tool_timeout_cap_s is None else float(tool_timeout_cap_s)
+        self._tool_timeout_cap_s = (
+            None if tool_timeout_cap_s is None else float(tool_timeout_cap_s)
+        )
         self._jupyter_session = sandbox
         self._owns_session = sandbox is None
         self._execution_lock = threading.Lock()
@@ -172,7 +201,9 @@ class AIMO3Tool:
         if self._jupyter_session is None:
             with self._init_lock:
                 if self._jupyter_session is None:
-                    self._jupyter_session = AIMO3Sandbox(timeout=self._local_jupyter_timeout)
+                    self._jupyter_session = AIMO3Sandbox(
+                        timeout=self._local_jupyter_timeout
+                    )
 
     @staticmethod
     def _ensure_last_print(code: str) -> str:
@@ -246,7 +277,7 @@ class AIMO3Tool:
         # Check for assignment: contains '=' but not '==', '!=', '<=', '>=', '+=', etc.
         if "=" in last:
             # Match standalone = (assignment) but not compound operators
-            if re.search(r'(?<![=!<>+\-*/%&|^])=(?!=)', last):
+            if re.search(r"(?<![=!<>+\-*/%&|^])=(?!=)", last):
                 return src
 
         # Strip trailing comments before wrapping - otherwise print(x # comment) is invalid
@@ -262,7 +293,7 @@ class AIMO3Tool:
             if before_hash.count('"') % 2 == 0 and before_hash.count("'") % 2 == 0:
                 expr = last[:hash_idx].rstrip()
                 comment = "  " + last[hash_idx:]
-        
+
         if not expr:
             return src
 
@@ -277,7 +308,9 @@ class AIMO3Tool:
     @property
     def tool_config(self):
         ToolNamespaceConfig = self._h["ToolNamespaceConfig"]
-        return ToolNamespaceConfig(name="python", description=self.instruction, tools=[])
+        return ToolNamespaceConfig(
+            name="python", description=self.instruction, tools=[]
+        )
 
     def _make_response(self, output: str, channel: str | None = None):
         TextContent = self._h["TextContent"]
@@ -339,7 +372,9 @@ class AIMO3Solver:
         return "…" + text[-max_chars:]
 
     def _attempt_to_row(self, r: AttemptResult) -> dict:
-        snippet = self._truncate(r.output_text, int(self.cfg.display_attempt_text_chars))
+        snippet = self._truncate(
+            r.output_text, int(self.cfg.display_attempt_text_chars)
+        )
         ent = None
         with contextlib.suppress(Exception):
             v = float(getattr(r.stats, "mean_entropy", float("inf")))
@@ -407,7 +442,9 @@ class AIMO3Solver:
         # Only meaningful if the optional dependency stack is present.
         sb: AIMO3Sandbox | None = None
         try:
-            sb = self.sandbox_pool.get(timeout=float(getattr(self.cfg, "sandbox_timeout", 0.0) or 0.0) or 0.5)
+            sb = self.sandbox_pool.get(
+                timeout=float(getattr(self.cfg, "sandbox_timeout", 0.0) or 0.0) or 0.5
+            )
         except Exception:
             sb = None
 
@@ -441,7 +478,12 @@ class AIMO3Solver:
                 "}\n"
                 "print(json.dumps(_info, ensure_ascii=False))\n"
             )
-            out = sb.execute(code, timeout=min(2.0, float(getattr(self.cfg, "jupyter_timeout", 10.0) or 10.0)))
+            out = sb.execute(
+                code,
+                timeout=min(
+                    2.0, float(getattr(self.cfg, "jupyter_timeout", 10.0) or 10.0)
+                ),
+            )
 
             # Find the last JSON-looking line.
             last_json = None
@@ -512,12 +554,14 @@ class AIMO3Solver:
             return float("inf")
         return total_entropy / float(token_count)
 
-    def _should_early_stop(self, detailed: list[AttemptResult], time_spent_s: float = float('inf')) -> bool:
+    def _should_early_stop(
+        self, detailed: list[AttemptResult], time_spent_s: float = float("inf")
+    ) -> bool:
         """Quality-aware early stop.
 
         Default behavior requires at least one clean tool run for the leading candidate
         before early stopping. This reduces the "wrong but popular" failure mode.
-        
+
         Easy exit mode: if we get consensus quickly (<60s) with verified support,
         stop aggressively to bank time for harder problems.
         """
@@ -530,20 +574,21 @@ class AIMO3Solver:
         _ = top_ans
         votes = int(top_d.get("votes", 0))
         verified = int(top_d.get("verified", 0))
-        
+
         # Easy exit: aggressive early stop for problems solved quickly with good verification
         if (
             bool(getattr(self.cfg, "easy_exit_enabled", True))
-            and time_spent_s < float(getattr(self.cfg, "easy_exit_time_threshold_s", 60.0))
+            and time_spent_s
+            < float(getattr(self.cfg, "easy_exit_time_threshold_s", 60.0))
             and votes >= int(getattr(self.cfg, "easy_exit_min_votes", 3))
             and verified >= int(getattr(self.cfg, "easy_exit_min_verified", 2))
         ):
             return True
-        
+
         # Standard early stop logic
         need = max(0, int(self.cfg.early_stop_min_verified))
         target_votes = max(1, int(self.cfg.early_stop))
-        
+
         if votes < target_votes:
             return False
         if need <= 0:
@@ -594,33 +639,53 @@ class AIMO3Solver:
                 raise ValueError(f"model_path does not exist: {mp_expanded}")
 
         self.template = AIMO3Template()
-        self.encoding = h["load_harmony_encoding"](h["HarmonyEncodingName"].HARMONY_GPT_OSS)
+        self.encoding = h["load_harmony_encoding"](
+            h["HarmonyEncodingName"].HARMONY_GPT_OSS
+        )
         self.Role = h["Role"]
         self.stop_token_ids = self.encoding.stop_tokens_for_assistant_actions()
 
         # Select backend
         backend = getattr(self.cfg, "inference_backend", "vllm")
         ServerClass = LlamaCppServer if backend == "llama_cpp" else VLLMServer
-        
+
         self.server = ServerClass(cfg=self.cfg, port=self.port)
 
         self.base_url = f"http://0.0.0.0:{self.port}/v1"
 
         # If a server is already running on this port, reuse it.
         if bool(self.cfg.reuse_existing_server):
-            probe_client = OpenAI(base_url=self.base_url, api_key="sk-local", timeout=self.cfg.server_probe_timeout)
-            if self._probe_server_ready(probe_client, attempts=self.cfg.server_probe_attempts):
+            probe_client = OpenAI(
+                base_url=self.base_url,
+                api_key="sk-local",
+                timeout=self.cfg.server_probe_timeout,
+            )
+            if self._probe_server_ready(
+                probe_client, attempts=self.cfg.server_probe_attempts
+            ):
                 # Reuse: don't start a new process.
                 self.server = None
-                self.client = OpenAI(base_url=self.base_url, api_key="sk-local", timeout=self.cfg.session_timeout)
+                self.client = OpenAI(
+                    base_url=self.base_url,
+                    api_key="sk-local",
+                    timeout=self.cfg.session_timeout,
+                )
             else:
                 self.server = ServerClass(cfg=self.cfg, port=self.port)
                 self.server.start()
-                self.client = OpenAI(base_url=self.base_url, api_key="sk-local", timeout=self.cfg.session_timeout)
+                self.client = OpenAI(
+                    base_url=self.base_url,
+                    api_key="sk-local",
+                    timeout=self.cfg.session_timeout,
+                )
                 self.server.wait_ready(self.client)
         else:
             self.server.start()
-            self.client = OpenAI(base_url=self.base_url, api_key="sk-local", timeout=self.cfg.session_timeout)
+            self.client = OpenAI(
+                base_url=self.base_url,
+                api_key="sk-local",
+                timeout=self.cfg.session_timeout,
+            )
             self.server.wait_ready(self.client)
 
         # Optional: install Lean toolchain from an offline archive.
@@ -635,10 +700,20 @@ class AIMO3Solver:
             if ensure_lean_toolchain is not None:
                 ensure_lean_toolchain(
                     enabled=True,
-                    dataset_dir=str(getattr(self.cfg, "lean_toolchain_dataset_dir", "") or "") or None,
-                    archive_path=str(getattr(self.cfg, "lean_toolchain_archive_path", "") or "") or None,
-                    archive_name=str(getattr(self.cfg, "lean_toolchain_archive_name", "") or "") or None,
-                    work_dir=str(getattr(self.cfg, "lean_toolchain_work_dir", "") or "") or None,
+                    dataset_dir=str(
+                        getattr(self.cfg, "lean_toolchain_dataset_dir", "") or ""
+                    )
+                    or None,
+                    archive_path=str(
+                        getattr(self.cfg, "lean_toolchain_archive_path", "") or ""
+                    )
+                    or None,
+                    archive_name=str(
+                        getattr(self.cfg, "lean_toolchain_archive_name", "") or ""
+                    )
+                    or None,
+                    work_dir=str(getattr(self.cfg, "lean_toolchain_work_dir", "") or "")
+                    or None,
                     prefer_existing=True,
                     check_versions=False,
                     verbose=bool(getattr(self.cfg, "lean_toolchain_verbose", False)),
@@ -648,7 +723,7 @@ class AIMO3Solver:
         self._initialize_kernels()
         self.notebook_start_time = time.time()
         self.problems_remaining = int(self.cfg.problems_total)
-        
+
         # Dynamic time budgeting: track actual solve times to adjust per-problem budgets
         self._budget_tracker = TimeBudgetTracker(
             total_budget_s=float(self.cfg.notebook_limit),
@@ -656,37 +731,61 @@ class AIMO3Solver:
             base_timeout_s=float(self.cfg.base_problem_timeout),
             high_timeout_s=float(self.cfg.high_problem_timeout),
             # Adaptive extension settings
-            flex_pool_fraction=float(getattr(self.cfg, "adaptive_budget_flex_pool_fraction", 0.15)),
-            max_extension_multiplier=float(getattr(self.cfg, "adaptive_budget_max_extension", 2.0)),
-            hardness_trigger_fraction=float(getattr(self.cfg, "adaptive_budget_hardness_trigger", 0.5)),
-            hardness_min_distinct_answers=int(getattr(self.cfg, "adaptive_budget_min_distinct", 3)),
+            flex_pool_fraction=float(
+                getattr(self.cfg, "adaptive_budget_flex_pool_fraction", 0.15)
+            ),
+            max_extension_multiplier=float(
+                getattr(self.cfg, "adaptive_budget_max_extension", 2.0)
+            ),
+            hardness_trigger_fraction=float(
+                getattr(self.cfg, "adaptive_budget_hardness_trigger", 0.5)
+            ),
+            hardness_min_distinct_answers=int(
+                getattr(self.cfg, "adaptive_budget_min_distinct", 3)
+            ),
         )
 
         # Notebook-friendly tracing behavior: optionally reset the trace file at startup.
-        if bool(getattr(self.cfg, "trace_enabled", False)) and bool(getattr(self.cfg, "trace_reset_on_start", False)):
+        if bool(getattr(self.cfg, "trace_enabled", False)) and bool(
+            getattr(self.cfg, "trace_reset_on_start", False)
+        ):
             with contextlib.suppress(Exception):
-                p = str(getattr(self.cfg, "trace_path", "aimo3_trace.jsonl") or "aimo3_trace.jsonl")
+                p = str(
+                    getattr(self.cfg, "trace_path", "aimo3_trace.jsonl")
+                    or "aimo3_trace.jsonl"
+                )
                 if p and os.path.exists(p):
                     os.remove(p)
 
         self._trace = TraceRecorder(
             enabled=bool(getattr(self.cfg, "trace_enabled", False)),
             path=str(getattr(self.cfg, "trace_path", "aimo3_trace.jsonl")),
-            include_problem_text=bool(getattr(self.cfg, "trace_include_problem_text", False)),
+            include_problem_text=bool(
+                getattr(self.cfg, "trace_include_problem_text", False)
+            ),
         )
 
         # Initialize math knowledge retriever (RAG) if enabled
         self._retriever = None
         if bool(getattr(self.cfg, "retriever_enabled", False)):
             kb_path = str(getattr(self.cfg, "retriever_knowledge_base_path", "") or "")
-            model_path = str(getattr(self.cfg, "retriever_model_path", "") or "") or None
+            model_path = (
+                str(getattr(self.cfg, "retriever_model_path", "") or "") or None
+            )
             cpu_only = bool(getattr(self.cfg, "retriever_cpu_only", True))
-            print(f"[Retriever] Attempting to load from kb_path={kb_path}, model_path={model_path}, cpu_only={cpu_only}")
+            print(
+                f"[Retriever] Attempting to load from kb_path={kb_path}, model_path={model_path}, cpu_only={cpu_only}"
+            )
             if kb_path:
                 try:
                     from .math_retriever import MathRetriever
-                    self._retriever = MathRetriever.load(kb_path, model_path=model_path, cpu_only=cpu_only)
-                    print(f"[Retriever] ✓ Loaded {len(self._retriever.concepts)} concepts")
+
+                    self._retriever = MathRetriever.load(
+                        kb_path, model_path=model_path, cpu_only=cpu_only
+                    )
+                    print(
+                        f"[Retriever] ✓ Loaded {len(self._retriever.concepts)} concepts"
+                    )
                     # Warm up the embedding model to avoid first-query latency
                     if bool(getattr(self.cfg, "retriever_warmup_on_init", True)):
                         print("[Retriever] Warming up embedding model...")
@@ -694,6 +793,7 @@ class AIMO3Solver:
                         print("[Retriever] ✓ Warmup complete")
                 except Exception as e:  # noqa: BLE001
                     import traceback
+
                     print(f"[Retriever] ✗ Failed to load: {e}")
                     traceback.print_exc()
                     self._retriever = None
@@ -774,7 +874,9 @@ class AIMO3Solver:
             return AttemptResult(
                 attempt=attempt_index + 1,
                 answer=None,
-                stats=AttemptStats(token_count=0, python_calls=0, python_errors=0, lean_calls=0),
+                stats=AttemptStats(
+                    token_count=0, python_calls=0, python_errors=0, lean_calls=0
+                ),
                 output_text=None,
             )
 
@@ -805,32 +907,45 @@ class AIMO3Solver:
         def _recent_python_outputs_block() -> str:
             """Format last N python tool outputs for a synthesis/conclusion nudge."""
 
-            if not bool(getattr(self.cfg, "recent_python_outputs_in_conclusion_enabled", True)):
+            if not bool(
+                getattr(self.cfg, "recent_python_outputs_in_conclusion_enabled", True)
+            ):
                 return ""
             if not transcript_python_outputs:
                 return ""
 
             try:
-                n = int(getattr(self.cfg, "recent_python_outputs_in_conclusion_n", 5) or 5)
+                n = int(
+                    getattr(self.cfg, "recent_python_outputs_in_conclusion_n", 5) or 5
+                )
             except Exception:  # noqa: BLE001
                 n = 5
             n = max(1, n)
 
             try:
-                per_item_cap = int(getattr(self.cfg, "recent_python_outputs_in_conclusion_max_chars", 0) or 0)
+                per_item_cap = int(
+                    getattr(
+                        self.cfg, "recent_python_outputs_in_conclusion_max_chars", 0
+                    )
+                    or 0
+                )
             except Exception:  # noqa: BLE001
                 per_item_cap = 0
             per_item_cap = max(0, per_item_cap)
 
             outs = transcript_python_outputs[-n:]
             parts: list[str] = []
-            parts.append(f"Recent python tool outputs (last {len(outs)}, most recent last):")
+            parts.append(
+                f"Recent python tool outputs (last {len(outs)}, most recent last):"
+            )
             for i, out in enumerate(outs, start=1):
                 s = (str(out) if out is not None else "").strip()
                 if per_item_cap > 0:
                     s = self._truncate(s, per_item_cap)
                 # Keep outputs visually separated and easy to scan.
-                parts.append(f"--- output {i} ---\n{s}" if s else f"--- output {i} ---\n[EMPTY]")
+                parts.append(
+                    f"--- output {i} ---\n{s}" if s else f"--- output {i} ---\n[EMPTY]"
+                )
             return "\n\n".join(parts).strip()
 
         logprobs_buffer: list[object] = []
@@ -838,11 +953,16 @@ class AIMO3Solver:
         attempt_seed = int(math.pow(self.cfg.seed + attempt_index, 2))
 
         policy = ToolRecoveryPolicy(
-            abort_after_python_errors=int(getattr(self.cfg, "abort_attempt_after_python_errors", 0) or 0),
-            abort_after_consecutive_python_errors=int(
-                getattr(self.cfg, "abort_attempt_after_consecutive_python_errors", 0) or 0
+            abort_after_python_errors=int(
+                getattr(self.cfg, "abort_attempt_after_python_errors", 0) or 0
             ),
-            recycle_sandbox_after_python_errors=int(getattr(self.cfg, "recycle_sandbox_after_python_errors", 0) or 0),
+            abort_after_consecutive_python_errors=int(
+                getattr(self.cfg, "abort_attempt_after_consecutive_python_errors", 0)
+                or 0
+            ),
+            recycle_sandbox_after_python_errors=int(
+                getattr(self.cfg, "recycle_sandbox_after_python_errors", 0) or 0
+            ),
         )
 
         had_exception = False
@@ -851,7 +971,9 @@ class AIMO3Solver:
 
         tool_call_cap = tool_call_cap_for_attempt(
             attempt_tag=attempt_tag,
-            recovery_micro_cap=int(getattr(self.cfg, "recovery_micro_tool_call_cap", 0) or 0),
+            recovery_micro_cap=int(
+                getattr(self.cfg, "recovery_micro_tool_call_cap", 0) or 0
+            ),
         )
 
         conversation = None
@@ -871,10 +993,15 @@ class AIMO3Solver:
                 local_jupyter_timeout=self.cfg.jupyter_timeout,
                 tool_prompt=self.cfg.tool_prompt,
                 sandbox=sandbox,
-                tool_timeout_cap_s=float(getattr(self.cfg, "python_tool_timeout_cap_s", 0.0) or 0.0) or None,
+                tool_timeout_cap_s=float(
+                    getattr(self.cfg, "python_tool_timeout_cap_s", 0.0) or 0.0
+                )
+                or None,
             )
 
-            messages = self.template.apply_chat_template(developer_prompt, problem, local_tool.tool_config)
+            messages = self.template.apply_chat_template(
+                developer_prompt, problem, local_tool.tool_config
+            )
             Conversation = _require_harmony()["Conversation"]
             conversation = Conversation.from_messages(messages)
 
@@ -882,18 +1009,19 @@ class AIMO3Solver:
                 if stop_event.is_set() or time.time() > deadline:
                     break
 
-                prompt_ids = self.encoding.render_conversation_for_completion(conversation, self.Role.ASSISTANT)
+                prompt_ids = self.encoding.render_conversation_for_completion(
+                    conversation, self.Role.ASSISTANT
+                )
                 max_tokens = self.cfg.context_tokens - len(prompt_ids)
                 if max_tokens < self.cfg.buffer_tokens:
                     break
 
-
                 # If using llama.cpp backend, it expects `prompt` to be a string or list of strings (tokens not supported in all endpoints),
-                # OR it might just be rejecting the list[int] format. 
+                # OR it might just be rejecting the list[int] format.
                 # HOWEVER: The OpenAI standard `completions` endpoint DOES support `prompt` as list[int].
                 # The validation error says: "Input should be a valid string", which implies llama-cpp-python's Pydantic model
                 # might be strictly enforcing string.
-                
+
                 # Prepare extra parameters
                 extra_params = {
                     "min_p": self.cfg.min_p,
@@ -902,22 +1030,22 @@ class AIMO3Solver:
                     "stop_token_ids": self.stop_token_ids,
                     "return_token_ids": True,
                 }
-                
+
                 # Check backend-specific quirks
                 backend = getattr(self.cfg, "inference_backend", "vllm")
-                
+
                 # Handling prompt format
                 if backend == "llama_cpp":
                     # Convert token IDs back to string for llama.cpp compatibility
                     prompt_arg = self.encoding.decode(prompt_ids)
-                    
+
                     # Fix top_k: vLLM uses -1 for "disable", llama.cpp requires >= 0 (usually 0 or 40)
                     # If configured as -1, set to 0 (unlimited) or default (40)
                     if extra_params["top_k"] < 0:
                         extra_params["top_k"] = 40  # Reasonable default for llama.cpp
                 else:
                     prompt_arg = prompt_ids
-                
+
                 token_buffer: list[int] = []
                 text_chunks: list[str] = []
 
@@ -928,13 +1056,20 @@ class AIMO3Solver:
                         stream = self.client.completions.create(
                             model=self.cfg.served_model_name,
                             temperature=temperature_for_attempt(
-                                cfg=self.cfg, attempt_index=attempt_index, attempt_tag=attempt_tag
+                                cfg=self.cfg,
+                                attempt_index=attempt_index,
+                                attempt_tag=attempt_tag,
                             ),
                             logprobs=(
                                 int(self.cfg.top_logprobs)
                                 if (
-                                    bool(getattr(self.cfg, "entropy_weighting_enabled", False))
-                                    and int(getattr(self.cfg, "top_logprobs", 0) or 0) > 0
+                                    bool(
+                                        getattr(
+                                            self.cfg, "entropy_weighting_enabled", False
+                                        )
+                                    )
+                                    and int(getattr(self.cfg, "top_logprobs", 0) or 0)
+                                    > 0
                                 )
                                 else None
                             ),
@@ -958,19 +1093,25 @@ class AIMO3Solver:
                                 # Fallback for servers that don't return token_ids.
                                 # Note: chunk-wise encoding is imperfect for BPE, but needed for the buffer.
                                 # Treat any special-token-like substrings as normal text in this fallback.
-                                new_tokens = self.encoding.encode(new_text, disallowed_special=())
+                                new_tokens = self.encoding.encode(
+                                    new_text, disallowed_special=()
+                                )
 
                             if new_tokens:
                                 token_buffer.extend(new_tokens)
                                 total_tokens += len(new_tokens)
                                 text_chunks.append(new_text)
                                 if new_text:
-                                    text_tail = (text_tail + new_text)
+                                    text_tail = text_tail + new_text
                                     if cap > 0 and len(text_tail) > cap:
                                         text_tail = text_tail[-cap:]
 
                                 # Optional: collect top-k logprobs for entropy.
-                                if bool(getattr(self.cfg, "entropy_weighting_enabled", False)):
+                                if bool(
+                                    getattr(
+                                        self.cfg, "entropy_weighting_enabled", False
+                                    )
+                                ):
                                     with contextlib.suppress(Exception):
                                         lp = chunk.choices[0].logprobs
                                         tlp = getattr(lp, "top_logprobs", None)
@@ -979,7 +1120,9 @@ class AIMO3Solver:
                                             logprobs_buffer.extend(list(tlp))
 
                             if "}" in new_text:
-                                search_text = "".join(text_chunks[-self.cfg.search_tokens :])
+                                search_text = "".join(
+                                    text_chunks[-self.cfg.search_tokens :]
+                                )
                                 ans = self._extractor.extract_boxed_int(search_text)
                                 if ans is not None:
                                     final_answer = ans
@@ -990,7 +1133,9 @@ class AIMO3Solver:
                         resp = self.client.completions.create(
                             model=self.cfg.served_model_name,
                             temperature=temperature_for_attempt(
-                                cfg=self.cfg, attempt_index=attempt_index, attempt_tag=attempt_tag
+                                cfg=self.cfg,
+                                attempt_index=attempt_index,
+                                attempt_tag=attempt_tag,
                             ),
                             max_tokens=max_tokens,
                             prompt=prompt_arg,
@@ -1007,22 +1152,28 @@ class AIMO3Solver:
                             # encoded as special tokens to be parseable by openai_harmony.
                             new_tokens: list[int] = []
                             with contextlib.suppress(Exception):
-                                new_tokens = self.encoding.encode(new_text, allowed_special="all")
+                                new_tokens = self.encoding.encode(
+                                    new_text, allowed_special="all"
+                                )
                             if not new_tokens:
                                 # As a last resort, encode treating specials as normal text.
                                 with contextlib.suppress(Exception):
-                                    new_tokens = self.encoding.encode(new_text, disallowed_special=())
+                                    new_tokens = self.encoding.encode(
+                                        new_text, disallowed_special=()
+                                    )
 
                             if new_tokens:
                                 token_buffer.extend(new_tokens)
                                 total_tokens += len(new_tokens)
-                            text_tail = (text_tail + new_text)
+                            text_tail = text_tail + new_text
                             if cap > 0 and len(text_tail) > cap:
                                 text_tail = text_tail[-cap:]
 
                             if "}" in new_text:
                                 # Use tail window for answer extraction.
-                                search_text = new_text[-max(0, int(self.cfg.search_tokens)) :]
+                                search_text = new_text[
+                                    -max(0, int(self.cfg.search_tokens)) :
+                                ]
                                 ans = self._extractor.extract_boxed_int(search_text)
                                 if ans is not None:
                                     final_answer = ans
@@ -1048,8 +1199,10 @@ class AIMO3Solver:
                     new_messages = None
                     if token_buffer:
                         with contextlib.suppress(Exception):
-                            new_messages = self.encoding.parse_messages_from_completion_tokens(
-                                token_buffer, self.Role.ASSISTANT, strict=False
+                            new_messages = (
+                                self.encoding.parse_messages_from_completion_tokens(
+                                    token_buffer, self.Role.ASSISTANT, strict=False
+                                )
                             )
 
                     if not new_messages:
@@ -1058,7 +1211,9 @@ class AIMO3Solver:
                         Author = self._h["Author"]
                         Message = self._h["Message"]
 
-                        content = [TextContent(text=assistant_text)] if assistant_text else []
+                        content = (
+                            [TextContent(text=assistant_text)] if assistant_text else []
+                        )
                         author = Author(role=self.Role.ASSISTANT, name="assistant")
                         msg = Message(author=author, content=content)
                         new_messages = [msg]
@@ -1067,8 +1222,10 @@ class AIMO3Solver:
                     # still observe truncated/partial outputs (deadline, client disconnects, etc.).
                     # Never crash the whole attempt on a parse failure; fall back to plain text.
                     try:
-                        new_messages = self.encoding.parse_messages_from_completion_tokens(
-                            token_buffer, self.Role.ASSISTANT, strict=True
+                        new_messages = (
+                            self.encoding.parse_messages_from_completion_tokens(
+                                token_buffer, self.Role.ASSISTANT, strict=True
+                            )
                         )
                     except Exception:  # noqa: BLE001
                         assistant_text = "".join(text_chunks).strip()
@@ -1076,7 +1233,9 @@ class AIMO3Solver:
                         Author = self._h["Author"]
                         Message = self._h["Message"]
 
-                        content = [TextContent(text=assistant_text)] if assistant_text else []
+                        content = (
+                            [TextContent(text=assistant_text)] if assistant_text else []
+                        )
                         author = Author(role=self.Role.ASSISTANT, name="assistant")
                         msg = Message(author=author, content=content)
                         new_messages = [msg]
@@ -1092,7 +1251,7 @@ class AIMO3Solver:
                     # Some messages may have multiple content chunks.
                     parts: list[str] = []
                     with contextlib.suppress(Exception):
-                        for c in (m.content or []):
+                        for c in m.content or []:
                             t = getattr(c, "text", None)
                             if t:
                                 parts.append(str(t))
@@ -1113,7 +1272,9 @@ class AIMO3Solver:
                     had_python_calls_in_batch = True
 
                     # Enforce tool-call caps for recovery variants.
-                    if tool_call_cap is not None and (python_calls + 1) > int(tool_call_cap):
+                    if tool_call_cap is not None and (python_calls + 1) > int(
+                        tool_call_cap
+                    ):
                         aborted_for_tool_errors = True
                         break
 
@@ -1139,13 +1300,36 @@ class AIMO3Solver:
                         timed_out_s = parse_timeout_error(str(resp_text))
                         if (
                             timed_out_s is not None
-                            and bool(getattr(self.cfg, "python_tool_timeout_retry_enabled", True))
-                            and (deadline - time.time()) >= float(
-                                getattr(self.cfg, "python_tool_timeout_retry_min_remaining_s", 0.0) or 0.0
+                            and bool(
+                                getattr(
+                                    self.cfg, "python_tool_timeout_retry_enabled", True
+                                )
+                            )
+                            and (deadline - time.time())
+                            >= float(
+                                getattr(
+                                    self.cfg,
+                                    "python_tool_timeout_retry_min_remaining_s",
+                                    0.0,
+                                )
+                                or 0.0
                             )
                         ):
-                            mult = float(getattr(self.cfg, "python_tool_timeout_retry_multiplier", 2.0) or 2.0)
-                            cap_s = float(getattr(self.cfg, "python_tool_timeout_cap_s", 0.0) or 0.0) or None
+                            mult = float(
+                                getattr(
+                                    self.cfg,
+                                    "python_tool_timeout_retry_multiplier",
+                                    2.0,
+                                )
+                                or 2.0
+                            )
+                            cap_s = (
+                                float(
+                                    getattr(self.cfg, "python_tool_timeout_cap_s", 0.0)
+                                    or 0.0
+                                )
+                                or None
+                            )
                             new_timeout = float(timed_out_s) * max(1.0, mult)
                             if cap_s is not None:
                                 new_timeout = min(new_timeout, float(cap_s))
@@ -1153,7 +1337,9 @@ class AIMO3Solver:
                             # Only retry if it meaningfully increases the timeout.
                             if new_timeout > float(timed_out_s) + 1e-6:
                                 # Ensure retry doesn't violate the tool-call cap.
-                                if tool_call_cap is not None and (python_calls + 1) > int(tool_call_cap):
+                                if tool_call_cap is not None and (
+                                    python_calls + 1
+                                ) > int(tool_call_cap):
                                     pass
                                 else:
                                     python_calls += 1
@@ -1161,9 +1347,13 @@ class AIMO3Solver:
                                         call.message, timeout_override_s=new_timeout
                                     )
                                     with contextlib.suppress(Exception):
-                                        resp_text2 = tool_responses_retry[0].content[0].text
+                                        resp_text2 = (
+                                            tool_responses_retry[0].content[0].text
+                                        )
                                         if resp_text2:
-                                            transcript_python_outputs.append(str(resp_text2))
+                                            transcript_python_outputs.append(
+                                                str(resp_text2)
+                                            )
                                         resp_text = resp_text2
                                     # Replace tool_responses to reflect what we append.
                                     tool_responses = tool_responses_retry
@@ -1175,12 +1365,24 @@ class AIMO3Solver:
                         if timed_out_s is not None:
                             had_timeout = True
                             timeout_count += 1
-                            if bool(getattr(self.cfg, "abort_attempt_on_python_timeout", True)):
+                            if bool(
+                                getattr(
+                                    self.cfg, "abort_attempt_on_python_timeout", True
+                                )
+                            ):
                                 aborted_for_tool_errors = True
-                            if bool(getattr(self.cfg, "recycle_sandbox_on_python_timeout", True)):
+                            if bool(
+                                getattr(
+                                    self.cfg, "recycle_sandbox_on_python_timeout", True
+                                )
+                            ):
                                 had_exception = True
 
-                        if str(resp_text).startswith("[ERROR]") or "Traceback" in str(resp_text) or "Error:" in str(resp_text):
+                        if (
+                            str(resp_text).startswith("[ERROR]")
+                            or "Traceback" in str(resp_text)
+                            or "Error:" in str(resp_text)
+                        ):
                             python_errors += 1
                             consecutive_python_errors += 1
                         else:
@@ -1212,7 +1414,7 @@ class AIMO3Solver:
                 if last.channel == "final":
                     answer_text = last.content[0].text
                     if answer_text:
-                        text_tail = (text_tail + answer_text)
+                        text_tail = text_tail + answer_text
                         if cap > 0 and len(text_tail) > cap:
                             text_tail = text_tail[-cap:]
                     final_answer = self._extractor.extract_boxed_int(answer_text)
@@ -1222,7 +1424,9 @@ class AIMO3Solver:
 
                 # Conclusion prompting: if tokens exceed threshold and we haven't nudged yet,
                 # inject a message asking the model to conclude with \boxed{}.
-                nudge_threshold = int(getattr(self.cfg, "conclude_nudge_tokens", 0) or 0)
+                nudge_threshold = int(
+                    getattr(self.cfg, "conclude_nudge_tokens", 0) or 0
+                )
                 nudge_enabled = bool(getattr(self.cfg, "conclude_nudge_enabled", True))
                 nudge_once = bool(getattr(self.cfg, "conclude_nudge_once", True))
                 if (
@@ -1271,7 +1475,9 @@ class AIMO3Solver:
                 and not bool(aborted_for_tool_errors)
             ):
                 remaining = float(deadline - time.time())
-                min_remaining = float(getattr(self.cfg, "finalize_answer_min_remaining_s", 0.0) or 0.0)
+                min_remaining = float(
+                    getattr(self.cfg, "finalize_answer_min_remaining_s", 0.0) or 0.0
+                )
                 if remaining >= min_remaining and min_remaining >= 0.0:
                     # Add an explicit user instruction to force a single-line boxed integer.
                     h = _require_harmony()
@@ -1289,15 +1495,23 @@ class AIMO3Solver:
                         )
                     )
 
-                    prompt_ids = self.encoding.render_conversation_for_completion(conversation, self.Role.ASSISTANT)
+                    prompt_ids = self.encoding.render_conversation_for_completion(
+                        conversation, self.Role.ASSISTANT
+                    )
                     max_tokens = self.cfg.context_tokens - len(prompt_ids)
-                    max_tokens = min(max_tokens, int(getattr(self.cfg, "finalize_answer_max_tokens", 0) or 0))
+                    max_tokens = min(
+                        max_tokens,
+                        int(getattr(self.cfg, "finalize_answer_max_tokens", 0) or 0),
+                    )
                     # This is intentionally a *short* completion; do not apply the usual
                     # buffer-tokens gate (which is tuned for long generations).
                     if max_tokens > 0:
                         resp = self.client.completions.create(
                             model=self.cfg.served_model_name,
-                            temperature=float(getattr(self.cfg, "temperature_formatting", 0.10) or 0.10),
+                            temperature=float(
+                                getattr(self.cfg, "temperature_formatting", 0.10)
+                                or 0.10
+                            ),
                             max_tokens=max_tokens,
                             prompt=prompt_ids,
                             seed=attempt_seed + 11,
@@ -1316,18 +1530,23 @@ class AIMO3Solver:
                             fin_text = resp.choices[0].text
 
                         if fin_text:
-                            text_tail = (text_tail + str(fin_text))
+                            text_tail = text_tail + str(fin_text)
                             if cap > 0 and len(text_tail) > cap:
                                 text_tail = text_tail[-cap:]
                             transcript_assistant_final.append(str(fin_text).strip())
                             with contextlib.suppress(Exception):
-                                final_answer = self._extractor.extract_boxed_int(str(fin_text))
+                                final_answer = self._extractor.extract_boxed_int(
+                                    str(fin_text)
+                                )
                                 if final_answer is None:
-                                    final_answer = self._extractor.extract_int_fallback(str(fin_text))
+                                    final_answer = self._extractor.extract_int_fallback(
+                                        str(fin_text)
+                                    )
 
         except Exception as e:
             print(f"[Attempt {attempt_index}] Failed: {e}", file=sys.stderr)
             import traceback
+
             traceback.print_exc()
             had_exception = True
             python_errors += 1
@@ -1347,10 +1566,16 @@ class AIMO3Solver:
                             sandbox.close()
                         # Replace with a fresh sandbox to keep the pool healthy.
                         with contextlib.suppress(Exception):
-                            self.sandbox_pool.put(AIMO3Sandbox(timeout=self.cfg.jupyter_timeout))
+                            self.sandbox_pool.put(
+                                AIMO3Sandbox(timeout=self.cfg.jupyter_timeout)
+                            )
                     else:
                         try:
-                            if bool(getattr(self.cfg, "sandbox_reset_between_attempts", True)):
+                            if bool(
+                                getattr(
+                                    self.cfg, "sandbox_reset_between_attempts", True
+                                )
+                            ):
                                 sandbox.reset()
                             self.sandbox_pool.put(sandbox)
                         except Exception:  # noqa: BLE001
@@ -1358,7 +1583,9 @@ class AIMO3Solver:
                             with contextlib.suppress(Exception):
                                 sandbox.close()
                             with contextlib.suppress(Exception):
-                                self.sandbox_pool.put(AIMO3Sandbox(timeout=self.cfg.jupyter_timeout))
+                                self.sandbox_pool.put(
+                                    AIMO3Sandbox(timeout=self.cfg.jupyter_timeout)
+                                )
                 else:
                     with contextlib.suppress(Exception):
                         sandbox.close()
@@ -1373,10 +1600,21 @@ class AIMO3Solver:
                 lean_calls=lean_calls,
                 timeout_count=timeout_count,
                 verification_marker_found=(
-                    any(self._has_verification_marker(out, str(getattr(self.cfg, "python_tool_verify_marker", "") or ""))
-                        for out in transcript_python_outputs)
-                    if bool(getattr(self.cfg, "python_tool_verify_require_marker", False))
-                    and bool(str(getattr(self.cfg, "python_tool_verify_marker", "") or ""))
+                    any(
+                        self._has_verification_marker(
+                            out,
+                            str(
+                                getattr(self.cfg, "python_tool_verify_marker", "") or ""
+                            ),
+                        )
+                        for out in transcript_python_outputs
+                    )
+                    if bool(
+                        getattr(self.cfg, "python_tool_verify_require_marker", False)
+                    )
+                    and bool(
+                        str(getattr(self.cfg, "python_tool_verify_marker", "") or "")
+                    )
                     else None
                 ),
                 mean_entropy=(
@@ -1388,16 +1626,24 @@ class AIMO3Solver:
             output_text=text_tail,
             tag=(
                 (str(attempt_tag) + "|tool_abort")
-                if (attempt_tag and aborted_for_tool_errors and "tool_abort" not in str(attempt_tag))
+                if (
+                    attempt_tag
+                    and aborted_for_tool_errors
+                    and "tool_abort" not in str(attempt_tag)
+                )
                 else attempt_tag
             ),
         )
 
         # Optional: record a per-attempt transcript for post-run inspection.
-        if bool(getattr(self.cfg, "trace_attempts_enabled", False)) and bool(getattr(self.cfg, "trace_enabled", False)):
+        if bool(getattr(self.cfg, "trace_attempts_enabled", False)) and bool(
+            getattr(self.cfg, "trace_enabled", False)
+        ):
             max_chars = int(getattr(self.cfg, "trace_attempts_max_chars", 0) or 0)
 
-            def _cap_list(items: list[str], per_item_chars: int = 4000, max_items: int = 20) -> list[str]:
+            def _cap_list(
+                items: list[str], per_item_chars: int = 4000, max_items: int = 20
+            ) -> list[str]:
                 # Keep attempt payload bounded.
                 per_item_chars = max(0, int(per_item_chars))
                 max_items = max(0, int(max_items))
@@ -1412,7 +1658,9 @@ class AIMO3Solver:
                 "problem_id": problem_id,
                 "attempt": int(result.attempt),
                 "tag": result.tag,
-                "answer": (int(result.answer) if isinstance(result.answer, int) else None),
+                "answer": (
+                    int(result.answer) if isinstance(result.answer, int) else None
+                ),
                 "token_count": int(result.stats.token_count),
                 "python_calls": int(result.stats.python_calls),
                 "lean_calls": int(getattr(result.stats, "lean_calls", 0) or 0),
@@ -1421,8 +1669,20 @@ class AIMO3Solver:
                 "aborted_for_tool_errors": bool(aborted_for_tool_errors),
                 "had_exception": bool(had_exception),
                 "retriever_used": bool(retriever_used),
-                "assistant_final": self._truncate("\n\n".join(transcript_assistant_final).strip(), max_chars) if max_chars > 0 else "\n\n".join(transcript_assistant_final).strip(),
-                "assistant_commentary": self._truncate("\n\n".join(transcript_assistant_commentary).strip(), max_chars) if max_chars > 0 else "\n\n".join(transcript_assistant_commentary).strip(),
+                "assistant_final": (
+                    self._truncate(
+                        "\n\n".join(transcript_assistant_final).strip(), max_chars
+                    )
+                    if max_chars > 0
+                    else "\n\n".join(transcript_assistant_final).strip()
+                ),
+                "assistant_commentary": (
+                    self._truncate(
+                        "\n\n".join(transcript_assistant_commentary).strip(), max_chars
+                    )
+                    if max_chars > 0
+                    else "\n\n".join(transcript_assistant_commentary).strip()
+                ),
                 "python_calls_text": _cap_list(transcript_python_calls),
                 "python_outputs_text": _cap_list(transcript_python_outputs),
             }
@@ -1447,7 +1707,11 @@ class AIMO3Solver:
         return rank_candidates(detailed_results, filter_to_verified_if_any=True)
 
     def _second_stage_verify(
-        self, user_input: str, candidates: list[int], verify_deadline: float, problem_id: str | None = None
+        self,
+        user_input: str,
+        candidates: list[int],
+        verify_deadline: float,
+        problem_id: str | None = None,
     ) -> int | None:
         if not candidates:
             return None
@@ -1457,8 +1721,14 @@ class AIMO3Solver:
             return None
 
         thr = float(self.cfg.second_stage_verify_repeats_threshold)
-        repeats = int(self.cfg.second_stage_verify_repeats_high) if remaining >= thr else int(self.cfg.second_stage_verify_repeats_low)
-        max_workers = min(int(self.cfg.second_stage_verify_workers_cap), max(1, self.cfg.workers))
+        repeats = (
+            int(self.cfg.second_stage_verify_repeats_high)
+            if remaining >= thr
+            else int(self.cfg.second_stage_verify_repeats_low)
+        )
+        max_workers = min(
+            int(self.cfg.second_stage_verify_workers_cap), max(1, self.cfg.workers)
+        )
 
         stop_event = threading.Event()
         supports: dict[int, int] = {c: 0 for c in candidates}
@@ -1466,7 +1736,9 @@ class AIMO3Solver:
         tasks: list[tuple[str, int, int]] = []
         base = int(self.cfg.second_stage_verify_attempt_base)
         marker = str(getattr(self.cfg, "second_stage_verify_marker", "VERIFIED_OK"))
-        require_marker = bool(getattr(self.cfg, "second_stage_verify_require_marker", True))
+        require_marker = bool(
+            getattr(self.cfg, "second_stage_verify_require_marker", True)
+        )
         for ci, cand in enumerate(candidates):
             verify_problem = (
                 f"{user_input}\n\n"
@@ -1499,9 +1771,13 @@ class AIMO3Solver:
                 if time.time() > verify_deadline:
                     break
                 with contextlib.suppress(Exception):
-                    r: AttemptResult = fut.result(timeout=max(0.0, verify_deadline - time.time()))
+                    r: AttemptResult = fut.result(
+                        timeout=max(0.0, verify_deadline - time.time())
+                    )
                     if r.answer == cand and r.stats.tool_verified:
-                        if require_marker and not self._has_verification_marker(r.output_text, marker):
+                        if require_marker and not self._has_verification_marker(
+                            r.output_text, marker
+                        ):
                             continue
                         supports[cand] = supports.get(cand, 0) + 1
 
@@ -1524,12 +1800,12 @@ class AIMO3Solver:
         problem_id: str | None = None,
     ) -> tuple[int | None, dict]:
         """Run adversarial debate on a candidate answer.
-        
+
         Process:
         1. Adversary critiques the candidate answer
         2. If flaw found, defender responds
         3. If answers differ, arbiter decides
-        
+
         Returns:
             (final_answer, debate_info_dict)
         """
@@ -1539,21 +1815,21 @@ class AIMO3Solver:
             "revised_answer": None,
             "arbiter_decision": None,
         }
-        
+
         if time.time() >= debate_deadline:
             return None, debate_info
-        
+
         stop_event = threading.Event()
         rounds = max(1, int(getattr(self.cfg, "adversarial_debate_rounds", 1)))
         use_arbiter = bool(getattr(self.cfg, "adversarial_debate_use_arbiter", True))
-        
+
         current_answer = candidate
         current_reasoning = candidate_reasoning or f"The answer is {candidate}."
-        
+
         for round_idx in range(rounds):
             if time.time() >= debate_deadline:
                 break
-            
+
             # Phase 1: Adversary critiques
             critique_problem = (
                 f"{user_input}\n\n"
@@ -1566,7 +1842,7 @@ class AIMO3Solver:
                 f"Use Python to check edge cases and verify claims. "
                 f"Output FLAW_FOUND if you find an error, or NO_FLAW_FOUND if the solution is correct."
             )
-            
+
             attempt_idx = 20000 + round_idx * 10
             critique_result = self._process_attempt(
                 critique_problem,
@@ -1577,25 +1853,28 @@ class AIMO3Solver:
                 debate_deadline,
                 problem_id,
             )
-            
+
             critique_text = critique_result.output_text or ""
-            flaw_found = "FLAW_FOUND" in critique_text.upper() and "NO_FLAW" not in critique_text.upper()
-            
+            flaw_found = (
+                "FLAW_FOUND" in critique_text.upper()
+                and "NO_FLAW" not in critique_text.upper()
+            )
+
             debate_info[f"round_{round_idx}_critique"] = {
                 "flaw_found": flaw_found,
                 "text_snippet": critique_text[-500:] if critique_text else None,
             }
-            
+
             if not flaw_found:
                 # No flaw found, answer stands
                 continue
-            
+
             debate_info["critique_found_flaw"] = True
-            
+
             # Phase 2: Defender responds to critique
             if time.time() >= debate_deadline:
                 break
-                
+
             defend_problem = (
                 f"{user_input}\n\n"
                 f"---\n"
@@ -1606,7 +1885,7 @@ class AIMO3Solver:
                 f"If it's wrong, explain why and maintain your answer. "
                 f"Output your final answer as \\boxed{{n}}."
             )
-            
+
             defend_result = self._process_attempt(
                 defend_problem,
                 ADVERSARY_DEFEND_PROMPT,
@@ -1616,18 +1895,19 @@ class AIMO3Solver:
                 debate_deadline,
                 problem_id,
             )
-            
+
             defend_answer = defend_result.answer
             defend_text = defend_result.output_text or ""
-            
+
             debate_info[f"round_{round_idx}_defend"] = {
-                "revised": defend_answer is not None and defend_answer != current_answer,
+                "revised": defend_answer is not None
+                and defend_answer != current_answer,
                 "new_answer": defend_answer,
             }
-            
+
             if defend_answer is not None and defend_answer != current_answer:
                 debate_info["revised_answer"] = defend_answer
-                
+
                 # Phase 3: Arbiter decides if answers differ and arbiter is enabled
                 if use_arbiter and time.time() < debate_deadline:
                     arbiter_problem = (
@@ -1642,7 +1922,7 @@ class AIMO3Solver:
                         f"You are the arbiter. Verify both answers independently using Python. "
                         f"Choose the correct one and output \\boxed{{n}}."
                     )
-                    
+
                     arbiter_result = self._process_attempt(
                         arbiter_problem,
                         ADVERSARY_ARBITER_PROMPT,
@@ -1652,10 +1932,10 @@ class AIMO3Solver:
                         debate_deadline,
                         problem_id,
                     )
-                    
+
                     arbiter_answer = arbiter_result.answer
                     debate_info["arbiter_decision"] = arbiter_answer
-                    
+
                     if arbiter_answer is not None:
                         current_answer = arbiter_answer
                         current_reasoning = arbiter_result.output_text
@@ -1663,7 +1943,7 @@ class AIMO3Solver:
                     # No arbiter, accept defender's revision
                     current_answer = defend_answer
                     current_reasoning = defend_text
-        
+
         debate_info["final_answer"] = current_answer
         return current_answer, debate_info
 
@@ -1673,7 +1953,7 @@ class AIMO3Solver:
 
         Controlled by cfg.disabled_prompts (comma-separated list).
         Always returns at least one spec (falls back to standard).
-        
+
         If constraint_discovery is enabled, includes the discovery prompt
         based on constraint_discovery_prompt_fraction.
         """
@@ -1696,73 +1976,85 @@ class AIMO3Solver:
             specs.append(("constraint_discovery", TIR_PROMPT_CONSTRAINT_DISCOVERY))
         if bool(getattr(cfg, "scratchpad_enabled", False)):
             specs.append(("scratchpad", TIR_PROMPT_SCRATCHPAD))
-        
+
         # Filter disabled prompts
         enabled = [(name, prompt) for (name, prompt) in specs if name not in disabled]
-        
+
         if not enabled:
             enabled = [("standard", TIR_PROMPT_STANDARD)]
         return enabled
 
     def solve_problem(self, problem: str) -> int:
         problem_start_time = time.time()
-        
+
         # Build user prompt with optional enhancements
         user_input = problem
-        
+
         # Optionally inject retrieved mathematical knowledge (RAG)
         retrieved_context = ""
         retriever_metadata = {}
         if self._retriever is not None:
             try:
                 top_k = int(getattr(self.cfg, "retriever_top_k", 5))
-                include_examples = bool(getattr(self.cfg, "retriever_include_examples", True))
-                include_definitions = bool(getattr(self.cfg, "retriever_include_definitions", True))
-                
-                # Retrieve relevant concepts with timing
-                retrieved_context, retriever_metadata = self._retriever.retrieve_for_problem(
-                    problem=problem,
-                    top_k=top_k,
-                    include_examples=include_examples,
-                    include_definitions=include_definitions,
+                include_examples = bool(
+                    getattr(self.cfg, "retriever_include_examples", True)
                 )
-                
+                include_definitions = bool(
+                    getattr(self.cfg, "retriever_include_definitions", True)
+                )
+
+                # Retrieve relevant concepts with timing
+                retrieved_context, retriever_metadata = (
+                    self._retriever.retrieve_for_problem(
+                        problem=problem,
+                        top_k=top_k,
+                        include_examples=include_examples,
+                        include_definitions=include_definitions,
+                    )
+                )
+
                 if retriever_metadata:
                     # Log retriever stats to trace
-                    self._trace.record({
-                        "event": "retriever_used",
-                        "problem_id": stable_problem_id(problem),
-                        "retriever_stats": retriever_metadata,
-                    })
+                    self._trace.record(
+                        {
+                            "event": "retriever_used",
+                            "problem_id": stable_problem_id(problem),
+                            "retriever_stats": retriever_metadata,
+                        }
+                    )
             except Exception:  # noqa: BLE001
                 # Graceful degradation: don't fail the solve if retrieval fails
                 pass
-        
+
         # Flag indicating retriever was actually used (for trace stats)
         _retriever_used = bool(retrieved_context)
-        
+
         # Inject retrieved knowledge at the beginning
         if retrieved_context:
             user_input = f"{retrieved_context}{user_input}"
-        
+
         # Optionally inject constraint discovery prefix
-        if bool(getattr(self.cfg, "constraint_discovery_enabled", True)) and \
-           bool(getattr(self.cfg, "constraint_discovery_prefix_enabled", True)):
+        if bool(getattr(self.cfg, "constraint_discovery_enabled", True)) and bool(
+            getattr(self.cfg, "constraint_discovery_prefix_enabled", True)
+        ):
             user_input = f"{CONSTRAINT_DISCOVERY_PREFIX}{user_input}"
-        
+
         # Optionally inject scratchpad reminder
-        if bool(getattr(self.cfg, "scratchpad_enabled", True)) and \
-           bool(getattr(self.cfg, "scratchpad_reminder_enabled", True)):
+        if bool(getattr(self.cfg, "scratchpad_enabled", True)) and bool(
+            getattr(self.cfg, "scratchpad_reminder_enabled", True)
+        ):
             user_input = f"{user_input}\n\n{SCRATCHPAD_REMINDER}"
-        
+
         # Add preference prompt
         user_input = f"{user_input} {self.cfg.preference_prompt}"
         pid = stable_problem_id(problem)
 
         # Dynamic budget: use tracker if available, fallback to legacy calculation
-        if hasattr(self, '_budget_tracker'):
+        if hasattr(self, "_budget_tracker"):
             # Sync tracker's view of elapsed time
-            self._budget_tracker.total_time_used_s = time.time() - self.notebook_start_time
+            self._budget_tracker.total_time_used_s = (
+                time.time() - self.notebook_start_time
+            )
             budget = self._budget_tracker.compute_budget()
         else:
             # Legacy static calculation
@@ -1770,8 +2062,14 @@ class AIMO3Solver:
             time_left = float(self.cfg.notebook_limit) - elapsed_global
             problems_left_others = max(0, int(self.problems_remaining) - 1)
             reserved = problems_left_others * float(self.cfg.base_problem_timeout)
-            slack = max(0.0, time_left - reserved - float(self.cfg.base_problem_timeout))
-            extra = min(slack * 0.50, float(self.cfg.high_problem_timeout) - float(self.cfg.base_problem_timeout))
+            slack = max(
+                0.0, time_left - reserved - float(self.cfg.base_problem_timeout)
+            )
+            extra = min(
+                slack * 0.50,
+                float(self.cfg.high_problem_timeout)
+                - float(self.cfg.base_problem_timeout),
+            )
             budget = float(self.cfg.base_problem_timeout) + extra
             budget = min(budget, float(self.cfg.high_problem_timeout))
             budget = max(budget, float(self.cfg.base_problem_timeout))
@@ -1814,12 +2112,20 @@ class AIMO3Solver:
                 sys_prompt = base
             if bool(self.cfg.protocol_enabled):
                 sys_prompt = with_protocol(sys_prompt)
-            tasks.append((sys_prompt, attempt_index, f"{base_name}|pack={meta_pack}|card={meta_card}"))
+            tasks.append(
+                (
+                    sys_prompt,
+                    attempt_index,
+                    f"{base_name}|pack={meta_pack}|card={meta_card}",
+                )
+            )
 
         detailed: list[AttemptResult] = []
         valid: list[int] = []
         stop_event = threading.Event()
-        extension_granted = False  # Track if we've already extended budget for this problem
+        extension_granted = (
+            False  # Track if we've already extended budget for this problem
+        )
 
         solve_start_payload = {
             "event": "solve_start",
@@ -1838,7 +2144,7 @@ class AIMO3Solver:
             "retriever_stats": retriever_metadata if retriever_metadata else None,
         }
         # Add dynamic budget tracker info if available
-        if hasattr(self, '_budget_tracker'):
+        if hasattr(self, "_budget_tracker"):
             bt = self._budget_tracker
             solve_start_payload["budget_tracker"] = {
                 "problems_solved": bt.problems_solved,
@@ -1849,7 +2155,9 @@ class AIMO3Solver:
                 "flex_pool_remaining_s": round(bt.flex_pool_remaining_s, 1),
                 "extensions_granted": bt.extensions_granted,
             }
-        if bool(getattr(self.cfg, "trace_env_enabled", False)) and bool(getattr(self.cfg, "trace_enabled", False)):
+        if bool(getattr(self.cfg, "trace_env_enabled", False)) and bool(
+            getattr(self.cfg, "trace_enabled", False)
+        ):
             with contextlib.suppress(Exception):
                 env = self._sandbox_env_snapshot()
                 if env is not None:
@@ -1877,7 +2185,9 @@ class AIMO3Solver:
 
             futures = set()
 
-            def _submit_one(sys_prompt: str, attempt_idx: int, attempt_tag: str) -> None:
+            def _submit_one(
+                sys_prompt: str, attempt_idx: int, attempt_tag: str
+            ) -> None:
                 futures.add(
                     ex.submit(
                         self._process_attempt,
@@ -1918,7 +2228,11 @@ class AIMO3Solver:
 
             def _fill_executor() -> None:
                 # Try to keep workers busy, subject to phase gating.
-                while (not stop_event.is_set()) and time.time() <= attempt_deadline and len(futures) < int(self.cfg.workers):
+                while (
+                    (not stop_event.is_set())
+                    and time.time() <= attempt_deadline
+                    and len(futures) < int(self.cfg.workers)
+                ):
                     nxt = _next_base_task()
                     if nxt is None:
                         break
@@ -1968,13 +2282,24 @@ class AIMO3Solver:
                     ):
                         time_spent = time.time() - problem_start_time
                         n_distinct = len(set(valid)) if valid else 0
-                        consensus_min_answers = int(getattr(self.cfg, "adaptive_budget_consensus_min_answers", 3))
-                        consensus_min_votes = int(getattr(self.cfg, "adaptive_budget_consensus_min_votes", 2))
+                        consensus_min_answers = int(
+                            getattr(
+                                self.cfg, "adaptive_budget_consensus_min_answers", 3
+                            )
+                        )
+                        consensus_min_votes = int(
+                            getattr(self.cfg, "adaptive_budget_consensus_min_votes", 2)
+                        )
                         has_consensus = (
-                            len(valid) >= consensus_min_answers
-                            and max(valid.count(a) for a in set(valid)) >= consensus_min_votes
-                        ) if valid else False
-                        
+                            (
+                                len(valid) >= consensus_min_answers
+                                and max(valid.count(a) for a in set(valid))
+                                >= consensus_min_votes
+                            )
+                            if valid
+                            else False
+                        )
+
                         extension = self._budget_tracker.request_extension(
                             time_spent_s=time_spent,
                             current_budget_s=budget,
@@ -1987,20 +2312,26 @@ class AIMO3Solver:
                             attempt_deadline += extension
                             deadline += extension
                             overall_deadline += extension
-                            self._trace.record({
-                                "event": "budget_extension",
-                                "problem_id": pid,
-                                "extension_s": round(extension, 1),
-                                "new_budget_s": round(budget + extension, 1),
-                                "time_spent_s": round(time_spent, 1),
-                                "n_distinct_answers": n_distinct,
-                                "has_consensus": has_consensus,
-                                "flex_pool_remaining_s": round(self._budget_tracker.flex_pool_remaining_s, 1),
-                            })
+                            self._trace.record(
+                                {
+                                    "event": "budget_extension",
+                                    "problem_id": pid,
+                                    "extension_s": round(extension, 1),
+                                    "new_budget_s": round(budget + extension, 1),
+                                    "time_spent_s": round(time_spent, 1),
+                                    "n_distinct_answers": n_distinct,
+                                    "has_consensus": has_consensus,
+                                    "flex_pool_remaining_s": round(
+                                        self._budget_tracker.flex_pool_remaining_s, 1
+                                    ),
+                                }
+                            )
 
                     # Pass time_spent for easy exit logic
                     time_spent_for_early_stop = time.time() - problem_start_time
-                    if self._should_early_stop(detailed, time_spent_s=time_spent_for_early_stop):
+                    if self._should_early_stop(
+                        detailed, time_spent_s=time_spent_for_early_stop
+                    ):
                         stop_event.set()
                         # Best-effort cancellation of remaining work.
                         for f in list(futures):
@@ -2018,14 +2349,30 @@ class AIMO3Solver:
                         if should_schedule_recovery_attempt(
                             result=r,
                             remaining_s=remaining_s,
-                            recovery_trigger_python_errors=int(getattr(self.cfg, "recovery_trigger_python_errors", 0) or 0),
-                            recovery_min_remaining_s=float(getattr(self.cfg, "recovery_min_remaining_s", 0.0) or 0.0),
+                            recovery_trigger_python_errors=int(
+                                getattr(self.cfg, "recovery_trigger_python_errors", 0)
+                                or 0
+                            ),
+                            recovery_min_remaining_s=float(
+                                getattr(self.cfg, "recovery_min_remaining_s", 0.0)
+                                or 0.0
+                            ),
                         ):
                             recovery_left -= 1
-                            mode = str(getattr(self.cfg, "recovery_mode", "auto") or "auto").strip().lower()
+                            mode = (
+                                str(
+                                    getattr(self.cfg, "recovery_mode", "auto") or "auto"
+                                )
+                                .strip()
+                                .lower()
+                            )
                             # Auto: if we had to abort for tool issues, go no-tool; else allow micro-tool.
                             if mode == "auto":
-                                mode = "no_tool" if (r.tag and "tool_abort" in str(r.tag)) else "micro_tool"
+                                mode = (
+                                    "no_tool"
+                                    if (r.tag and "tool_abort" in str(r.tag))
+                                    else "micro_tool"
+                                )
 
                             if mode == "no_tool":
                                 recovery_prompt = (
@@ -2042,7 +2389,9 @@ class AIMO3Solver:
                                 variant = "micro_tool"
                             if bool(self.cfg.protocol_enabled):
                                 recovery_prompt = with_protocol(recovery_prompt)
-                            attempt_idx = int(self.cfg.attempts) + (int(self.cfg.recovery_attempts_cap) - recovery_left)
+                            attempt_idx = int(self.cfg.attempts) + (
+                                int(self.cfg.recovery_attempts_cap) - recovery_left
+                            )
                             attempt_tag = f"recovery|variant={variant}|pack=recovery|card=tool_instability"
                             _submit_one(recovery_prompt, attempt_idx, attempt_tag)
 
@@ -2057,8 +2406,16 @@ class AIMO3Solver:
                         if should_schedule_format_recovery_attempt(
                             result=r,
                             remaining_s=remaining_s,
-                            trigger_tokens=int(getattr(self.cfg, "format_recovery_trigger_tokens", 0) or 0),
-                            min_remaining_s=float(getattr(self.cfg, "format_recovery_min_remaining_s", 0.0) or 0.0),
+                            trigger_tokens=int(
+                                getattr(self.cfg, "format_recovery_trigger_tokens", 0)
+                                or 0
+                            ),
+                            min_remaining_s=float(
+                                getattr(
+                                    self.cfg, "format_recovery_min_remaining_s", 0.0
+                                )
+                                or 0.0
+                            ),
                         ):
                             format_recovery_left -= 1
                             fmt_prompt = (
@@ -2068,15 +2425,22 @@ class AIMO3Solver:
                             )
                             if bool(self.cfg.protocol_enabled):
                                 fmt_prompt = with_protocol(fmt_prompt)
-                            attempt_idx = int(self.cfg.attempts) + 50_000 + (int(self.cfg.format_recovery_cap) - format_recovery_left)
+                            attempt_idx = (
+                                int(self.cfg.attempts)
+                                + 50_000
+                                + (
+                                    int(self.cfg.format_recovery_cap)
+                                    - format_recovery_left
+                                )
+                            )
                             attempt_tag = "recovery|variant=no_tool|pack=recovery|card=format_only"
                             _submit_one(fmt_prompt, attempt_idx, attempt_tag)
 
         self.problems_remaining = max(0, int(self.problems_remaining) - 1)
-        
+
         # Record actual solve time for dynamic budgeting
         problem_elapsed = time.time() - problem_start_time
-        if hasattr(self, '_budget_tracker'):
+        if hasattr(self, "_budget_tracker"):
             self._budget_tracker.record_solve(problem_elapsed)
 
         # Retry if no valid answers.
@@ -2101,17 +2465,25 @@ class AIMO3Solver:
                         base_prompt,
                         attempt_index=attempt_idx,
                         problem_text=problem,
-                        mode=str(getattr(self.cfg, "strategy_pack_mode", "round_robin")),
-                        enabled_packs=str(getattr(self.cfg, "strategy_packs", "generic")),
+                        mode=str(
+                            getattr(self.cfg, "strategy_pack_mode", "round_robin")
+                        ),
+                        enabled_packs=str(
+                            getattr(self.cfg, "strategy_packs", "generic")
+                        ),
                     )[0]
                     if bool(self.cfg.wickelgren_strategies_enabled)
                     else base_prompt
                 )
-                retry_tasks.append((sys_prompt, attempt_idx, f"{name}|pack=retry|card=retry"))
+                retry_tasks.append(
+                    (sys_prompt, attempt_idx, f"{name}|pack=retry|card=retry")
+                )
 
             # Apply protocol to retry prompts too.
             if bool(self.cfg.protocol_enabled):
-                retry_tasks = [(with_protocol(p), idx, tag) for (p, idx, tag) in retry_tasks]
+                retry_tasks = [
+                    (with_protocol(p), idx, tag) for (p, idx, tag) in retry_tasks
+                ]
 
             with ThreadPoolExecutor(max_workers=min(4, int(self.cfg.workers))) as ex:
                 futures = [
@@ -2186,12 +2558,15 @@ class AIMO3Solver:
         n_distinct = len(ranked)
         top_votes = int(top_d.get("votes", 1))
         remaining_for_contradiction = deadline - time.time()
-        
+
         if (
             bool(getattr(self.cfg, "contradiction_retry_enabled", True))
-            and n_distinct >= int(getattr(self.cfg, "contradiction_retry_min_distinct_answers", 3))
-            and top_votes <= int(getattr(self.cfg, "contradiction_retry_max_top_votes", 2))
-            and remaining_for_contradiction >= float(getattr(self.cfg, "contradiction_retry_min_remaining_s", 45.0))
+            and n_distinct
+            >= int(getattr(self.cfg, "contradiction_retry_min_distinct_answers", 3))
+            and top_votes
+            <= int(getattr(self.cfg, "contradiction_retry_max_top_votes", 2))
+            and remaining_for_contradiction
+            >= float(getattr(self.cfg, "contradiction_retry_min_remaining_s", 45.0))
         ):
             # Build the contradiction prompt
             distinct_answers = [int(a) for (a, _) in ranked[:5]]
@@ -2208,13 +2583,13 @@ class AIMO3Solver:
             )
             if bool(self.cfg.protocol_enabled):
                 contradiction_prompt = with_protocol(contradiction_prompt)
-            
+
             cr_budget = min(
                 float(getattr(self.cfg, "contradiction_retry_budget_cap_s", 90.0)),
-                remaining_for_contradiction * 0.5
+                remaining_for_contradiction * 0.5,
             )
             cr_deadline = time.time() + cr_budget
-            
+
             cr_result = self._process_attempt(
                 user_input,
                 contradiction_prompt,
@@ -2226,14 +2601,16 @@ class AIMO3Solver:
                 retriever_used=_retriever_used,
             )
             detailed.append(cr_result)
-            
+
             decision["contradiction_retry"] = {
                 "triggered": True,
                 "distinct_answers": distinct_answers,
                 "budget_s": float(cr_budget),
-                "result_answer": (int(cr_result.answer) if isinstance(cr_result.answer, int) else None),
+                "result_answer": (
+                    int(cr_result.answer) if isinstance(cr_result.answer, int) else None
+                ),
             }
-            
+
             # If contradiction retry found an answer, re-rank
             if isinstance(cr_result.answer, int):
                 valid.append(cr_result.answer)
@@ -2241,7 +2618,9 @@ class AIMO3Solver:
                 if ranked:
                     top_ans, top_d = ranked[0]
                     chosen = top_ans
-                    decision["ranked"] = [{"answer": int(a), **d} for (a, d) in ranked[:10]]
+                    decision["ranked"] = [
+                        {"answer": int(a), **d} for (a, d) in ranked[:10]
+                    ]
                     if len(ranked) >= 2:
                         runner_ans, runner_d = ranked[1]
                         votes_gap = int(top_d["votes"]) - int(runner_d["votes"])
@@ -2250,20 +2629,33 @@ class AIMO3Solver:
         # especially if it lacks any clean tool support.
         need_verify = False
         if bool(self.cfg.second_stage_verify_enabled):
-            if bool(self.cfg.second_stage_verify_trigger_if_no_verified) and int(top_d.get("verified", 0)) == 0:
+            if (
+                bool(self.cfg.second_stage_verify_trigger_if_no_verified)
+                and int(top_d.get("verified", 0)) == 0
+            ):
                 need_verify = True
-            if votes_gap is not None and votes_gap <= int(self.cfg.second_stage_verify_trigger_votes_gap):
+            if votes_gap is not None and votes_gap <= int(
+                self.cfg.second_stage_verify_trigger_votes_gap
+            ):
                 need_verify = True
 
         verified_choice = None
         remaining = deadline - time.time()
-        if need_verify and remaining >= float(self.cfg.second_stage_verify_min_remaining):
+        if need_verify and remaining >= float(
+            self.cfg.second_stage_verify_min_remaining
+        ):
             mult = 1.0
             if int(top_d.get("verified", 0)) <= 0:
                 mult *= 1.50
-            if votes_gap is not None and votes_gap <= int(self.cfg.second_stage_verify_trigger_votes_gap):
+            if votes_gap is not None and votes_gap <= int(
+                self.cfg.second_stage_verify_trigger_votes_gap
+            ):
                 mult *= 1.25
-            if votes_gap is not None and int(top_d.get("verified", 0)) > 0 and votes_gap >= 3:
+            if (
+                votes_gap is not None
+                and int(top_d.get("verified", 0)) > 0
+                and votes_gap >= 3
+            ):
                 mult *= 0.80
 
             verify_budget = adaptive_verify_budget(
@@ -2277,7 +2669,9 @@ class AIMO3Solver:
             desired_top_k = max(1, int(self.cfg.second_stage_verify_top_k))
             top_k = max(1, min(desired_top_k, len(ranked)))
             candidates = [ans for (ans, _d) in ranked[:top_k]]
-            verified_choice = self._second_stage_verify(user_input, candidates, verify_deadline, problem_id=pid)
+            verified_choice = self._second_stage_verify(
+                user_input, candidates, verify_deadline, problem_id=pid
+            )
             if verified_choice is not None:
                 chosen = verified_choice
 
@@ -2286,7 +2680,9 @@ class AIMO3Solver:
                 "votes_gap": (int(votes_gap) if votes_gap is not None else None),
                 "budget_s": float(verify_budget),
                 "candidates": [int(c) for c in candidates],
-                "choice": (int(verified_choice) if verified_choice is not None else None),
+                "choice": (
+                    int(verified_choice) if verified_choice is not None else None
+                ),
             }
 
         # If second-stage verification can't decide, run one short tie-break attempt when:
@@ -2298,13 +2694,24 @@ class AIMO3Solver:
             and verified_choice is None
             and runner_ans is not None
             and runner_d is not None
-            and remaining2 >= float(getattr(self.cfg, "tiebreak_min_remaining_s", 0.0) or 0.0)
-            and (int(top_d.get("verified", 0)) <= 0 or (votes_gap is not None and votes_gap <= 0))
+            and remaining2
+            >= float(getattr(self.cfg, "tiebreak_min_remaining_s", 0.0) or 0.0)
+            and (
+                int(top_d.get("verified", 0)) <= 0
+                or (votes_gap is not None and votes_gap <= 0)
+            )
         ):
-            tb_budget = min(float(getattr(self.cfg, "tiebreak_budget_cap_s", 35.0) or 35.0), remaining2 * 0.60)
+            tb_budget = min(
+                float(getattr(self.cfg, "tiebreak_budget_cap_s", 35.0) or 35.0),
+                remaining2 * 0.60,
+            )
             tb_deadline = time.time() + max(3.0, tb_budget)
 
-            mode = str(getattr(self.cfg, "recovery_mode", "auto") or "auto").strip().lower()
+            mode = (
+                str(getattr(self.cfg, "recovery_mode", "auto") or "auto")
+                .strip()
+                .lower()
+            )
             # Auto: avoid tool if we already saw many errors overall.
             total_errs = sum(int(r.stats.python_errors) for r in detailed)
             if mode == "auto":
@@ -2336,7 +2743,10 @@ class AIMO3Solver:
                 retriever_used=_retriever_used,
             )
             detailed.append(tb_res)
-            if isinstance(tb_res.answer, int) and tb_res.answer in {int(top_ans), int(runner_ans)}:
+            if isinstance(tb_res.answer, int) and tb_res.answer in {
+                int(top_ans),
+                int(runner_ans),
+            }:
                 chosen = int(tb_res.answer)
                 tiebreak_used = True
 
@@ -2345,7 +2755,9 @@ class AIMO3Solver:
                 "variant": variant,
                 "budget_s": float(tb_budget),
                 "candidates": [int(top_ans), int(runner_ans)],
-                "choice": (int(tb_res.answer) if isinstance(tb_res.answer, int) else None),
+                "choice": (
+                    int(tb_res.answer) if isinstance(tb_res.answer, int) else None
+                ),
                 "used": bool(tiebreak_used),
             }
 
@@ -2358,22 +2770,24 @@ class AIMO3Solver:
             bool(getattr(self.cfg, "adversarial_debate_enabled", True))
             and verified_choice is None  # Second-stage didn't decide
             and not tiebreak_used  # Tiebreak didn't help either
-            and remaining3 >= float(getattr(self.cfg, "adversarial_debate_min_remaining_s", 30.0))
-            and int(top_d.get("verified", 0)) <= 0  # Top answer lacks strong verification
+            and remaining3
+            >= float(getattr(self.cfg, "adversarial_debate_min_remaining_s", 30.0))
+            and int(top_d.get("verified", 0))
+            <= 0  # Top answer lacks strong verification
         ):
             debate_budget = min(
                 float(getattr(self.cfg, "adversarial_debate_budget_cap_s", 60.0)),
-                remaining3 * 0.70
+                remaining3 * 0.70,
             )
             debate_deadline = time.time() + max(10.0, debate_budget)
-            
+
             # Get reasoning from top attempt for the critique
             top_reasoning = None
             for r in detailed:
                 if r.answer == top_ans and r.output_text:
                     top_reasoning = r.output_text
                     break
-            
+
             debate_answer, debate_info = self._adversarial_debate(
                 user_input,
                 candidate=int(top_ans),
@@ -2381,11 +2795,11 @@ class AIMO3Solver:
                 debate_deadline=debate_deadline,
                 problem_id=pid,
             )
-            
+
             if debate_answer is not None and debate_answer != top_ans:
                 chosen = debate_answer
                 adversarial_used = True
-            
+
             decision["adversarial_debate"] = {
                 "enabled": True,
                 "budget_s": float(debate_budget),
@@ -2406,10 +2820,16 @@ class AIMO3Solver:
                 "attempts": [
                     {
                         "attempt": int(r.attempt),
-                        "answer": (int(r.answer) if isinstance(r.answer, int) else None),
+                        "answer": (
+                            int(r.answer) if isinstance(r.answer, int) else None
+                        ),
                         "tag": r.tag,
                         "temperature": float(
-                            temperature_for_attempt(cfg=self.cfg, attempt_index=int(r.attempt) - 1, attempt_tag=r.tag)
+                            temperature_for_attempt(
+                                cfg=self.cfg,
+                                attempt_index=int(r.attempt) - 1,
+                                attempt_tag=r.tag,
+                            )
                         ),
                         "token_count": int(r.stats.token_count),
                         "python_calls": int(r.stats.python_calls),

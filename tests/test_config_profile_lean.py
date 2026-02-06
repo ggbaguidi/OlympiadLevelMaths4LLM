@@ -89,4 +89,3 @@ def test_trace_env_config_env_vars(monkeypatch):
     cfg = AIMO3Config.from_env()
     assert cfg.trace_env_enabled is True
     assert cfg.trace_env_packages == "sympy,numpy,mpmath,jupyter_client"
-

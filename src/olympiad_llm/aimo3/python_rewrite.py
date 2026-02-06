@@ -89,12 +89,12 @@ _AUTO_IMPORTS: dict[str, str] = {
 _AIMO3_VALUATION_BLOCK = (
     f"from sympy.polys.numberfields import prime_valuation as {_AIMO3_PRIME_VALUATION_ALIAS}\n"
     f"def {_AIMO3_INT_VALUATION_ALIAS}(a, p):\n"
-    "    \"\"\"Best-effort integer p-adic valuation.\n\n"
+    '    """Best-effort integer p-adic valuation.\n\n'
     "    Returns the exponent $v$ such that $p^v$ divides $a$.\n"
     "    For $a=0$, returns sympy.oo (infinite valuation).\n\n"
     "    This is implemented directly to avoid relying on SymPy's internal\n"
     "    helper locations, which have changed across versions.\n"
-    "    \"\"\"\n"
+    '    """\n'
     "    import sympy as sp\n"
     "    a = sp.Integer(a)\n"
     "    p = sp.Integer(p)\n"
@@ -108,10 +108,10 @@ _AIMO3_VALUATION_BLOCK = (
     "        k += 1\n"
     "    return k\n"
     f"def {_AIMO3_VALUATION_ALIAS}(a, p):\n"
-    "    \"\"\"Compatibility valuation helper.\n\n"
+    '    """Compatibility valuation helper.\n\n'
     "    - If p is an integer-like (int or sympy.Integer), use integer p-adic valuation.\n"
     "    - Otherwise, fall back to SymPy's numberfield prime_valuation.\n"
-    "    \"\"\"\n"
+    '    """\n'
     "    try:\n"
     "        import sympy as sp\n"
     "        if isinstance(p, (int, sp.Integer)):\n"
@@ -124,10 +124,10 @@ _AIMO3_VALUATION_BLOCK = (
 
 _AIMO3_CIRCLE3_BLOCK = (
     f"def {_AIMO3_CIRCLE3_ALIAS}(p, q, r):\n"
-    "    \"\"\"Compatibility helper for circles through three points.\n\n"
+    '    """Compatibility helper for circles through three points.\n\n'
     "    Uses `Circle.from_three_points` when available; otherwise falls back to\n"
     "    `Circle(p,q,r)` which is supported on many SymPy versions.\n"
-    "    \"\"\"\n"
+    '    """\n'
     "    try:\n"
     "        import sympy as sp\n"
     "        Circle = sp.Circle\n"
@@ -209,12 +209,20 @@ def _find_bare_names_needing_imports(src: str) -> set[str]:
                 i += 1
                 continue
             # Check if preceded by 'def' or 'class' (function/class definition) -> mark as defined.
-            if i > 0 and toks[i - 1].type == tokenize.NAME and toks[i - 1].string in ("def", "class"):
+            if (
+                i > 0
+                and toks[i - 1].type == tokenize.NAME
+                and toks[i - 1].string in ("def", "class")
+            ):
                 defined_names.add(t.string)
                 i += 1
                 continue
             # Check if followed by '=' (assignment target) -> mark as defined.
-            if i + 1 < len(toks) and toks[i + 1].type == tokenize.OP and toks[i + 1].string == "=":
+            if (
+                i + 1 < len(toks)
+                and toks[i + 1].type == tokenize.OP
+                and toks[i + 1].string == "="
+            ):
                 defined_names.add(t.string)
             else:
                 needed.add(t.string)
@@ -313,7 +321,9 @@ def _rewrite_prime_valuation_alias_to_wrapper(src: str) -> str:
     return tokenize.untokenize(out)
 
 
-def _count_top_level_commas(tokens: list[tokenize.TokenInfo], start_i: int, end_i: int) -> int:
+def _count_top_level_commas(
+    tokens: list[tokenize.TokenInfo], start_i: int, end_i: int
+) -> int:
     """Count commas at nesting depth 0 within (start_i, end_i) token indices."""
 
     depth = 0
@@ -407,7 +417,10 @@ def rewrite_python_tool_code(code: str) -> str:
         rewritten = _rewrite_sp_circle_three_points(rewritten)
 
     # If helper is referenced, ensure helper block is present.
-    if _AIMO3_CIRCLE3_ALIAS in rewritten and f"def {_AIMO3_CIRCLE3_ALIAS}" not in rewritten:
+    if (
+        _AIMO3_CIRCLE3_ALIAS in rewritten
+        and f"def {_AIMO3_CIRCLE3_ALIAS}" not in rewritten
+    ):
         rewritten = _insert_import_after_header_lines(rewritten, _AIMO3_CIRCLE3_BLOCK)
 
     if "sp.valuation" in rewritten:
@@ -416,14 +429,19 @@ def rewrite_python_tool_code(code: str) -> str:
     # Back-compat: older rewrite emitted `_aimo3_prime_valuation(...)`.
     # Only apply if the wrapper isn't already defined in the snippet; otherwise we risk
     # rewriting user-provided helper code and breaking idempotence.
-    if _AIMO3_PRIME_VALUATION_ALIAS in rewritten and f"def {_AIMO3_VALUATION_ALIAS}" not in rewritten:
+    if (
+        _AIMO3_PRIME_VALUATION_ALIAS in rewritten
+        and f"def {_AIMO3_VALUATION_ALIAS}" not in rewritten
+    ):
         rewritten = _rewrite_prime_valuation_alias_to_wrapper(rewritten)
 
     # If wrapper is referenced, ensure helper block is present.
     # IMPORTANT: avoid modifying user-provided wrapper definitions; if the function is
     # already defined (even with a different body), leave it untouched for idempotence.
-    if _AIMO3_VALUATION_ALIAS in rewritten and f"def {_AIMO3_VALUATION_ALIAS}" not in rewritten:
+    if (
+        _AIMO3_VALUATION_ALIAS in rewritten
+        and f"def {_AIMO3_VALUATION_ALIAS}" not in rewritten
+    ):
         rewritten = _insert_import_after_header_lines(rewritten, _AIMO3_VALUATION_BLOCK)
 
     return rewritten
-

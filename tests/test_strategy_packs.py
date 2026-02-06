@@ -13,8 +13,12 @@ def test_detect_fe_combi_cues():
 
 def test_select_strategy_pack_round_robin():
     packs = "generic,fe_combi"
-    p0 = select_strategy_pack(attempt_index=0, problem_text=None, mode="round_robin", enabled_packs=packs)
-    p1 = select_strategy_pack(attempt_index=1, problem_text=None, mode="round_robin", enabled_packs=packs)
+    p0 = select_strategy_pack(
+        attempt_index=0, problem_text=None, mode="round_robin", enabled_packs=packs
+    )
+    p1 = select_strategy_pack(
+        attempt_index=1, problem_text=None, mode="round_robin", enabled_packs=packs
+    )
     assert p0 != p1
 
 

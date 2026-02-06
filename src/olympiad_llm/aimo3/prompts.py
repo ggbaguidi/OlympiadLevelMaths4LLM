@@ -1,7 +1,5 @@
 """Prompt templates used by the AIMO-3 multi-attempt solver."""
 
-
-
 # Diverse Prompts Strategy (ported from aimo-3.py)
 TIR_PROMPT_STANDARD = """
 You are an elite olympiad mathematician in the style of **Terence Tao**.

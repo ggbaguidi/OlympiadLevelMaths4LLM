@@ -107,34 +107,34 @@ class AIMO3Sandbox:
 
         # Preload common math stack.
         self.execute(
-            'import sys\n'
-            '# Increase limit for large integer string conversion (Python 3.11+)\n'
-            'try:\n'
-            '    sys.set_int_max_str_digits(0)  # 0 = unlimited\n'
-            'except AttributeError:\n'
-            '    pass  # Python < 3.11\n'
-            'import os\n'
+            "import sys\n"
+            "# Increase limit for large integer string conversion (Python 3.11+)\n"
+            "try:\n"
+            "    sys.set_int_max_str_digits(0)  # 0 = unlimited\n"
+            "except AttributeError:\n"
+            "    pass  # Python < 3.11\n"
+            "import os\n"
             '_lean_bin = os.environ.get("AIMO3_LEAN_BIN_DIR")\n'
             'if _lean_bin and _lean_bin not in os.environ.get("PATH", ""):\n'
             '    os.environ["PATH"] = _lean_bin + os.pathsep + os.environ.get("PATH", "")\n'
-            'def aimo3_verify(ok=True):\n'
-            '    if ok:\n'
+            "def aimo3_verify(ok=True):\n"
+            "    if ok:\n"
             '        print("VERIFY_OK")\n'
-            '    else:\n'
+            "    else:\n"
             '        print("VERIFY_FAIL")\n'
-            'import math\n'
-            'import numpy\n'
-            'import sympy\n'
-            'import random\n'
-            'import itertools\n'
-            'import collections\n'
-            'import fractions\n'
+            "import math\n"
+            "import numpy\n"
+            "import sympy\n"
+            "import random\n"
+            "import itertools\n"
+            "import collections\n"
+            "import fractions\n"
             "import sympy as sp\n"
             "import numpy as np\n"
             "import mpmath as mp\n"
             "from fractions import Fraction\n"
-            'import mpmath\n'
-            'mpmath.mp.dps = 64\n'
+            "import mpmath\n"
+            "mpmath.mp.dps = 64\n"
             "try:\n"
             "    import ortools  # noqa: F401\n"
             "    from ortools.sat.python import cp_model  # noqa: F401\n"
@@ -156,7 +156,9 @@ class AIMO3Sandbox:
         for frame in traceback:
             clean_frame = re.sub(r"\x1b\[[0-9;]*m", "", frame)
             if 'File "' in clean_frame:
-                if ("ipython-input" not in clean_frame) and ("ipykernel" not in clean_frame):
+                if ("ipython-input" not in clean_frame) and (
+                    "ipykernel" not in clean_frame
+                ):
                     continue
             clean_lines.append(clean_frame)
 
@@ -170,49 +172,59 @@ class AIMO3Sandbox:
     def _add_error_hints(error_text: str) -> str:
         """Add helpful hints for common errors to guide the model."""
         hints = []
-        
+
         # Dict slicing error: fvals[:10] on a dict
         if "KeyError: slice(" in error_text:
             hints.append(
                 "TIP: You're trying to slice a dict like a list. "
                 "Use list(d.items())[:10] or {k: d[k] for k in list(d.keys())[:10]}"
             )
-        
+
         # Integer string conversion limit (Python 3.11+)
         if "Exceeds the limit" in error_text and "int_max_str_digits" in error_text:
             hints.append(
                 "TIP: Large integer printing limit. Add: import sys; sys.set_int_max_str_digits(0)"
             )
-        
+
         # SyntaxError: incomplete input - often caused by comment inside parentheses
-        if "SyntaxError: incomplete input" in error_text or "SyntaxError: '(' was never closed" in error_text:
+        if (
+            "SyntaxError: incomplete input" in error_text
+            or "SyntaxError: '(' was never closed" in error_text
+        ):
             hints.append(
                 "TIP: Check for unclosed parentheses. A common mistake is putting a comment "
                 "inside a function call like print(x # comment) - the # hides the closing )."
             )
-        
+
         # NameError for common functions/modules
         if "NameError" in error_text:
             if "fractions" in error_text:
-                hints.append("TIP: Add 'import fractions' or 'from fractions import Fraction'")
+                hints.append(
+                    "TIP: Add 'import fractions' or 'from fractions import Fraction'"
+                )
             elif "gcd" in error_text:
                 hints.append("TIP: Add 'from math import gcd'")
             elif "combinations" in error_text or "permutations" in error_text:
-                hints.append("TIP: Add 'from itertools import combinations, permutations'")
+                hints.append(
+                    "TIP: Add 'from itertools import combinations, permutations'"
+                )
             elif "factorial" in error_text:
                 hints.append("TIP: Add 'from math import factorial'")
             elif "Counter" in error_text:
                 hints.append("TIP: Add 'from collections import Counter'")
-        
+
         # mpmath findroot tolerance error - tolerance is too strict at high precision
-        if "ValueError" in error_text and "Could not find root within given tolerance" in error_text:
+        if (
+            "ValueError" in error_text
+            and "Could not find root within given tolerance" in error_text
+        ):
             hints.append(
                 "TIP: mpmath findroot tolerance is too strict. Either:\n"
                 "  1. Lower precision: mp.dps = 18\n"
                 "  2. Set explicit tolerance: mp.findroot(f, x0, tol=1e-12)\n"
                 "  3. Use verify=False: mp.findroot(f, x0, verify=False)"
             )
-        
+
         if hints:
             return error_text.rstrip() + "\n\n" + "\n".join(hints)
         return error_text
@@ -222,7 +234,9 @@ class AIMO3Sandbox:
             return "[ERROR] Sandbox is closed."
 
         client = self._client
-        effective_timeout = float(timeout) if timeout is not None else self._default_timeout
+        effective_timeout = (
+            float(timeout) if timeout is not None else self._default_timeout
+        )
 
         msg_id = client.execute(
             code,
@@ -244,7 +258,9 @@ class AIMO3Sandbox:
                 hint = ""
                 if effective_timeout < 60:
                     hint = " TIP: For expensive computations, add '# timeout: 120' as the FIRST line of your code."
-                return f"[ERROR] Execution timed out after {effective_timeout:.0f}s.{hint}"
+                return (
+                    f"[ERROR] Execution timed out after {effective_timeout:.0f}s.{hint}"
+                )
 
             try:
                 msg = client.get_iopub_msg(timeout=1.0)
@@ -284,40 +300,44 @@ class AIMO3Sandbox:
         stderr = "".join(stderr_parts)
         if stderr:
             return f"{stdout.rstrip()}\n{stderr}" if stdout else stderr
-        return stdout if stdout.strip() else "[WARN] No output. Use print() to see results."
+        return (
+            stdout
+            if stdout.strip()
+            else "[WARN] No output. Use print() to see results."
+        )
 
     def reset(self) -> None:
         self.execute("%reset -f")
         self.execute("import gc; gc.collect()")
         self.execute(
-            'import sys\n'
-            '# Increase limit for large integer string conversion (Python 3.11+)\n'
-            'try:\n'
-            '    sys.set_int_max_str_digits(0)  # 0 = unlimited\n'
-            'except AttributeError:\n'
-            '    pass  # Python < 3.11\n'
-            'import os\n'
+            "import sys\n"
+            "# Increase limit for large integer string conversion (Python 3.11+)\n"
+            "try:\n"
+            "    sys.set_int_max_str_digits(0)  # 0 = unlimited\n"
+            "except AttributeError:\n"
+            "    pass  # Python < 3.11\n"
+            "import os\n"
             '_lean_bin = os.environ.get("AIMO3_LEAN_BIN_DIR")\n'
             'if _lean_bin and _lean_bin not in os.environ.get("PATH", ""):\n'
             '    os.environ["PATH"] = _lean_bin + os.pathsep + os.environ.get("PATH", "")\n'
-            'def aimo3_verify(ok=True):\n'
-            '    if ok:\n'
+            "def aimo3_verify(ok=True):\n"
+            "    if ok:\n"
             '        print("VERIFY_OK")\n'
-            '    else:\n'
+            "    else:\n"
             '        print("VERIFY_FAIL")\n'
-            'import math\n'
-            'import numpy\n'
-            'import sympy\n'
-            'import random\n'
-            'import itertools\n'
-            'import collections\n'
-            'import fractions\n'
+            "import math\n"
+            "import numpy\n"
+            "import sympy\n"
+            "import random\n"
+            "import itertools\n"
+            "import collections\n"
+            "import fractions\n"
             "import sympy as sp\n"
             "import numpy as np\n"
             "import mpmath as mp\n"
             "from fractions import Fraction\n"
-            'import mpmath\n'
-            'mpmath.mp.dps = 18\n'
+            "import mpmath\n"
+            "mpmath.mp.dps = 18\n"
             "try:\n"
             "    import ortools  # noqa: F401\n"
             "    from ortools.sat.python import cp_model  # noqa: F401\n"
@@ -335,7 +355,9 @@ class AIMO3Sandbox:
             with contextlib.suppress(Exception):
                 self._km.cleanup_resources()
         with contextlib.suppress(Exception):
-            if self._connection_file is not None and os.path.exists(self._connection_file):
+            if self._connection_file is not None and os.path.exists(
+                self._connection_file
+            ):
                 os.remove(self._connection_file)
         self._client = None
         self._km = None

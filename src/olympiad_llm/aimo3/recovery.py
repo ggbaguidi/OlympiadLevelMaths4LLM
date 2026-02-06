@@ -38,16 +38,22 @@ def should_abort_attempt(
     pe = int(python_errors)
     ce = int(consecutive_python_errors)
     tc = int(timeout_count)
-    if int(policy.abort_after_python_errors) > 0 and pe >= int(policy.abort_after_python_errors):
+    if int(policy.abort_after_python_errors) > 0 and pe >= int(
+        policy.abort_after_python_errors
+    ):
         return True
-    if int(policy.abort_after_consecutive_python_errors) > 0 and ce >= int(policy.abort_after_consecutive_python_errors):
+    if int(policy.abort_after_consecutive_python_errors) > 0 and ce >= int(
+        policy.abort_after_consecutive_python_errors
+    ):
         return True
     if int(policy.abort_after_timeouts) > 0 and tc >= int(policy.abort_after_timeouts):
         return True
     return False
 
 
-def should_recycle_sandbox(*, python_errors: int, had_exception: bool, policy: ToolRecoveryPolicy) -> bool:
+def should_recycle_sandbox(
+    *, python_errors: int, had_exception: bool, policy: ToolRecoveryPolicy
+) -> bool:
     """Return True if a sandbox should be closed and replaced.
 
     We consider a sandbox 'poisoned' if it yields many tool errors (kernel issues,
@@ -57,7 +63,9 @@ def should_recycle_sandbox(*, python_errors: int, had_exception: bool, policy: T
     if bool(had_exception):
         return True
     pe = int(python_errors)
-    if int(policy.recycle_sandbox_after_python_errors) > 0 and pe >= int(policy.recycle_sandbox_after_python_errors):
+    if int(policy.recycle_sandbox_after_python_errors) > 0 and pe >= int(
+        policy.recycle_sandbox_after_python_errors
+    ):
         return True
     return False
 
@@ -86,13 +94,17 @@ def should_schedule_recovery_attempt(
         return True
 
     pe = int(result.stats.python_errors)
-    if int(recovery_trigger_python_errors) > 0 and pe >= int(recovery_trigger_python_errors):
+    if int(recovery_trigger_python_errors) > 0 and pe >= int(
+        recovery_trigger_python_errors
+    ):
         return True
 
     return False
 
 
-def tool_call_cap_for_attempt(*, attempt_tag: str | None, recovery_micro_cap: int) -> int | None:
+def tool_call_cap_for_attempt(
+    *, attempt_tag: str | None, recovery_micro_cap: int
+) -> int | None:
     """Return a max python tool-call cap for this attempt.
 
     - None: no cap enforcement
@@ -128,7 +140,10 @@ def should_schedule_format_recovery_attempt(
 
     # If the attempt produced a substantial amount of text but no extracted answer,
     # a short "final answer only" follow-up can salvage the output.
-    if int(result.stats.token_count) >= int(trigger_tokens) and int(result.stats.python_errors) == 0:
+    if (
+        int(result.stats.token_count) >= int(trigger_tokens)
+        and int(result.stats.python_errors) == 0
+    ):
         return True
 
     return False

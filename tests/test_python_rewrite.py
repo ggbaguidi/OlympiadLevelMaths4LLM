@@ -120,4 +120,3 @@ for a, b in combinations(range(10), 2):
     out = rewrite_python_tool_code(code)
     # Should not duplicate import.
     assert out.count("from itertools import combinations") == 1
-

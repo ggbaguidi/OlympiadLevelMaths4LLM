@@ -150,7 +150,10 @@ class AnswerExtractor:
             if not toks:
                 continue
             # Prefer the longest token (e.g., avoid picking the trailing "5" in "10^{5}").
-            toks_sorted = sorted(toks, key=lambda s: (len(s.replace(",", "").lstrip("+-")), toks.index(s)))
+            toks_sorted = sorted(
+                toks,
+                key=lambda s: (len(s.replace(",", "").lstrip("+-")), toks.index(s)),
+            )
             cand = toks_sorted[-1]
             cand2 = cand.replace(",", "")
             try:

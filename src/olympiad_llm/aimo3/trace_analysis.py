@@ -92,6 +92,7 @@ def _parse_pack_card(tag: str) -> tuple[str, str]:
 @dataclass
 class PackCardStats:
     """Statistics for a pack or card."""
+
     name: str
     attempts: int = 0
     valid: int = 0  # produced a valid answer
@@ -120,7 +121,9 @@ def summarize_trace(
 ) -> list[ProblemSummary]:
     starts: dict[str, dict[str, Any]] = {}
     ends: dict[str, dict[str, Any]] = {}
-    attempt_ends: list[dict[str, Any]] = []  # collect attempt_end events for pack/card stats
+    attempt_ends: list[dict[str, Any]] = (
+        []
+    )  # collect attempt_end events for pack/card stats
 
     for ev in events:
         pid = str(ev.get("problem_id") or "")
@@ -180,7 +183,9 @@ def summarize_trace(
             top_verified = _safe_int(r0.get("verified"), 0)
             top_tag_diversity = _safe_int(r0.get("tag_diversity"), 0)
 
-        second_stage = (decision.get("second_stage") if isinstance(decision, dict) else None) or None
+        second_stage = (
+            decision.get("second_stage") if isinstance(decision, dict) else None
+        ) or None
         second_stage_ran = isinstance(second_stage, dict)
         second_stage_choice = None
         if second_stage_ran:
@@ -198,8 +203,16 @@ def summarize_trace(
             chosen=chosen,
             elapsed_s=elapsed,
             budget_s=_safe_float(budget_s, 0.0) if budget_s is not None else None,
-            attempt_deadline_in_s=_safe_float(attempt_deadline_in_s, 0.0) if attempt_deadline_in_s is not None else None,
-            overall_deadline_in_s=_safe_float(overall_deadline_in_s, 0.0) if overall_deadline_in_s is not None else None,
+            attempt_deadline_in_s=(
+                _safe_float(attempt_deadline_in_s, 0.0)
+                if attempt_deadline_in_s is not None
+                else None
+            ),
+            overall_deadline_in_s=(
+                _safe_float(overall_deadline_in_s, 0.0)
+                if overall_deadline_in_s is not None
+                else None
+            ),
             n_attempts=n_attempts,
             n_valid_attempts=n_valid,
             n_verified_attempts=n_verified,
@@ -277,7 +290,9 @@ def summarize_trace(
     return summaries
 
 
-def write_csv(path: Path, summaries: list[ProblemSummary], *, with_correctness: bool = False) -> None:
+def write_csv(
+    path: Path, summaries: list[ProblemSummary], *, with_correctness: bool = False
+) -> None:
     fields = [
         "problem_id",
         "status",
@@ -350,7 +365,11 @@ def print_report(
 
     elapsed = [s.elapsed_s for s in summaries if s.elapsed_s > 0]
     p50 = statistics.median(elapsed) if elapsed else 0.0
-    p90 = statistics.quantiles(elapsed, n=10)[8] if len(elapsed) >= 10 else (max(elapsed) if elapsed else 0.0)
+    p90 = (
+        statistics.quantiles(elapsed, n=10)[8]
+        if len(elapsed) >= 10
+        else (max(elapsed) if elapsed else 0.0)
+    )
 
     print("=== Trace summary ===")
     print(f"Problems: {total}")
@@ -370,29 +389,43 @@ def print_report(
                     n_correct += 1
         correct = (n_correct, n_known)
         if n_known:
-            print(f"Known-answer accuracy: {n_correct}/{n_known} = {n_correct/n_known:.3f}")
+            print(
+                f"Known-answer accuracy: {n_correct}/{n_known} = {n_correct/n_known:.3f}"
+            )
 
     # Print pack statistics
     if pack_stats:
         print("\n=== Strategy pack statistics ===")
-        print(f"{'Pack':<15} {'Attempts':>8} {'Valid':>6} {'Verified':>8} {'Errors':>6} {'Chosen':>6} {'AvgTok':>7}")
+        print(
+            f"{'Pack':<15} {'Attempts':>8} {'Valid':>6} {'Verified':>8} {'Errors':>6} {'Chosen':>6} {'AvgTok':>7}"
+        )
         for name in sorted(pack_stats.keys()):
             s = pack_stats[name]
-            print(f"{name:<15} {s.attempts:>8} {s.valid:>6} {s.verified:>8} {s.errors:>6} {s.chosen:>6} {s.avg_tokens:>7.0f}")
+            print(
+                f"{name:<15} {s.attempts:>8} {s.valid:>6} {s.verified:>8} {s.errors:>6} {s.chosen:>6} {s.avg_tokens:>7.0f}"
+            )
 
     # Print card statistics
     if card_stats:
         print("\n=== Strategy card statistics ===")
-        print(f"{'Card':<25} {'Attempts':>8} {'Valid':>6} {'Verified':>8} {'Errors':>6} {'Chosen':>6} {'AvgTok':>7}")
+        print(
+            f"{'Card':<25} {'Attempts':>8} {'Valid':>6} {'Verified':>8} {'Errors':>6} {'Chosen':>6} {'AvgTok':>7}"
+        )
         for name in sorted(card_stats.keys()):
             s = card_stats[name]
-            print(f"{name:<25} {s.attempts:>8} {s.valid:>6} {s.verified:>8} {s.errors:>6} {s.chosen:>6} {s.avg_tokens:>7.0f}")
+            print(
+                f"{name:<25} {s.attempts:>8} {s.valid:>6} {s.verified:>8} {s.errors:>6} {s.chosen:>6} {s.avg_tokens:>7.0f}"
+            )
 
     print("\n=== Highest-risk problems (inspect first) ===")
     for s in summaries[: max(1, int(top_n))]:
         extra = ""
         if answers is not None and s.problem_id in answers:
-            extra = " (correct)" if s.chosen == answers[s.problem_id] else f" (wrong; true={answers[s.problem_id]})"
+            extra = (
+                " (correct)"
+                if s.chosen == answers[s.problem_id]
+                else f" (wrong; true={answers[s.problem_id]})"
+            )
         print(
             f"{s.problem_id} status={s.status} chosen={s.chosen} verified={s.top_verified} "
             f"tool_errs={s.python_errors} tag_div={s.top_tag_diversity} elapsed={s.elapsed_s:.1f}s risk={s.risk_score:.2f}{extra}"
@@ -404,9 +437,16 @@ def print_report(
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("trace", type=str, help="Path to aimo3_trace.jsonl")
-    ap.add_argument("--answers", type=str, default="", help="Optional JSON mapping problem_id -> true answer")
+    ap.add_argument(
+        "--answers",
+        type=str,
+        default="",
+        help="Optional JSON mapping problem_id -> true answer",
+    )
     ap.add_argument("--csv", type=str, default="", help="Optional output CSV path")
-    ap.add_argument("--top", type=int, default=15, help="How many risky problems to print")
+    ap.add_argument(
+        "--top", type=int, default=15, help="How many risky problems to print"
+    )
     args = ap.parse_args(argv)
 
     trace_path = Path(args.trace)
@@ -459,12 +499,20 @@ def main(argv: list[str] | None = None) -> int:
         for s in summaries:
             if s.problem_id in answers:
                 setattr(s, "true_answer", int(answers[s.problem_id]))
-                setattr(s, "is_correct", bool(int(s.chosen) == int(answers[s.problem_id])))
+                setattr(
+                    s, "is_correct", bool(int(s.chosen) == int(answers[s.problem_id]))
+                )
 
     if args.csv:
         write_csv(Path(args.csv), summaries, with_correctness=answers is not None)
 
-    return print_report(summaries, answers=answers, top_n=args.top, pack_stats=pack_stats, card_stats=card_stats)
+    return print_report(
+        summaries,
+        answers=answers,
+        top_n=args.top,
+        pack_stats=pack_stats,
+        card_stats=card_stats,
+    )
 
 
 if __name__ == "__main__":

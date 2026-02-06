@@ -39,7 +39,7 @@ class LeanSmokeTestResult:
 
 _LEAN_CALL_RE = re.compile(
     r"(?is)"  # ignorecase + dotall
-    r"(" 
+    r"("
     r"subprocess\.(run|call|check_output|check_call|Popen)"  # common subprocess entrypoints
     r"|os\.system"
     r")"
@@ -51,7 +51,7 @@ _LEAN_WORD_RE = re.compile(r"(?i)\b(lean|lake)\b")
 def detect_lean_invocation(python_code: str | None) -> bool:
     """Best-effort heuristic: does this python tool call likely invoke lean/lake?"""
 
-    s = (python_code or "")
+    s = python_code or ""
     if not s.strip():
         return False
     if _LEAN_WORD_RE.search(s) is None:
@@ -121,7 +121,9 @@ def lean_smoke_test(
     lake_ver = _safe_run_version(["lake", "--version"]) if lake_path else None
 
     if not lean_path:
-        raise FileNotFoundError("`lean` not found on PATH. Did you run ensure_lean_toolchain()?")
+        raise FileNotFoundError(
+            "`lean` not found on PATH. Did you run ensure_lean_toolchain()?"
+        )
 
     smoke_root = Path(work_dir) if work_dir else _default_smoke_dir()
     smoke_root = smoke_root.expanduser().resolve()
@@ -143,13 +145,15 @@ def lean_smoke_test(
             timeout=float(timeout_s),
         )
         exit_code = int(p.returncode)
-        stdout = (p.stdout or "")
-        stderr = (p.stderr or "")
+        stdout = p.stdout or ""
+        stderr = p.stderr or ""
     except subprocess.TimeoutExpired as e:
         exit_code = None
-        stdout = (getattr(e, "stdout", None) or "")
-        stderr = (getattr(e, "stderr", None) or "")
-        stderr = (stderr + "\n" if stderr else "") + f"[ERROR] lean smoke test timed out after {timeout_s} seconds"
+        stdout = getattr(e, "stdout", None) or ""
+        stderr = getattr(e, "stderr", None) or ""
+        stderr = (
+            stderr + "\n" if stderr else ""
+        ) + f"[ERROR] lean smoke test timed out after {timeout_s} seconds"
     except Exception as e:  # noqa: BLE001
         exit_code = None
         stdout = ""
@@ -306,8 +310,12 @@ def ensure_lean_toolchain(
         lean_path = _find_executable("lean")
         lake_path = _find_executable("lake")
         if lean_path and lake_path:
-            lean_ver = _safe_run_version(["lean", "--version"]) if check_versions else None
-            lake_ver = _safe_run_version(["lake", "--version"]) if check_versions else None
+            lean_ver = (
+                _safe_run_version(["lean", "--version"]) if check_versions else None
+            )
+            lake_ver = (
+                _safe_run_version(["lake", "--version"]) if check_versions else None
+            )
             return LeanToolchainInfo(
                 enabled=True,
                 installed=True,
@@ -346,24 +354,39 @@ def ensure_lean_toolchain(
         p = Path(archive_path).expanduser()
         archive = p if p.exists() and p.is_file() else None
     if archive is None and dataset_dir:
-        archive = _locate_archive(Path(dataset_dir).expanduser(), archive_name=archive_name)
+        archive = _locate_archive(
+            Path(dataset_dir).expanduser(), archive_name=archive_name
+        )
 
     if archive is None:
         # Some workflows place an *already extracted* Lean distribution in dataset_dir.
         # If so, accept it and just add its bin dir to PATH.
-        for candidate_root in [extracted_hint, Path(dataset_dir).expanduser() if dataset_dir else None]:
+        for candidate_root in [
+            extracted_hint,
+            Path(dataset_dir).expanduser() if dataset_dir else None,
+        ]:
             if candidate_root is None:
                 continue
             if candidate_root.exists() and candidate_root.is_dir():
                 bin_dir0 = _find_bin_dir(candidate_root)
                 if bin_dir0 is not None:
                     os.environ["AIMO3_LEAN_BIN_DIR"] = str(bin_dir0)
-                    os.environ["PATH"] = str(bin_dir0) + os.pathsep + os.environ.get("PATH", "")
+                    os.environ["PATH"] = (
+                        str(bin_dir0) + os.pathsep + os.environ.get("PATH", "")
+                    )
 
                     lean_path = _find_executable("lean")
                     lake_path = _find_executable("lake")
-                    lean_ver = _safe_run_version(["lean", "--version"]) if check_versions else None
-                    lake_ver = _safe_run_version(["lake", "--version"]) if check_versions else None
+                    lean_ver = (
+                        _safe_run_version(["lean", "--version"])
+                        if check_versions
+                        else None
+                    )
+                    lake_ver = (
+                        _safe_run_version(["lake", "--version"])
+                        if check_versions
+                        else None
+                    )
 
                     installed0 = bool(lean_path and lake_path)
                     if strict and not installed0:
@@ -422,8 +445,10 @@ def ensure_lean_toolchain(
         bin_dir = _find_bin_dir(root)
 
     if bin_dir is None:
-        msg = f"Archive extracted but bin/lean not found under {root}" \
+        msg = (
+            f"Archive extracted but bin/lean not found under {root}"
             f" (archive={archive})."
+        )
         if strict:
             raise RuntimeError(msg)
         if verbose:
@@ -460,7 +485,9 @@ def ensure_lean_toolchain(
             print(f"[lean] lake --version: {lake_ver}")
 
     if strict and not installed:
-        raise RuntimeError("Lean toolchain setup completed, but lean/lake still not found on PATH")
+        raise RuntimeError(
+            "Lean toolchain setup completed, but lean/lake still not found on PATH"
+        )
 
     return LeanToolchainInfo(
         enabled=True,

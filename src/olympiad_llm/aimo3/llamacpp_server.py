@@ -42,7 +42,7 @@ class LlamaCppServer:
             "--n_ctx",
             str(self.cfg.context_tokens),
         ]
-        
+
         # Add GPU layers if configured (usually -1 for all)
         n_gpu_layers = getattr(self.cfg, "llama_cpp_n_gpu_layers", -1)
         if n_gpu_layers != 0:
@@ -50,7 +50,7 @@ class LlamaCppServer:
 
         # Add batch size if configured
         if self.cfg.batch_size > 0:
-             cmd.extend(["--n_batch", str(self.cfg.batch_size)])
+            cmd.extend(["--n_batch", str(self.cfg.batch_size)])
 
         self._log_file = open(self.log_path, "w", encoding="utf-8")
         self.process = subprocess.Popen(
@@ -66,7 +66,11 @@ class LlamaCppServer:
         if self.process is None:
             raise RuntimeError("Server not started")
 
-        timeout_s = float(timeout_s) if timeout_s is not None else float(self.cfg.server_timeout)
+        timeout_s = (
+            float(timeout_s)
+            if timeout_s is not None
+            else float(self.cfg.server_timeout)
+        )
         start = time.time()
         while time.time() - start < timeout_s:
             rc = self.process.poll()
@@ -80,7 +84,9 @@ class LlamaCppServer:
                 except Exception:  # noqa: BLE001
                     logs = "(failed to read logs)"
 
-                raise RuntimeError(f"llama.cpp server died with code {rc}. Logs:\n{logs}")
+                raise RuntimeError(
+                    f"llama.cpp server died with code {rc}. Logs:\n{logs}"
+                )
 
             try:
                 # llama-cpp-python server startup can be slow to accept connections

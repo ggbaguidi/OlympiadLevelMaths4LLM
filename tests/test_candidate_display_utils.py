@@ -15,7 +15,12 @@ def test_attempt_row_formatting():
 
     s = AIMO3Solver.__new__(AIMO3Solver)
     s.cfg = AIMO3Config(display_attempt_text_chars=5, capture_attempt_text_chars=10)
-    r = AttemptResult(attempt=1, answer=7, stats=AttemptStats(token_count=12, python_calls=1, python_errors=0), output_text="0123456789")
+    r = AttemptResult(
+        attempt=1,
+        answer=7,
+        stats=AttemptStats(token_count=12, python_calls=1, python_errors=0),
+        output_text="0123456789",
+    )
     row = s._attempt_to_row(r)
     assert row["Answer"] == 7
     assert row["ToolVerified"] is True

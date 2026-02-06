@@ -40,7 +40,9 @@ class VLLMServer:
             return False
 
         lib = ctypes.util.find_library("cuda")
-        has_lib = lib is not None or os.path.exists("/usr/lib/x86_64-linux-gnu/libcuda.so.1")
+        has_lib = lib is not None or os.path.exists(
+            "/usr/lib/x86_64-linux-gnu/libcuda.so.1"
+        )
         has_dev = any(
             os.path.exists(p)
             for p in (
@@ -107,7 +109,10 @@ class VLLMServer:
                 "AIMO3Config.model_path is empty. Set env AIMO3_MODEL_PATH (Kaggle) or pass it explicitly."
             )
 
-        if bool(getattr(self.cfg, "require_cuda", True)) and not self._cuda_driver_present():
+        if (
+            bool(getattr(self.cfg, "require_cuda", True))
+            and not self._cuda_driver_present()
+        ):
             raise RuntimeError(
                 "CUDA/NVIDIA driver not detected (e.g., libcuda.so.1 missing or GPU runtime disabled). "
                 "vLLM cannot start in this environment.\n\n"
@@ -168,7 +173,11 @@ class VLLMServer:
         if self.process is None:
             raise RuntimeError("Server not started")
 
-        timeout_s = float(timeout_s) if timeout_s is not None else float(self.cfg.server_timeout)
+        timeout_s = (
+            float(timeout_s)
+            if timeout_s is not None
+            else float(self.cfg.server_timeout)
+        )
         start = time.time()
         while time.time() - start < timeout_s:
             rc = self.process.poll()
@@ -184,7 +193,9 @@ class VLLMServer:
 
                 hint = self._hint_from_logs(logs)
                 if hint:
-                    raise RuntimeError(f"vLLM server died with code {rc}.\n\n{hint}\n\nLogs:\n{logs}")
+                    raise RuntimeError(
+                        f"vLLM server died with code {rc}.\n\n{hint}\n\nLogs:\n{logs}"
+                    )
 
                 raise RuntimeError(f"vLLM server died with code {rc}. Logs:\n{logs}")
 
@@ -225,7 +236,9 @@ class VLLMServer:
         if "Free memory on device" in logs and "desired GPU memory utilization" in logs:
             # Example:
             # ValueError: Free memory on device (10.47/79.44 GiB) on startup is less than desired GPU memory utilization (0.96, 76.26 GiB).
-            m = re.search(r"Free memory on device \((\d+(?:\.\d+)?)/(\d+(?:\.\d+)?) GiB\)", logs)
+            m = re.search(
+                r"Free memory on device \((\d+(?:\.\d+)?)/(\d+(?:\.\d+)?) GiB\)", logs
+            )
             free_gib = float(m.group(1)) if m else None
             total_gib = float(m.group(2)) if m else None
             suggested = None

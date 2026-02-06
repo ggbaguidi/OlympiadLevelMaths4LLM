@@ -37,7 +37,9 @@ REQUIRED_LIBRARIES = [
 
 def _packages_path() -> str:
     if IS_KAGGLE:
-        return os.getenv("AIMO3_WHEELS_PATH", "/kaggle/usr/lib/aimo3_packages_offline/utils")
+        return os.getenv(
+            "AIMO3_WHEELS_PATH", "/kaggle/usr/lib/aimo3_packages_offline/utils"
+        )
     return os.getenv("AIMO3_WHEELS_PATH", "")
 
 
@@ -109,7 +111,9 @@ def environ_setup() -> dict[str, Any]:
     }
 
 
-def environ_setup_parallel(warm_model: bool = True, model_workers: int = 8) -> dict[str, Any]:
+def environ_setup_parallel(
+    warm_model: bool = True, model_workers: int = 8
+) -> dict[str, Any]:
     """Run cleanup, install, and model warmup all in parallel.
 
     Returns dict with process handles. Call wait_all() or .wait() on each to block.
@@ -127,7 +131,9 @@ def environ_setup_parallel(warm_model: bool = True, model_workers: int = 8) -> d
         model_path = os.getenv("AIMO3_MODEL_PATH", "")
         if model_path and os.path.isdir(model_path):
             ex = ThreadPoolExecutor(max_workers=1)
-            result["model_warmup_future"] = ex.submit(warm_model_cache, model_path, model_workers)
+            result["model_warmup_future"] = ex.submit(
+                warm_model_cache, model_path, model_workers
+            )
             result["_model_warmup_executor"] = ex  # keep ref to avoid GC
 
     return result
