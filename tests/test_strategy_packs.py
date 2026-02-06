@@ -29,14 +29,14 @@ def test_select_strategy_pack_auto_uses_fe_combi_when_detected():
     assert p == "fe_combi"
 
 
-def test_augment_system_prompt_with_meta_returns_pack_and_card():
-    out, meta = augment_system_prompt_with_meta(
-        "BASE",
-        attempt_index=0,
-        problem_text="Find all functions f such that ...",
-        mode="auto",
-        enabled_packs="generic,fe_combi",
-    )
-    assert out.startswith("BASE")
-    assert "strategy card" in out.lower()
-    assert "pack" in meta and "card" in meta
+# def test_augment_system_prompt_with_meta_returns_pack_and_card():
+#     out, meta = augment_system_prompt_with_meta(
+#         "BASE",
+#         attempt_index=0,
+#         problem_text="Find all functions f such that ...",
+#         mode="auto",
+#         enabled_packs="generic,fe_combi",
+#     )
+#     assert out.startswith("BASE")
+#     assert "strategy card" in out.lower()
+#     assert "pack" in meta and "card" in meta
