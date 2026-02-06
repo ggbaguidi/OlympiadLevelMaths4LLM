@@ -18,7 +18,10 @@ from typing import Optional
 
 _TIMEOUT_DIRECTIVE_RE = re.compile(r"^\s*#\s*timeout\s*[:=]\s*(?P<s>\d+(?:\.\d+)?)\s*$", re.IGNORECASE)
 _TIMEOUT_ERROR_RE = re.compile(
-    r"Execution\s+timed\s+out\s+after\s+(?P<s>\d+(?:\.\d+)?)s\.?",
+    # Accept both formats:
+    #   "... after 60.0s" (current sandbox)
+    #   "... after 60.0 seconds" (legacy / external kernels)
+    r"Execution\s+timed\s+out\s+after\s+(?P<s>\d+(?:\.\d+)?)\s*(?:s|sec(?:ond)?s?)\b\.?",
     re.IGNORECASE,
 )
 

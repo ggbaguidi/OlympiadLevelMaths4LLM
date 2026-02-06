@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import queue
 import re
+import tempfile
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 
 from .errors import OptionalDependencyError
@@ -40,6 +43,7 @@ class AIMO3Sandbox:
         self._owns_kernel = False
         self._client = None
         self._km = None
+        self._connection_file: str | None = None
 
         # IMPORTANT: don't hardcode ports.
         # In managed notebook runtimes (Kaggle/Colab), fixed port ranges are often already in use.
@@ -52,8 +56,20 @@ class AIMO3Sandbox:
         for attempt in range(1, max_start_attempts + 1):
             km = None
             client = None
+            connection_file = None
             try:
-                km = KernelManager()
+                # IMPORTANT: KernelManager defaults to a connection_file name derived from the
+                # *current* process PID (e.g. kernel-<pid>.json). If we start multiple kernels
+                # concurrently from one Python process (as we do when filling the sandbox pool),
+                # those KernelManagers can race/overwrite the same connection file, causing the
+                # child kernels to pick up identical ports and fail with "Address already in use".
+                #
+                # Fix: always use a unique connection file per sandbox instance.
+                connection_file = os.path.join(
+                    tempfile.gettempdir(),
+                    f"aimo3-kernel-{os.getpid()}-{uuid.uuid4().hex}.json",
+                )
+                km = KernelManager(connection_file=connection_file)
                 km.start_kernel(extra_arguments=["--Application.log_level=CRITICAL"])
                 client = km.blocking_client()
                 client.start_channels()
@@ -62,6 +78,7 @@ class AIMO3Sandbox:
                 self._km = km
                 self._client = client
                 self._owns_kernel = True
+                self._connection_file = connection_file
                 last_err = None
                 break
             except Exception as e:  # noqa: BLE001
@@ -76,6 +93,9 @@ class AIMO3Sandbox:
                 with contextlib.suppress(Exception):
                     if km is not None:
                         km.cleanup_resources()
+                with contextlib.suppress(Exception):
+                    if connection_file is not None and os.path.exists(connection_file):
+                        os.remove(connection_file)
 
                 # Small backoff; collisions tend to resolve quickly.
                 time.sleep(min(0.25, 0.05 * attempt))
@@ -314,8 +334,12 @@ class AIMO3Sandbox:
                 self._km.shutdown_kernel(now=True)
             with contextlib.suppress(Exception):
                 self._km.cleanup_resources()
+        with contextlib.suppress(Exception):
+            if self._connection_file is not None and os.path.exists(self._connection_file):
+                os.remove(self._connection_file)
         self._client = None
         self._km = None
+        self._connection_file = None
 
     def __del__(self) -> None:  # noqa: D401
         self.close()
