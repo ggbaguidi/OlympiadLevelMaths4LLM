@@ -418,6 +418,8 @@ class AIMO3Config:
             except Exception:  # noqa: BLE001
                 return int(default)
         
+        strict_fallback_extraction = (os.getenv("AIMO3_STRICT_FALLBACK_EXTRACTION", "1").strip().lower() not in {"0", "false", "no"})
+        
         seed = _env_int("AIMO3_SEED", AIMO3Config.seed)
         preference_prompt = os.getenv("AIMO3_PREFERENCE_PROMPT", AIMO3Config.preference_prompt)
         tool_prompt = os.getenv("AIMO3_TOOL_PROMPT", AIMO3Config.tool_prompt)
@@ -826,6 +828,7 @@ class AIMO3Config:
             protocol_enabled=proto,
             display_candidates=disp,
             trace_enabled=trace_enabled,
+            strict_fallback_extraction=strict_fallback_extraction,
             trace_path=trace_path,
             trace_include_problem_text=trace_include_problem_text,
             trace_reset_on_start=trace_reset_on_start,
