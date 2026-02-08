@@ -509,8 +509,15 @@ class AIMO3Solver:
         deadline: float,
         problem_id: str | None = None,
         retriever_used: bool = False,
+        continuation_context: str | None = None,
     ) -> AttemptResult:
-        """Run a single solver attempt with streaming completions and tool execution."""
+        """Run a single solver attempt with streaming completions and tool execution.
+
+        If *continuation_context* is provided (non-empty string), it is injected
+        as an additional user message after the problem statement, giving the model
+        a summary of a previous incomplete attempt so it can continue rather than
+        restart from scratch.
+        """
 
         if stop_event.is_set() or time.time() > deadline:
             return AttemptResult(
@@ -548,6 +555,20 @@ class AIMO3Solver:
             messages = self.template.apply_chat_template(
                 developer_prompt, problem, local_tool.tool_config
             )
+
+            # Inject continuation context from a previous incomplete wave.
+            if continuation_context:
+                Message = self._h["Message"]
+                continuation_msg = Message.from_role_and_content(
+                    Role.USER,
+                    (
+                        "A previous attempt on this problem ran out of time before finding an answer. "
+                        "Here is the end of its reasoning — use it to continue, not restart:\n\n"
+                        + continuation_context
+                    ),
+                )
+                messages.append(continuation_msg)
+
             conversation = Conversation.from_messages(messages)
 
             for _turn in range(self.cfg.turns):
@@ -801,9 +822,21 @@ class AIMO3Solver:
             )
             if extension > 0:
                 new_deadline = time.time() + extension
+
+                # Pick the most-progressed wave-1 attempt to use as continuation.
+                best_w1 = max(
+                    detailed_results,
+                    key=lambda r: (
+                        r.stats.python_calls,
+                        r.stats.token_count,
+                    ),
+                )
+                cont_ctx = best_w1.output_text or None
+
                 print(
                     f"[Adaptive] No answer found — granted {extension:.0f}s "
-                    f"extension (flex pool). Running second wave...\n"
+                    f"extension (flex pool). Running second wave "
+                    f"{'with' if cont_ctx else 'without'} continuation context...\n"
                 )
 
                 stop_event_2 = threading.Event()
@@ -822,6 +855,7 @@ class AIMO3Solver:
                             stop_event_2,
                             new_deadline,
                             problem_id=problem_id,
+                            continuation_context=cont_ctx,
                         )
                         futures_2.append(f2)
 
