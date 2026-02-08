@@ -790,6 +790,60 @@ class AIMO3Solver:
             stop_event.set()
             executor.shutdown(wait=True, cancel_futures=True)
 
+        # --- Adaptive retry: if every attempt returned None, request an
+        #     extension from the flex pool and run a second wave. -----------
+        has_any_answer = any(r.answer is not None for r in detailed_results)
+        if not has_any_answer:
+            time_spent = time.time() - problem_start
+            extension = self._budget_tracker.request_no_answer_extension(
+                time_spent_s=time_spent,
+                current_budget_s=budget,
+            )
+            if extension > 0:
+                new_deadline = time.time() + extension
+                print(
+                    f"[Adaptive] No answer found — granted {extension:.0f}s "
+                    f"extension (flex pool). Running second wave...\n"
+                )
+
+                stop_event_2 = threading.Event()
+                executor_2 = ThreadPoolExecutor(max_workers=self.cfg.workers)
+                # Use fresh attempt indices so seeds differ from the first wave.
+                wave2_start = self.cfg.attempts
+                try:
+                    futures_2 = []
+                    for i in range(self.cfg.attempts):
+                        f2 = executor_2.submit(
+                            self._process_attempt,
+                            user_input,
+                            self.cfg.system_prompt,
+                            wave2_start + i,
+                            None,
+                            stop_event_2,
+                            new_deadline,
+                            problem_id=problem_id,
+                        )
+                        futures_2.append(f2)
+
+                    for future in as_completed(futures_2):
+                        try:
+                            result = future.result()
+                            detailed_results.append(result)
+
+                            time_spent_2 = time.time() - problem_start
+                            if self._should_early_stop(
+                                detailed_results, time_spent_2
+                            ):
+                                stop_event_2.set()
+                                for f2 in futures_2:
+                                    f2.cancel()
+                                break
+                        except Exception:  # noqa: BLE001
+                            continue
+                finally:
+                    stop_event_2.set()
+                    executor_2.shutdown(wait=True, cancel_futures=True)
+
         time_used = time.time() - problem_start
         self._budget_tracker.record_solve(time_used)
         self.problems_remaining = self._budget_tracker.problems_remaining

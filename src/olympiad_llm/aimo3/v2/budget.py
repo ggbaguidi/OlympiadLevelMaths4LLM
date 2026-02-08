@@ -173,6 +173,38 @@ class TimeBudgetTracker:
 
         return extension
 
+    def request_no_answer_extension(
+        self,
+        *,
+        time_spent_s: float,
+        current_budget_s: float,
+    ) -> float:
+        """Request a budget extension when ALL attempts returned None.
+
+        This is the strongest hardness signal: the model couldn't produce any
+        valid answer at all.  We draw aggressively from the flex pool (up to
+        the full max_extension_multiplier) to give the solver a second chance.
+
+        Returns the additional seconds granted (0 if nothing available).
+        """
+        max_extension = current_budget_s * (self.max_extension_multiplier - 1.0)
+
+        available_extension = min(
+            max_extension,
+            self.flex_pool_remaining_s,
+            # Don't exceed overall remaining time minus what's left in the
+            # current budget window.
+            self.time_remaining_s - max(0.0, current_budget_s - time_spent_s),
+        )
+
+        if available_extension <= 10.0:
+            return 0.0
+
+        extension = min(available_extension, max_extension)
+        self.flex_pool_used_s += extension
+        self.extensions_granted += 1
+        return extension
+
     def record_solve(self, time_used_s: float) -> None:
         """Record completion of a problem."""
         self.problems_solved += 1
