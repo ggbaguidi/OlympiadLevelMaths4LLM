@@ -1,3 +1,4 @@
+# pylint: disable=broad-exception-caught,missing-function-docstring,line-too-long,missing-module-docstring,import-outside-toplevel,invalid-name,too-many-instance-attributes
 from __future__ import annotations
 
 from dataclasses import dataclass

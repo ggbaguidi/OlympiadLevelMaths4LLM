@@ -1,6 +1,6 @@
-from __future__ import annotations
-
+# pylint: disable=broad-exception-caught,missing-function-docstring,line-too-long,missing-module-docstring,import-outside-toplevel,invalid-name,too-many-instance-attributes
 """Convenience helpers to run the AIMO-3 solver locally or under Kaggle evaluation."""
+from __future__ import annotations
 
 from typing import Optional
 

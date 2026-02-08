@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+# pylint: disable=broad-exception-caught,missing-function-docstring,line-too-long,missing-module-docstring,import-outside-toplevel,invalid-name,too-many-instance-attributes
 """Lightweight JSONL tracing for AIMO-3 runs.
 
 This is intentionally dependency-free (stdlib only) and safe by default:
@@ -8,6 +7,8 @@ This is intentionally dependency-free (stdlib only) and safe by default:
 The goal is to make tuning measurable: why did we pick an answer, what did the
 ranking look like, how much time did we spend, etc.
 """
+
+from __future__ import annotations
 
 import hashlib
 import json

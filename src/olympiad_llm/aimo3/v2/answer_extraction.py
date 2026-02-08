@@ -1,8 +1,8 @@
+# pylint: disable=broad-exception-caught,missing-function-docstring,line-too-long,missing-module-docstring,import-outside-toplevel,invalid-name,too-many-instance-attributes
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-
 
 _LATEX_WRAPPER_RE = re.compile(
     r"^\s*\\(?P<cmd>text|mathrm|mathbf|textbf|bf|operatorname)\s*\{(?P<body>.*)\}\s*$",
@@ -130,6 +130,8 @@ class AnswerExtractor:
         contents = _iter_boxed_contents(text or "")
         if not contents:
             return None
+
+        toks = []
 
         for raw_content in reversed(contents):
             cleaned = _clean_box_content(raw_content)

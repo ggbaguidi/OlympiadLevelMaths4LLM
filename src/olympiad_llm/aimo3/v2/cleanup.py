@@ -1,3 +1,4 @@
+# pylint: disable=broad-exception-caught,missing-function-docstring,line-too-long,missing-module-docstring,import-outside-toplevel,invalid-name,too-many-instance-attributes
 """Environment cleanup + offline install helper.
 
 This is a direct port of the notebook's `cleanup.py`, but:
@@ -13,7 +14,6 @@ import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
-
 
 IS_KAGGLE = os.path.exists("/kaggle/input")
 PACKAGE_MANAGER = os.getenv("AIMO3_PACKAGE_MANAGER", "pip")

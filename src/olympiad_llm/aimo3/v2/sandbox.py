@@ -1,3 +1,5 @@
+# pylint: disable=broad-exception-caught,missing-function-docstring,line-too-long,missing-module-docstring,import-outside-toplevel
+
 from __future__ import annotations
 
 import contextlib
@@ -5,7 +7,6 @@ import os
 import queue
 import re
 import tempfile
-import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -25,6 +26,8 @@ def _require_jupyter_client():
 
 @dataclass
 class SandboxExecResult:
+    """Result of executing code in the AIMO3Sandbox."""
+
     stdout: str
     stderr: str
     timed_out: bool = False

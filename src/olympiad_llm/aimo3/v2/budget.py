@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+# pylint: disable=broad-exception-caught,missing-function-docstring,line-too-long,missing-module-docstring,import-outside-toplevel,invalid-name,too-many-instance-attributes
 """Time budget helpers for AIMO3.
 
 The common failure mode in Kaggle is spending the entire per-problem budget on
@@ -11,6 +10,8 @@ Additionally, we support adaptive extension: if a problem shows "hardness signal
 (no consensus, high variance), we can draw extra time from a flex pool banked
 from easy problems that solved quickly.
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import List

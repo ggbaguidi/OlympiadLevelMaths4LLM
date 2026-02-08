@@ -1,3 +1,7 @@
+"""vLLM OpenAI-compatible server subprocess management for AIMO-3 solver."""
+
+# pylint: disable=broad-exception-caught,missing-function-docstring,line-too-long
+
 from __future__ import annotations
 
 import contextlib
