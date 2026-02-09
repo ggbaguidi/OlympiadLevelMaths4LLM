@@ -16,11 +16,12 @@ VERIFY_SUBSTITUTION = (
     "A proposed answer to the following problem is {answer}.\n\n"
     "Problem: {problem}\n\n"
     "Your task: VERIFY this answer by substituting it back into the problem conditions. "
-    "Use Python to compute every step explicitly. "
-    "At the end, print ONLY one of:\n"
-    "  VERDICT: CORRECT\n"
-    "  VERDICT: INCORRECT\n"
-    "If you find it incorrect, also print the correct answer inside \\boxed{{}}."
+    "Use Python to compute every step explicitly — do NOT skip computation. "
+    "After your analysis, you MUST print your conclusion as a Python print statement:\n"
+    '  print("VERDICT: CORRECT")\n'
+    '  print("VERDICT: INCORRECT")\n'
+    "If incorrect, also print the correct answer inside \\boxed{{}}.\n"
+    "IMPORTANT: You MUST call print() with the VERDICT line — this is required."
 )
 
 VERIFY_SMALL_CASES = (
@@ -29,10 +30,11 @@ VERIFY_SMALL_CASES = (
     "Your task: CHECK this answer by computing small cases and boundary cases in Python. "
     "Build the answer from scratch using brute-force enumeration or exhaustive search on "
     "small instances, then compare with the proposed answer. "
-    "At the end, print ONLY one of:\n"
-    "  VERDICT: CORRECT\n"
-    "  VERDICT: INCORRECT\n"
-    "If you find it incorrect, also print the correct answer inside \\boxed{{}}."
+    "After your analysis, you MUST print your conclusion as a Python print statement:\n"
+    '  print("VERDICT: CORRECT")\n'
+    '  print("VERDICT: INCORRECT")\n'
+    "If incorrect, also print the correct answer inside \\boxed{{}}.\n"
+    "IMPORTANT: You MUST call print() with the VERDICT line — this is required."
 )
 
 VERIFY_ALTERNATIVE = (
@@ -41,10 +43,11 @@ VERIFY_ALTERNATIVE = (
     "Your task: SOLVE this problem from scratch using a COMPLETELY DIFFERENT method "
     "than you would normally use. Use Python to compute. "
     "Compare your independent result with the proposed answer. "
-    "At the end, print ONLY one of:\n"
-    "  VERDICT: CORRECT\n"
-    "  VERDICT: INCORRECT\n"
-    "If you find it incorrect, also print the correct answer inside \\boxed{{}}."
+    "After your analysis, you MUST print your conclusion as a Python print statement:\n"
+    '  print("VERDICT: CORRECT")\n'
+    '  print("VERDICT: INCORRECT")\n'
+    "If incorrect, also print the correct answer inside \\boxed{{}}.\n"
+    "IMPORTANT: You MUST call print() with the VERDICT line — this is required."
 )
 
 # Ordered list — we rotate through them for each candidate's verification attempts.

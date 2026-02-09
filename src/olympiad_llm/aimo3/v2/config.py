@@ -166,7 +166,7 @@ class AIMO3Config:
     # Number of parallel verification attempts per candidate answer.
     verify_attempts_per_candidate: int = 3
     # How many of the top-ranked distinct candidates to verify.
-    verify_top_k_candidates: int = 2
+    verify_top_k_candidates: int = 3
     # Only trigger verification when the top answer has fewer than this many votes.
     # If consensus is already strong, skip verification to save time.
     verify_trigger_max_votes: int = 4

@@ -420,14 +420,51 @@ class AIMO3Solver:
                 break
 
             # Parse the verification verdict from accumulated text.
-            full_text = "".join(text_parts)
+            full_text = "\n".join(text_parts)
             upper = full_text.upper()
 
-            if "VERDICT: CORRECT" in upper:
+            # 1. Exact match: "VERDICT: CORRECT" / "VERDICT: INCORRECT"
+            if "VERDICT: CORRECT" in upper or "VERDICT:CORRECT" in upper:
                 result["verdict"] = "CORRECT"
-            elif "VERDICT: INCORRECT" in upper:
+            elif "VERDICT: INCORRECT" in upper or "VERDICT:INCORRECT" in upper:
                 result["verdict"] = "INCORRECT"
-                # Try to extract an alternative answer.
+            else:
+                # 2. Fuzzy match: look for strong signal phrases.
+                #    Check for INCORRECT first (more specific) to avoid false
+                #    positives from "the answer is correct" inside longer text.
+                incorrect_signals = [
+                    "THE ANSWER IS INCORRECT",
+                    "THE PROPOSED ANSWER IS INCORRECT",
+                    "THE PROPOSED ANSWER IS WRONG",
+                    "THIS IS INCORRECT",
+                    "ANSWER IS WRONG",
+                    "NOT CORRECT",
+                ]
+                correct_signals = [
+                    "THE ANSWER IS CORRECT",
+                    "THE PROPOSED ANSWER IS CORRECT",
+                    "CONFIRMED CORRECT",
+                    "THIS IS CORRECT",
+                    "I CONFIRM THE ANSWER",
+                    "ANSWER IS VERIFIED",
+                ]
+                if any(sig in upper for sig in incorrect_signals):
+                    result["verdict"] = "INCORRECT"
+                elif any(sig in upper for sig in correct_signals):
+                    result["verdict"] = "CORRECT"
+                else:
+                    # 3. Fallback: if the verifier produced a \boxed{} answer,
+                    #    compare it with the candidate.
+                    verifier_answer = self._extractor.extract_boxed_int(full_text)
+                    if verifier_answer is not None:
+                        if verifier_answer == candidate_answer:
+                            result["verdict"] = "CORRECT"
+                        else:
+                            result["verdict"] = "INCORRECT"
+                            result["alt_answer"] = verifier_answer
+
+            # Extract alt answer for any INCORRECT verdict (if not already set).
+            if result["verdict"] == "INCORRECT" and result["alt_answer"] is None:
                 alt = self._extractor.extract_boxed_int(full_text)
                 if alt is not None and alt != candidate_answer:
                     result["alt_answer"] = alt
@@ -1191,18 +1228,21 @@ class AIMO3Solver:
         ranked = rank_candidates(detailed_results, filter_to_verified_if_any=True)
 
         # --- Answer-conditional verification phase ---
-        # If consensus is weak, stress-test the top candidates to catch
-        # "wrong but popular" answers.
+        # Use the UNFILTERED ranking so that all strong candidates (including
+        # those without tool-verification) get a fair shot at being checked.
+        ranked_for_verify = rank_candidates(
+            detailed_results, filter_to_verified_if_any=False
+        )
         time_remaining_for_verify = (
             self._budget_tracker.time_remaining_s - time_used
         )
-        if self._should_run_verification(ranked, time_remaining_for_verify):
+        if self._should_run_verification(ranked_for_verify, time_remaining_for_verify):
             verify_deadline = time.time() + min(
                 self.cfg.verify_timeout_s, time_remaining_for_verify * 0.8
             )
             print("[Verify] Weak consensus — running verification phase...")
             ranked = self._verify_candidates(
-                problem, ranked, verify_deadline
+                problem, ranked_for_verify, verify_deadline
             )
             # Update time_used to include verification.
             time_used = time.time() - problem_start
