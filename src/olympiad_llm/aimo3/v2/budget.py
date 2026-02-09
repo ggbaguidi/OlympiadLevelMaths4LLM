@@ -33,8 +33,6 @@ class TimeBudgetTracker:
     total_problems: int
     base_timeout_s: float = 300.0
     high_timeout_s: float = 900.0
-    # How much of banked time to use per problem (conservative = last longer)
-    bank_utilization: float = 0.4
     # Minimum budget per problem (never go below this)
     min_budget_s: float = 120.0
 
@@ -66,16 +64,6 @@ class TimeBudgetTracker:
         return max(0.0, self.total_budget_s - self.total_time_used_s)
 
     @property
-    def expected_time_used_s(self) -> float:
-        """Time we expected to use based on base_timeout per problem."""
-        return self.problems_solved * self.base_timeout_s
-
-    @property
-    def time_banked_s(self) -> float:
-        """Time saved compared to expectation (can be negative if over budget)."""
-        return self.expected_time_used_s - self.total_time_used_s
-
-    @property
     def avg_solve_time_s(self) -> float:
         """Rolling average of actual solve times."""
         if not self.solve_times:
@@ -93,31 +81,32 @@ class TimeBudgetTracker:
         return max(0.0, self.flex_pool_total_s - self.flex_pool_used_s)
 
     def compute_budget(self) -> float:
-        """Compute the budget for the next problem based on current state."""
+        """Compute the budget for the next problem.
+
+        Core logic: subtract *all* time already used from the total, set aside
+        the flex-pool reserve, then divide the rest equally among the remaining
+        problems.  This guarantees that every second spent is accounted for
+        before a new budget is assigned.
+        """
         if self.problems_remaining <= 0:
             return 0.0
 
-        # Base: equal division of remaining time (excluding flex pool)
-        available = self.time_remaining_s - self.flex_pool_remaining_s
-        equal_share = max(0.0, available) / self.problems_remaining
+        # 1. True remaining time (total - everything spent so far).
+        remaining = self.time_remaining_s
 
-        # If we have banked time, we can be more generous
-        if self.time_banked_s > 0:
-            # Distribute banked time across remaining problems, with utilization factor
-            bank_bonus = (
-                self.time_banked_s * self.bank_utilization
-            ) / self.problems_remaining
-            budget = equal_share + bank_bonus
-        else:
-            # We're behind schedule - stick to equal share (or less)
-            budget = equal_share
+        # 2. Set aside flex reserve for hard-problem extensions.
+        flex_reserve = min(self.flex_pool_remaining_s, remaining)
+        available = max(0.0, remaining - flex_reserve)
 
-        # Apply bounds
+        # 3. Divide evenly among remaining problems.
+        budget = available / self.problems_remaining
+
+        # 4. Apply bounds.
         budget = max(self.min_budget_s, budget)
         budget = min(self.high_timeout_s, budget)
 
-        # Never exceed remaining time (but allow dipping into flex pool if needed)
-        budget = min(budget, self.time_remaining_s)
+        # 5. Never exceed total remaining time (flex included as absolute ceiling).
+        budget = min(budget, remaining)
 
         return budget
 
@@ -155,12 +144,13 @@ class TimeBudgetTracker:
         # Calculate max allowed extension
         max_extension = current_budget_s * (self.max_extension_multiplier - 1.0)
 
-        # Can't exceed flex pool or overall remaining time
+        # True remaining time accounting for in-flight spend on THIS problem.
+        true_remaining = max(0.0, self.time_remaining_s - time_spent_s)
+
         available_extension = min(
             max_extension,
             self.flex_pool_remaining_s,
-            self.time_remaining_s
-            - (current_budget_s - time_spent_s),  # remaining in current budget
+            true_remaining,
         )
 
         if available_extension <= 10.0:  # Not worth extending for < 10s
@@ -189,12 +179,13 @@ class TimeBudgetTracker:
         """
         max_extension = current_budget_s * (self.max_extension_multiplier - 1.0)
 
+        # True remaining time accounting for in-flight spend on THIS problem.
+        true_remaining = max(0.0, self.time_remaining_s - time_spent_s)
+
         available_extension = min(
             max_extension,
             self.flex_pool_remaining_s,
-            # Don't exceed overall remaining time minus what's left in the
-            # current budget window.
-            self.time_remaining_s - max(0.0, current_budget_s - time_spent_s),
+            true_remaining,
         )
 
         if available_extension <= 10.0:
@@ -218,7 +209,7 @@ class TimeBudgetTracker:
         """Return a short status string for logging."""
         return (
             f"[Budget] {self.problems_solved}/{self.total_problems} done | "
-            f"Bank: {self.time_banked_s:+.0f}s | "
+            f"Remaining: {self.time_remaining_s:.0f}s | "
             f"Flex: {self.flex_pool_remaining_s:.0f}s/{self.flex_pool_total_s:.0f}s | "
             f"Avg: {self.avg_solve_time_s:.0f}s | "
             f"Next: {self.compute_budget():.0f}s | "
