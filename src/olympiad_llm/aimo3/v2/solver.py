@@ -129,6 +129,9 @@ class AIMO3Solver:
         if not rows:
             return
 
+        # Sort: attempts with an answer first, then by attempt number.
+        rows.sort(key=lambda r: (r["Answer"] is None, r["Attempt"]))
+
         # Keep output manageable.
         max_rows = max(1, int(self.cfg.display_max_rows))
         rows = rows[:max_rows]
@@ -729,7 +732,10 @@ class AIMO3Solver:
                 timeout_count=timeout_count,
                 mean_entropy=mean_entropy,
                 verification_marker_found=(
-                    verification_marker_found if python_calls > 0 else None
+                    verification_marker_found
+                    if python_calls > 0
+                    and self.cfg.require_verification_marker
+                    else None
                 ),
             ),
             output_text=output_text,
