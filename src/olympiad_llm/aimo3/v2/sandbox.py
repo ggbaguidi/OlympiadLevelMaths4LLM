@@ -9,7 +9,6 @@ import re
 import tempfile
 import time
 import uuid
-from dataclasses import dataclass
 
 from .errors import OptionalDependencyError
 
@@ -24,13 +23,41 @@ def _require_jupyter_client():
     return KernelManager
 
 
-@dataclass
-class SandboxExecResult:
-    """Result of executing code in the AIMO3Sandbox."""
-
-    stdout: str
-    stderr: str
-    timed_out: bool = False
+_PRELOAD_CODE = """\
+import sys
+# Increase limit for large integer string conversion (Python 3.11+)
+try:
+    sys.set_int_max_str_digits(0)  # 0 = unlimited
+except AttributeError:
+    pass  # Python < 3.11
+import os
+_lean_bin = os.environ.get("AIMO3_LEAN_BIN_DIR")
+if _lean_bin and _lean_bin not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = _lean_bin + os.pathsep + os.environ.get("PATH", "")
+def aimo3_verify(ok=True):
+    if ok:
+        print("VERIFY_OK")
+    else:
+        print("VERIFY_FAIL")
+import math
+import numpy
+import sympy
+import random
+import itertools
+import collections
+import fractions
+import sympy as sp
+import numpy as np
+import mpmath as mp
+from fractions import Fraction
+import mpmath
+mpmath.mp.dps = 64
+try:
+    import ortools  # noqa: F401
+    from ortools.sat.python import cp_model  # noqa: F401
+except Exception:
+    pass
+"""
 
 
 class AIMO3Sandbox:
@@ -109,41 +136,7 @@ class AIMO3Sandbox:
             )
 
         # Preload common math stack.
-        self.execute(
-            "import sys\n"
-            "# Increase limit for large integer string conversion (Python 3.11+)\n"
-            "try:\n"
-            "    sys.set_int_max_str_digits(0)  # 0 = unlimited\n"
-            "except AttributeError:\n"
-            "    pass  # Python < 3.11\n"
-            "import os\n"
-            '_lean_bin = os.environ.get("AIMO3_LEAN_BIN_DIR")\n'
-            'if _lean_bin and _lean_bin not in os.environ.get("PATH", ""):\n'
-            '    os.environ["PATH"] = _lean_bin + os.pathsep + os.environ.get("PATH", "")\n'
-            "def aimo3_verify(ok=True):\n"
-            "    if ok:\n"
-            '        print("VERIFY_OK")\n'
-            "    else:\n"
-            '        print("VERIFY_FAIL")\n'
-            "import math\n"
-            "import numpy\n"
-            "import sympy\n"
-            "import random\n"
-            "import itertools\n"
-            "import collections\n"
-            "import fractions\n"
-            "import sympy as sp\n"
-            "import numpy as np\n"
-            "import mpmath as mp\n"
-            "from fractions import Fraction\n"
-            "import mpmath\n"
-            "mpmath.mp.dps = 64\n"
-            "try:\n"
-            "    import ortools  # noqa: F401\n"
-            "    from ortools.sat.python import cp_model  # noqa: F401\n"
-            "except Exception:\n"
-            "    pass\n"
-        )
+        self.execute(_PRELOAD_CODE)
 
     @staticmethod
     def _format_error(traceback: list[str]) -> str:
@@ -312,41 +305,7 @@ class AIMO3Sandbox:
     def reset(self) -> None:
         self.execute("%reset -f")
         self.execute("import gc; gc.collect()")
-        self.execute(
-            "import sys\n"
-            "# Increase limit for large integer string conversion (Python 3.11+)\n"
-            "try:\n"
-            "    sys.set_int_max_str_digits(0)  # 0 = unlimited\n"
-            "except AttributeError:\n"
-            "    pass  # Python < 3.11\n"
-            "import os\n"
-            '_lean_bin = os.environ.get("AIMO3_LEAN_BIN_DIR")\n'
-            'if _lean_bin and _lean_bin not in os.environ.get("PATH", ""):\n'
-            '    os.environ["PATH"] = _lean_bin + os.pathsep + os.environ.get("PATH", "")\n'
-            "def aimo3_verify(ok=True):\n"
-            "    if ok:\n"
-            '        print("VERIFY_OK")\n'
-            "    else:\n"
-            '        print("VERIFY_FAIL")\n'
-            "import math\n"
-            "import numpy\n"
-            "import sympy\n"
-            "import random\n"
-            "import itertools\n"
-            "import collections\n"
-            "import fractions\n"
-            "import sympy as sp\n"
-            "import numpy as np\n"
-            "import mpmath as mp\n"
-            "from fractions import Fraction\n"
-            "import mpmath\n"
-            "mpmath.mp.dps = 18\n"
-            "try:\n"
-            "    import ortools  # noqa: F401\n"
-            "    from ortools.sat.python import cp_model  # noqa: F401\n"
-            "except Exception:\n"
-            "    pass\n"
-        )
+        self.execute(_PRELOAD_CODE)
 
     def close(self) -> None:
         with contextlib.suppress(Exception):

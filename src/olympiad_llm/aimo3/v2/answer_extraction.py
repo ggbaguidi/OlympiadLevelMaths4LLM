@@ -195,17 +195,3 @@ class AnswerExtractor:
             if self.aimo_lo <= val <= self.aimo_hi:
                 return val
         return None
-
-    def extract_boxed_content(self, text: str) -> str | None:
-        """Return the *content* of the last \boxed{...} (not necessarily int)."""
-
-        contents = _iter_boxed_contents(text or "")
-        if not contents:
-            return None
-        return contents[-1].strip()
-
-    def normalize_final_answer_text(self, text: str) -> str:
-        """If the answer contains \boxed{...}, return the boxed content; else return stripped text."""
-
-        boxed = self.extract_boxed_content(text)
-        return boxed if boxed is not None else (text or "").strip()

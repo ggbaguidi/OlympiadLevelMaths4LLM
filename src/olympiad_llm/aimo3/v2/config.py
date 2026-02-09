@@ -63,9 +63,6 @@ class AIMO3Config:
     kv_cache_dtype: str = "fp8_e4m3"
     dtype: str = "auto"
 
-    # Combined logging path for vLLM or other server logs
-    server_log_path: str = "server.log"
-
     # Optional: warm OS page cache by reading model shards before starting vLLM.
     # This reduces cold-start stalls and first-token latency in notebook runtimes.
     preload_model_weights: bool = False
@@ -83,6 +80,12 @@ class AIMO3Config:
     # Budget allocator assumes a fixed number of remaining problems.
     # Set to 1 when debugging a single hard problem locally.
     problems_total: int = 50
+
+    # Adaptive budget extension settings for the TimeBudgetTracker.
+    adaptive_budget_flex_pool_fraction: float = 0.15
+    adaptive_budget_max_extension: float = 2.0
+    adaptive_budget_hardness_trigger: float = 0.5
+    adaptive_budget_min_distinct: int = 3
 
     # Server reuse / probing
     # If True, attempt to connect to an already-running OpenAI-compatible server
@@ -104,6 +107,12 @@ class AIMO3Config:
     early_stop: int = 3
     early_stop_min_verified: int = 0
 
+    # Easy-exit: aggressive early stop for problems solved quickly with verified support.
+    easy_exit_enabled: bool = True
+    easy_exit_time_threshold_s: float = 60.0
+    easy_exit_min_votes: int = 3
+    easy_exit_min_verified: int = 2
+
     # Minimum number of generated tokens before the streaming \boxed{} extraction
     # kicks in.  This prevents the solver from latching onto intermediate boxed
     # expressions that appear early in the model's chain-of-thought (e.g. restating
@@ -124,7 +133,6 @@ class AIMO3Config:
     # Sandbox pool configuration
     kernel_init_workers: int = 4
     sandbox_pool_size: int = 8
-    sandbox_create_on_exhaustion: bool = True
 
     # Strict extraction mode
     strict_fallback_extraction: bool = True
@@ -135,9 +143,6 @@ class AIMO3Config:
     # When True, the model must explicitly print ``VERIFY_OK`` in its
     # tool output for the attempt to count as verified.
     require_verification_marker: bool = False
-
-    # Tracing attempts
-    trace_attempts_enabled: bool = False
 
     turns: int = 128
     seed: int = 3
@@ -156,10 +161,6 @@ class AIMO3Config:
     @staticmethod
     def from_env() -> "AIMO3Config":
         """Create a config by reading from environment variables, falling back to defaults."""
-
-        def _env_present(name: str) -> bool:
-            raw = os.getenv(name)
-            return raw is not None and bool(raw.strip())
 
         def _env_float(name: str, default: float) -> float:
             raw = os.getenv(name)
@@ -194,12 +195,6 @@ class AIMO3Config:
         tool_prompt = os.getenv("AIMO3_TOOL_PROMPT", AIMO3Config.tool_prompt)
         system_prompt = os.getenv("AIMO3_SYSTEM_PROMPT", AIMO3Config.system_prompt)
 
-        # Profile presets (apply only when the corresponding env var is NOT explicitly set).
-        # This makes it easy to reduce orchestration steps without rewriting many env vars.
-        profile = (os.getenv("AIMO3_PROFILE", "") or "").strip().lower()
-        if profile not in {"", "default", "full", "lean"}:
-            profile = ""
-
         model_path = os.path.expanduser(os.getenv("AIMO3_MODEL_PATH", ""))
         served_model_name = os.getenv("AIMO3_SERVED_MODEL_NAME", "gpt-oss")
 
@@ -223,9 +218,6 @@ class AIMO3Config:
         ).strip().lower() not in {"0", "false", "no"}
         trace_reset_on_start = os.getenv(
             "AIMO3_TRACE_RESET_ON_START", "1"
-        ).strip().lower() not in {"0", "false", "no"}
-        trace_attempts_enabled = os.getenv(
-            "AIMO3_TRACE_ATTEMPTS", "0"
         ).strip().lower() not in {"0", "false", "no"}
         trace_env_enabled = os.getenv("AIMO3_TRACE_ENV", "0").strip().lower() not in {
             "0",
@@ -266,6 +258,38 @@ class AIMO3Config:
         min_tokens_before_stream_extraction = _env_int(
             "AIMO3_MIN_TOKENS_BEFORE_STREAM_EXTRACTION",
             AIMO3Config.min_tokens_before_stream_extraction,
+        )
+
+        # Easy-exit tuning
+        easy_exit_enabled = os.getenv(
+            "AIMO3_EASY_EXIT_ENABLED", "1"
+        ).strip().lower() not in {"0", "false", "no"}
+        easy_exit_time_threshold_s = _env_float(
+            "AIMO3_EASY_EXIT_TIME_THRESHOLD", AIMO3Config.easy_exit_time_threshold_s
+        )
+        easy_exit_min_votes = _env_int(
+            "AIMO3_EASY_EXIT_MIN_VOTES", AIMO3Config.easy_exit_min_votes
+        )
+        easy_exit_min_verified_ee = _env_int(
+            "AIMO3_EASY_EXIT_MIN_VERIFIED", AIMO3Config.easy_exit_min_verified
+        )
+
+        # Adaptive budget tuning
+        adaptive_budget_flex_pool_fraction = _env_float(
+            "AIMO3_ADAPTIVE_BUDGET_FLEX_POOL_FRACTION",
+            AIMO3Config.adaptive_budget_flex_pool_fraction,
+        )
+        adaptive_budget_max_extension = _env_float(
+            "AIMO3_ADAPTIVE_BUDGET_MAX_EXTENSION",
+            AIMO3Config.adaptive_budget_max_extension,
+        )
+        adaptive_budget_hardness_trigger = _env_float(
+            "AIMO3_ADAPTIVE_BUDGET_HARDNESS_TRIGGER",
+            AIMO3Config.adaptive_budget_hardness_trigger,
+        )
+        adaptive_budget_min_distinct = _env_int(
+            "AIMO3_ADAPTIVE_BUDGET_MIN_DISTINCT",
+            AIMO3Config.adaptive_budget_min_distinct,
         )
 
         # Time budgets
@@ -330,7 +354,6 @@ class AIMO3Config:
             trace_reset_on_start=trace_reset_on_start,
             trace_env_enabled=trace_env_enabled,
             trace_env_packages=trace_env_packages,
-            trace_attempts_enabled=trace_attempts_enabled,
             require_cuda=require_cuda,
             server_timeout=server_timeout,
             context_tokens=context_tokens,
@@ -345,12 +368,20 @@ class AIMO3Config:
             workers=workers,
             early_stop=early_stop,
             early_stop_min_verified=early_stop_min_verified,
+            easy_exit_enabled=easy_exit_enabled,
+            easy_exit_time_threshold_s=easy_exit_time_threshold_s,
+            easy_exit_min_votes=easy_exit_min_votes,
+            easy_exit_min_verified=easy_exit_min_verified_ee,
             base_problem_timeout=base_problem_timeout,
             high_problem_timeout=high_problem_timeout,
             notebook_limit=notebook_limit,
             jupyter_timeout=jupyter_timeout,
             sandbox_timeout=sandbox_timeout,
             problems_total=problems_total,
+            adaptive_budget_flex_pool_fraction=adaptive_budget_flex_pool_fraction,
+            adaptive_budget_max_extension=adaptive_budget_max_extension,
+            adaptive_budget_hardness_trigger=adaptive_budget_hardness_trigger,
+            adaptive_budget_min_distinct=adaptive_budget_min_distinct,
             turns=turns,
             min_tokens_before_stream_extraction=min_tokens_before_stream_extraction,
             strict_fallback_extraction=strict_fallback_extraction,

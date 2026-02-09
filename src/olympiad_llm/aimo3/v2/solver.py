@@ -99,7 +99,7 @@ class AIMO3Solver:
         )
         ent = None
         with contextlib.suppress(Exception):
-            v = float(getattr(r.stats, "mean_entropy", float("inf")))
+            v = float(r.stats.mean_entropy)
             if v != float("inf") and v > 0.0:
                 ent = v
         return {
@@ -107,9 +107,9 @@ class AIMO3Solver:
             "Answer": r.answer,
             "ToolVerified": bool(r.stats.tool_verified),
             "PyCalls": int(r.stats.python_calls),
-            "Timeouts": int(getattr(r.stats, "timeout_count", 0) or 0),
+            "Timeouts": int(r.stats.timeout_count),
             "PyErrors": int(r.stats.python_errors),
-            "LeanCalls": int(getattr(r.stats, "lean_calls", 0) or 0),
+            "LeanCalls": int(r.stats.lean_calls),
             "Tokens": int(r.stats.token_count),
             "Entropy": ent,
             "Snippet": snippet,
@@ -168,7 +168,7 @@ class AIMO3Solver:
         sb: AIMO3Sandbox | None = None
         try:
             sb = self.sandbox_pool.get(
-                timeout=float(getattr(self.cfg, "sandbox_timeout", 0.0) or 0.0) or 0.5
+                timeout=max(self.cfg.sandbox_timeout, 0.5)
             )
         except Exception:
             sb = None
@@ -177,7 +177,7 @@ class AIMO3Solver:
             return None
 
         try:
-            pkg_raw = str(getattr(self.cfg, "trace_env_packages", "") or "")
+            pkg_raw = self.cfg.trace_env_packages or ""
             packages = [p.strip() for p in pkg_raw.split(",") if p.strip()]
 
             # Emit a single JSON line as the *last* line, so we can parse robustly.
@@ -205,9 +205,7 @@ class AIMO3Solver:
             )
             out = sb.execute(
                 code,
-                timeout=min(
-                    2.0, float(getattr(self.cfg, "jupyter_timeout", 10.0) or 10.0)
-                ),
+                timeout=min(2.0, self.cfg.jupyter_timeout),
             )
 
             # Find the last JSON-looking line.
@@ -253,18 +251,16 @@ class AIMO3Solver:
         if not ranked_all:
             return False
 
-        top_ans, top_d = ranked_all[0]
-        _ = top_ans
+        _, top_d = ranked_all[0]
         votes = int(top_d.get("votes", 0))
         verified = int(top_d.get("verified", 0))
 
         # Easy exit: aggressive early stop for problems solved quickly with good verification
         if (
-            bool(getattr(self.cfg, "easy_exit_enabled", True))
-            and time_spent_s
-            < float(getattr(self.cfg, "easy_exit_time_threshold_s", 60.0))
-            and votes >= int(getattr(self.cfg, "easy_exit_min_votes", 3))
-            and verified >= int(getattr(self.cfg, "easy_exit_min_verified", 2))
+            self.cfg.easy_exit_enabled
+            and time_spent_s < self.cfg.easy_exit_time_threshold_s
+            and votes >= self.cfg.easy_exit_min_votes
+            and verified >= self.cfg.easy_exit_min_verified
         ):
             return True
 
@@ -328,11 +324,8 @@ class AIMO3Solver:
         self.Role = h["Role"]
         self.stop_token_ids = self.encoding.stop_tokens_for_assistant_actions()
 
-        ServerClass = VLLMServer
-
-        self.server = ServerClass(cfg=self.cfg, port=self.port)
-
         self.base_url = f"http://0.0.0.0:{self.port}/v1"
+        self.server = None  # set below only if we need to start one
 
         # If a server is already running on this port, reuse it.
         if bool(self.cfg.reuse_existing_server):
@@ -345,14 +338,13 @@ class AIMO3Solver:
                 probe_client, attempts=self.cfg.server_probe_attempts
             ):
                 # Reuse: don't start a new process.
-                self.server = None
                 self.client = OpenAI(
                     base_url=self.base_url,
                     api_key="sk-local",
                     timeout=self.cfg.session_timeout,
                 )
             else:
-                self.server = ServerClass(cfg=self.cfg, port=self.port)
+                self.server = VLLMServer(cfg=self.cfg, port=self.port)
                 self.server.start()
                 self.client = OpenAI(
                     base_url=self.base_url,
@@ -361,6 +353,7 @@ class AIMO3Solver:
                 )
                 self.server.wait_ready(self.client)
         else:
+            self.server = VLLMServer(cfg=self.cfg, port=self.port)
             self.server.start()
             self.client = OpenAI(
                 base_url=self.base_url,
@@ -370,7 +363,6 @@ class AIMO3Solver:
             self.server.wait_ready(self.client)
 
         self._initialize_kernels()
-        self.notebook_start_time = time.time()
         self.problems_remaining = int(self.cfg.problems_total)
 
         # Dynamic time budgeting: track actual solve times to adjust per-problem budgets
@@ -379,39 +371,30 @@ class AIMO3Solver:
             total_problems=int(self.cfg.problems_total),
             base_timeout_s=float(self.cfg.base_problem_timeout),
             high_timeout_s=float(self.cfg.high_problem_timeout),
-            # Adaptive extension settings
-            flex_pool_fraction=float(
-                getattr(self.cfg, "adaptive_budget_flex_pool_fraction", 0.15)
-            ),
-            max_extension_multiplier=float(
-                getattr(self.cfg, "adaptive_budget_max_extension", 2.0)
-            ),
-            hardness_trigger_fraction=float(
-                getattr(self.cfg, "adaptive_budget_hardness_trigger", 0.5)
-            ),
-            hardness_min_distinct_answers=int(
-                getattr(self.cfg, "adaptive_budget_min_distinct", 3)
-            ),
+            flex_pool_fraction=self.cfg.adaptive_budget_flex_pool_fraction,
+            max_extension_multiplier=self.cfg.adaptive_budget_max_extension,
+            hardness_trigger_fraction=self.cfg.adaptive_budget_hardness_trigger,
+            hardness_min_distinct_answers=self.cfg.adaptive_budget_min_distinct,
         )
 
         # Notebook-friendly tracing behavior: optionally reset the trace file at startup.
-        if bool(getattr(self.cfg, "trace_enabled", False)) and bool(
-            getattr(self.cfg, "trace_reset_on_start", False)
-        ):
+        # Cache the answer extractor (avoid re-creating on every call).
+        self._cached_extractor = AnswerExtractor(
+            aimo_lo=0,
+            aimo_hi=99999,
+            strict_fallback=bool(self.cfg.strict_fallback_extraction),
+        )
+
+        if self.cfg.trace_enabled and self.cfg.trace_reset_on_start:
             with contextlib.suppress(Exception):
-                p = str(
-                    getattr(self.cfg, "trace_path", "aimo3_trace.jsonl")
-                    or "aimo3_trace.jsonl"
-                )
+                p = self.cfg.trace_path
                 if p and os.path.exists(p):
                     os.remove(p)
 
         self._trace = TraceRecorder(
-            enabled=bool(getattr(self.cfg, "trace_enabled", False)),
-            path=str(getattr(self.cfg, "trace_path", "aimo3_trace.jsonl")),
-            include_problem_text=bool(
-                getattr(self.cfg, "trace_include_problem_text", False)
-            ),
+            enabled=self.cfg.trace_enabled,
+            path=self.cfg.trace_path,
+            include_problem_text=self.cfg.trace_include_problem_text,
         )
 
     def close(self) -> None:
@@ -431,9 +414,6 @@ class AIMO3Solver:
         self.sandbox_pool: queue.Queue[AIMO3Sandbox] = queue.Queue()
 
         pool_size = max(1, min(int(self.cfg.sandbox_pool_size), int(self.cfg.workers)))
-
-        # Keep track of how many kernels we created for the pool.
-        self._sandbox_pool_target_size = pool_size
 
         def _create():
             return AIMO3Sandbox(timeout=self.cfg.jupyter_timeout)
@@ -469,9 +449,7 @@ class AIMO3Solver:
 
     @property
     def _extractor(self) -> AnswerExtractor:
-        # Centralize extraction behavior (range, formatting).
-        strict = bool(getattr(self.cfg, "strict_fallback_extraction", True))
-        return AnswerExtractor(aimo_lo=0, aimo_hi=99999, strict_fallback=strict)
+        return self._cached_extractor
 
     @staticmethod
     def _compute_mean_entropy(logprobs_buffer: list) -> float:
@@ -510,8 +488,6 @@ class AIMO3Solver:
         attempt_tag: str | None,
         stop_event: threading.Event,
         deadline: float,
-        problem_id: str | None = None,
-        retriever_used: bool = False,
         continuation_context: str | None = None,
     ) -> AttemptResult:
         """Run a single solver attempt with streaming completions and tool execution.
@@ -542,7 +518,7 @@ class AIMO3Solver:
         text_tail: deque = deque(maxlen=int(self.cfg.capture_attempt_text_chars))
         verification_marker_found = False
 
-        attempt_seed = int(math.pow(self.cfg.seed + attempt_index, 2))
+        attempt_seed = (self.cfg.seed + attempt_index) ** 2
         Conversation = self._h["Conversation"]
         Role = self.Role
 
@@ -712,7 +688,7 @@ class AIMO3Solver:
                     conversation.messages = conversation.messages + list(tool_responses)
 
         except Exception:  # noqa: BLE001
-            python_errors += 1
+            pass  # Infrastructure failure (e.g. vLLM stream error), not a Python tool error
 
         finally:
             if sandbox is not None:
@@ -782,7 +758,7 @@ class AIMO3Solver:
 
         # Optional: snapshot sandbox environment.
         env_snapshot = None
-        if bool(getattr(self.cfg, "trace_env_enabled", False)):
+        if self.cfg.trace_env_enabled:
             with contextlib.suppress(Exception):
                 env_snapshot = self._sandbox_env_snapshot()
 
@@ -806,7 +782,6 @@ class AIMO3Solver:
                     tag,
                     stop_event,
                     deadline,
-                    problem_id=problem_id,
                 )
                 futures.append(f)
 
@@ -873,7 +848,6 @@ class AIMO3Solver:
                             None,
                             stop_event_2,
                             new_deadline,
-                            problem_id=problem_id,
                             continuation_context=cont_ctx,
                         )
                         futures_2.append(f2)
