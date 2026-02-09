@@ -638,7 +638,11 @@ class AIMO3Solver:
                                         chunk_lp.top_logprobs
                                     )
 
-                        if "}" in (new_text or ""):
+                        if (
+                            "}" in (new_text or "")
+                            and total_tokens
+                            >= self.cfg.min_tokens_before_stream_extraction
+                        ):
                             search_text = "".join(
                                 text_chunks[-self.cfg.search_tokens :]
                             )
@@ -717,6 +721,15 @@ class AIMO3Solver:
                         sandbox.reset()
                 with contextlib.suppress(Exception):
                     self.sandbox_pool.put(sandbox)
+
+        # Last-resort extraction: the model used the tool and generated many
+        # tokens but never emitted a clean "final" channel message.  Scan the
+        # accumulated tail text for a \boxed{} or fallback integer.
+        if final_answer is None and text_tail:
+            full_tail = "".join(text_tail)
+            final_answer = self._extractor.extract_boxed_int(full_tail)
+            if final_answer is None:
+                final_answer = self._extractor.extract_int_fallback(full_tail)
 
         mean_entropy = self._compute_mean_entropy(logprobs_buffer)
         output_text = "".join(text_tail)

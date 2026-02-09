@@ -104,6 +104,14 @@ class AIMO3Config:
     early_stop: int = 3
     early_stop_min_verified: int = 0
 
+    # Minimum number of generated tokens before the streaming \boxed{} extraction
+    # kicks in.  This prevents the solver from latching onto intermediate boxed
+    # expressions that appear early in the model's chain-of-thought (e.g. restating
+    # the problem or referencing a value from continuation context).  Answers are
+    # still caught *after* the turn loop via the "final" channel and the
+    # last-resort scan, so easy problems are not affected.
+    min_tokens_before_stream_extraction: int = 1500
+
     attempts: int = 8
     workers: int = 16
 
@@ -255,6 +263,10 @@ class AIMO3Config:
         )
 
         turns = _env_int("AIMO3_TURNS", AIMO3Config.turns)
+        min_tokens_before_stream_extraction = _env_int(
+            "AIMO3_MIN_TOKENS_BEFORE_STREAM_EXTRACTION",
+            AIMO3Config.min_tokens_before_stream_extraction,
+        )
 
         # Time budgets
         base_problem_timeout = _env_float(
@@ -340,6 +352,7 @@ class AIMO3Config:
             sandbox_timeout=sandbox_timeout,
             problems_total=problems_total,
             turns=turns,
+            min_tokens_before_stream_extraction=min_tokens_before_stream_extraction,
             strict_fallback_extraction=strict_fallback_extraction,
             require_verification_marker=require_verification_marker,
         )
