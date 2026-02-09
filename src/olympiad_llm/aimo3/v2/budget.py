@@ -96,13 +96,18 @@ class TimeBudgetTracker:
         available = max(0.0, remaining - flex_reserve)
 
         # 3. Divide evenly among remaining problems.
-        budget = available / self.problems_remaining
+        equal_share = available / self.problems_remaining
 
-        # 4. Apply bounds.
+        # 4. Make budget at least the maximum of the rolling average and the
+        # configured base timeout. This ensures we allocate at least what we've
+        # been spending on average or the base expectation for a single problem.
+        budget = max(equal_share, self.avg_solve_time_s, self.base_timeout_s)
+
+        # 5. Apply bounds.
         budget = max(self.min_budget_s, budget)
         budget = min(self.high_timeout_s, budget)
 
-        # 5. Never exceed total remaining time (flex included as absolute ceiling).
+        # 6. Never exceed total remaining time (flex included as absolute ceiling).
         budget = min(budget, remaining)
 
         return budget
