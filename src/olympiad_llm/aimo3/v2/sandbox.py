@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import os
 import queue
+import random
 import re
 import tempfile
 import time
@@ -127,8 +128,8 @@ class AIMO3Sandbox:
                     if connection_file is not None and os.path.exists(connection_file):
                         os.remove(connection_file)
 
-                # Small backoff; collisions tend to resolve quickly.
-                time.sleep(min(0.25, 0.05 * attempt))
+                # Exponential backoff with jitter to avoid thundering herd.
+                time.sleep(min(2.0, 0.1 * (2 ** attempt) + random.uniform(0, 0.2)))
 
         if self._client is None or self._km is None:
             raise RuntimeError(

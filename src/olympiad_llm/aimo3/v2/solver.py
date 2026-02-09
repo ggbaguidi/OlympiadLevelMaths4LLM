@@ -790,8 +790,8 @@ class AIMO3Solver:
                 self.sandbox_pool.put(_create())
                 missing -= 1
             except Exception:  # noqa: BLE001
-                # Give the OS a moment to release ports.
-                time.sleep(0.05)
+                # Give the OS a moment to release ports (exponential backoff).
+                time.sleep(0.1 * fill_attempts)
 
     @property
     def _extractor(self) -> AnswerExtractor:

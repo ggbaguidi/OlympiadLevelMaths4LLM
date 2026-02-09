@@ -131,7 +131,7 @@ class AIMO3Config:
     sandbox_reset_between_attempts: bool = True
 
     # Sandbox pool configuration
-    kernel_init_workers: int = 4
+    kernel_init_workers: int = 2
     sandbox_pool_size: int = 8
 
     # Strict extraction mode
