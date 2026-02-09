@@ -15,6 +15,8 @@ class AttemptStats:
     lean_calls: int = 0
     # Count of python tool calls that timed out.
     timeout_count: int = 0
+    # Whether the attempt was cut off by the absolute per-problem deadline.
+    deadline_exceeded: bool = False
 
     # Optional confidence proxy from model logprobs.
     # When enabled, the solver computes a mean per-token entropy (lower is more confident).

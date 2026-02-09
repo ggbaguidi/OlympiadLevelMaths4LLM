@@ -102,6 +102,7 @@ class AIMO3Config:
     # If enabled, request top-k logprobs from vLLM and compute a mean-token entropy
     # to slightly bias ranking toward more confident attempts.
     entropy_weighting_enabled: bool = False
+    magnitude_aware_ranking_enabled: bool = True
     top_logprobs: int = 5
     batch_size: int = 256
     early_stop: int = 3
@@ -260,6 +261,12 @@ class AIMO3Config:
             "false",
             "no",
         }
+        entropy_weighting_enabled = os.getenv(
+            "AIMO3_ENTROPY_WEIGHTING", "0"
+        ).strip().lower() not in {"0", "false", "no"}
+        magnitude_aware_ranking_enabled = os.getenv(
+            "AIMO3_MAGNITUDE_AWARE_RANKING", "1"
+        ).strip().lower() not in {"0", "false", "no"}
 
         # Startup perf knobs
         preload_model_weights = os.getenv(
@@ -399,6 +406,8 @@ class AIMO3Config:
             reuse_existing_server=reuse,
             display_candidates=disp,
             trace_enabled=trace_enabled,
+            entropy_weighting_enabled=entropy_weighting_enabled,
+            magnitude_aware_ranking_enabled=magnitude_aware_ranking_enabled,
             trace_path=trace_path,
             trace_include_problem_text=trace_include_problem_text,
             trace_reset_on_start=trace_reset_on_start,

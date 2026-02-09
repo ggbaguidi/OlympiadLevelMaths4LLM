@@ -14,7 +14,7 @@ import os
 import queue
 import threading
 import time
-from collections import defaultdict, deque
+from collections import defaultdict, deque, Counter
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import as_completed
 from dataclasses import dataclass
@@ -32,33 +32,105 @@ from .template import AIMO3Template, VERIFY_STRATEGIES
 from .tools import AIMO3Tool
 
 
+def _magnitude_bucket(x: int) -> int:
+    """Return magnitude bucket: 0 for 0, else floor(log10(abs(x)))."""
+    if x == 0:
+        return 0
+    return int(math.floor(math.log10(abs(x) + 1)))
+
+
+def _detect_magnitude_outlier(
+    groups: dict,
+) -> tuple[bool, int | None, set[int]]:
+    """Detect if there's a magnitude outlier that might be correct.
+
+    Returns (is_suspicious, dominant_bucket, outlier_answers).
+    """
+    if len(groups) < 3:
+        return False, None, set()
+
+    # Count answers by magnitude bucket
+    bucket_votes: Counter[int] = Counter()
+    bucket_answers: dict[int, list[int]] = {}
+
+    for ans, data in groups.items():
+        bucket = _magnitude_bucket(ans)
+        bucket_votes[bucket] += data["votes"]
+        if bucket not in bucket_answers:
+            bucket_answers[bucket] = []
+        bucket_answers[bucket].append(ans)
+
+    if len(bucket_votes) < 2:
+        return False, None, set()
+
+    # Find dominant bucket (most votes)
+    sorted_buckets = bucket_votes.most_common()
+    dominant_bucket, dominant_votes = sorted_buckets[0]
+
+    # Check for outliers: buckets that are 2+ orders of magnitude higher
+    outlier_answers: set[int] = set()
+    for bucket, answers in bucket_answers.items():
+        if bucket >= dominant_bucket + 2:
+            outlier_answers.update(answers)
+
+    total_votes = sum(bucket_votes.values())
+    if outlier_answers and dominant_votes >= total_votes * 0.5:
+        return True, dominant_bucket, outlier_answers
+
+    return False, dominant_bucket, set()
+
+
 def rank_candidates(
     results: list,
     filter_to_verified_if_any: bool = True,
+    magnitude_aware: bool = True,
 ) -> list:
-    """Rank candidate answers by votes and verification status.
+    """Rank candidate answers by votes, verification status and quality heuristics.
 
-    Returns a list of (answer, info_dict) tuples sorted by quality.
+    Ranking is verified-first: if any candidate has at least one clean tool run,
+    we (optionally) discard candidates with verified==0.
+
+    We also penalize answers derived from attempts that timed out or hit the
+    absolute problem deadline.
     """
     if not results:
         return []
 
     groups: dict = defaultdict(
-        lambda: {"votes": 0, "verified": 0, "entropy_score": 0.0}
+        lambda: {
+            "votes": 0,
+            "verified": 0,
+            "entropy_score": 0.0,
+            "timeout_attempts": 0,
+            "deadline_exceeded_attempts": 0,
+        }
     )
 
     for r in results:
         ans = r.answer if isinstance(r, AttemptResult) else r.get("Answer")
         if ans is None:
             continue
+        # Only integer answers are valid for AIMO feedback
+        if not isinstance(ans, int):
+            continue
+
         g = groups[ans]
         g["votes"] += 1
 
         if isinstance(r, AttemptResult):
             if r.stats.tool_verified:
                 g["verified"] += 1
+            if r.stats.had_timeout:
+                g["timeout_attempts"] += 1
+            if r.stats.deadline_exceeded:
+                g["deadline_exceeded_attempts"] += 1
             ent = r.stats.mean_entropy
         else:
+            # Compatibility with dict-shaped records
+            if r.get("ToolVerified"):
+                g["verified"] += 1
+            if r.get("Timeouts", 0) > 0:
+                g["timeout_attempts"] += 1
             ent = r.get("Entropy", float("inf"))
 
         if ent != float("inf") and ent > 0:
@@ -67,13 +139,37 @@ def rank_candidates(
     if not groups:
         return []
 
+    # Magnitude outlier detection
+    is_suspicious, _dominant_bucket, outlier_answers = _detect_magnitude_outlier(groups)
+
+    should_filter_verified = filter_to_verified_if_any
+    if magnitude_aware and is_suspicious:
+        # If we have outliers, don't filter to verified only, as the verified
+        # small answers might be "easy wrongs".
+        should_filter_verified = False
+
     has_any_verified = any(g["verified"] > 0 for g in groups.values())
-    if filter_to_verified_if_any and has_any_verified:
+    if should_filter_verified and has_any_verified:
         groups = {k: v for k, v in groups.items() if v["verified"] > 0}
+
+    def _sort_key(item):
+        ans, data = item
+        # Magnitude boost: outliers get a verified status boost
+        mag_verified_boost = 1 if (magnitude_aware and ans in outlier_answers) else 0
+        mag_vote_boost = 3 if (magnitude_aware and ans in outlier_answers) else 0
+
+        return (
+            int(data["verified"] > 0) + mag_verified_boost,
+            data["verified"] + mag_verified_boost,
+            data["votes"] + mag_vote_boost,
+            data["entropy_score"],
+            -data["timeout_attempts"],
+            -data["deadline_exceeded_attempts"],
+        )
 
     ranked = sorted(
         groups.items(),
-        key=lambda kv: (kv[1]["verified"], kv[1]["votes"], kv[1]["entropy_score"]),
+        key=_sort_key,
         reverse=True,
     )
     return [(ans, data) for ans, data in ranked]
@@ -247,7 +343,11 @@ class AIMO3Solver:
         stop aggressively to bank time for harder problems.
         """
 
-        ranked_all = rank_candidates(detailed, filter_to_verified_if_any=False)
+        ranked_all = rank_candidates(
+            detailed,
+            filter_to_verified_if_any=False,
+            magnitude_aware=bool(self.cfg.magnitude_aware_ranking_enabled),
+        )
         if not ranked_all:
             return False
 
@@ -288,7 +388,15 @@ class AIMO3Solver:
             return False
         if not ranked:
             return False
-        if time_remaining_s < self.cfg.verify_min_remaining_s:
+
+        # Adaptive threshold: if the base timeout is small (e.g. 360s),
+        # we allow verification to trigger even if we have less than 90s left.
+        # We use the minimum of the configured buffer and 25% of the base timeout.
+        adaptive_min_rem = min(
+            self.cfg.verify_min_remaining_s,
+            self.cfg.base_problem_timeout * 0.25
+        )
+        if time_remaining_s < adaptive_min_rem:
             return False
         # Skip if consensus is already strong.
         top_votes = ranked[0][1].get("votes", 0)
@@ -852,7 +960,7 @@ class AIMO3Solver:
             return AttemptResult(
                 attempt=attempt_index + 1,
                 answer=None,
-                stats=AttemptStats(),
+                stats=AttemptStats(deadline_exceeded=time.time() > deadline),
                 tag=attempt_tag,
             )
 
@@ -867,6 +975,7 @@ class AIMO3Solver:
         logprobs_buffer: list = []
         text_tail: deque = deque(maxlen=int(self.cfg.capture_attempt_text_chars))
         verification_marker_found = False
+        deadline_exceeded = False
 
         attempt_seed = (self.cfg.seed + attempt_index) ** 2
         Conversation = self._h["Conversation"]
@@ -901,7 +1010,10 @@ class AIMO3Solver:
             conversation = Conversation.from_messages(messages)
 
             for _turn in range(self.cfg.turns):
-                if stop_event.is_set() or time.time() > deadline:
+                if stop_event.is_set():
+                    break
+                if time.time() > deadline:
+                    deadline_exceeded = True
                     break
 
                 prompt_ids = self.encoding.render_conversation_for_completion(
@@ -941,7 +1053,10 @@ class AIMO3Solver:
                     text_chunks: list[str] = []
 
                     for chunk in stream:
-                        if stop_event.is_set() or time.time() > deadline:
+                        if stop_event.is_set():
+                            break
+                        if time.time() > deadline:
+                            deadline_exceeded = True
                             break
 
                         choice = chunk.choices[0]
@@ -1076,6 +1191,7 @@ class AIMO3Solver:
                     and self.cfg.require_verification_marker
                     else None
                 ),
+                deadline_exceeded=deadline_exceeded,
             ),
             output_text=output_text,
             tag=attempt_tag,
@@ -1229,13 +1345,19 @@ class AIMO3Solver:
         self._display_candidates(detailed_results)
 
         # Select answer via ranking.
-        ranked = rank_candidates(detailed_results, filter_to_verified_if_any=True)
+        ranked = rank_candidates(
+            detailed_results,
+            filter_to_verified_if_any=True,
+            magnitude_aware=bool(self.cfg.magnitude_aware_ranking_enabled),
+        )
 
         # --- Answer-conditional verification phase ---
         # Use the UNFILTERED ranking so that all strong candidates (including
         # those without tool-verification) get a fair shot at being checked.
         ranked_for_verify = rank_candidates(
-            detailed_results, filter_to_verified_if_any=False
+            detailed_results,
+            filter_to_verified_if_any=False,
+            magnitude_aware=bool(self.cfg.magnitude_aware_ranking_enabled),
         )
         time_remaining_for_verify = (
             self._budget_tracker.time_remaining_s - time_used
