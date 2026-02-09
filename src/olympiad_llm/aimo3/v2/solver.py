@@ -469,6 +469,10 @@ class AIMO3Solver:
                 if alt is not None and alt != candidate_answer:
                     result["alt_answer"] = alt
 
+            # Log full output for UNKNOWN verdicts to debug prompt compliance.
+            if result["verdict"] == "UNKNOWN":
+                print(f"  [Verify UNKNOWN] Candidate {candidate_answer} — full output:\n{full_text}...")
+
         except Exception:  # noqa: BLE001
             pass  # Verification attempt failed — verdict stays UNKNOWN.
 

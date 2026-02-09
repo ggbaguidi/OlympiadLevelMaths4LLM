@@ -164,7 +164,7 @@ class AIMO3Config:
     # Max completion tokens per verification attempt (short & focused).
     verify_max_tokens: int = 16384
     # Number of parallel verification attempts per candidate answer.
-    verify_attempts_per_candidate: int = 3
+    verify_attempts_per_candidate: int = 5
     # How many of the top-ranked distinct candidates to verify.
     verify_top_k_candidates: int = 3
     # Only trigger verification when the top answer has fewer than this many votes.
@@ -174,7 +174,7 @@ class AIMO3Config:
     # If the budget is tighter than this, skip.
     verify_min_remaining_s: float = 90.0
     # Temperature for verification attempts (lower = more deterministic checks).
-    verify_temperature: float = 0.6
+    verify_temperature: float = 0.3
 
     # Hardware requirements
     # vLLM (as used in Kaggle) typically requires an NVIDIA GPU with a working driver.

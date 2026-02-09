@@ -50,8 +50,22 @@ VERIFY_ALTERNATIVE = (
     "IMPORTANT: You MUST call print() with the VERDICT line — this is required."
 )
 
+VERIFY_COUNTEREXAMPLE = (
+    "A proposed answer to the following problem is {answer}.\n\n"
+    "Problem: {problem}\n\n"
+    "Your task: TRY TO FIND A COUNTEREXAMPLE that shows the proposed answer is wrong. "
+    "Use Python to test specific cases, edge cases, or construct a contradiction. "
+    "If you find a counterexample, the answer is incorrect. "
+    "If you cannot find a counterexample after thorough testing, the answer is likely correct. "
+    "After your analysis, you MUST print your conclusion as a Python print statement:\n"
+    '  print("VERDICT: CORRECT")\n'
+    '  print("VERDICT: INCORRECT")\n'
+    "If incorrect, also print the correct answer inside \\boxed{{}}.\n"
+    "IMPORTANT: You MUST call print() with the VERDICT line — this is required."
+)
+
 # Ordered list — we rotate through them for each candidate's verification attempts.
-VERIFY_STRATEGIES = [VERIFY_SUBSTITUTION, VERIFY_SMALL_CASES, VERIFY_ALTERNATIVE]
+VERIFY_STRATEGIES = [VERIFY_SUBSTITUTION, VERIFY_SMALL_CASES, VERIFY_ALTERNATIVE, VERIFY_COUNTEREXAMPLE]
 
 
 class AIMO3Template:
