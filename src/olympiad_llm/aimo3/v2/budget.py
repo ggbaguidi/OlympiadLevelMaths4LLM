@@ -14,7 +14,8 @@ from easy problems that solved quickly.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
+import os
 
 
 @dataclass
@@ -51,6 +52,19 @@ class TimeBudgetTracker:
     solve_times: List[float] = field(default_factory=list, init=False)
     flex_pool_used_s: float = field(default=0.0, init=False)
     extensions_granted: int = field(default=0, init=False)
+    # Strategy controls: can be set via env vars. Options:
+    # - 'equal': use equal share of remaining time
+    # - 'base': use configured base_timeout_s for every problem
+    # - 'avg': use rolling average
+    # - 'cumulative': add carryover from previous problems
+    # - 'hybrid': take max(equal, avg, base) (default behavior)
+    budget_strategy: str = field(default="hybrid")
+
+    # Carryover pool: accumulates leftover time from problems solved under budget
+    carryover_pool_s: float = field(default=0.0, init=False)
+    # Whether to distribute carryover across remaining problems (True) or
+    # apply to the next single problem only (False)
+    cumulative_distribute: bool = field(default=True)
 
     @property
     def problems_remaining(self) -> int:
@@ -77,6 +91,33 @@ class TimeBudgetTracker:
         """Remaining flex pool time."""
         return max(0.0, self.flex_pool_total_s - self.flex_pool_used_s)
 
+    def __post_init__(self) -> None:
+        # Read optional environment overrides
+        strat = os.getenv("AIMO3_BUDGET_STRATEGY")
+        if strat:
+            self.budget_strategy = strat.lower()
+
+        base_env = os.getenv("AIMO3_BASE_TIMEOUT_S")
+        if base_env:
+            try:
+                self.base_timeout_s = float(base_env)
+            except Exception:
+                pass
+
+        carry_env = os.getenv("AIMO3_CARRYOVER_ENABLED")
+        if carry_env is not None:
+            # treat any non-empty value other than '0'/'false' as enabled
+            self.carryover_pool_s = 0.0
+            if carry_env.lower() in ("0", "false", "no"):
+                self.cumulative_distribute = False
+
+        dist_env = os.getenv("AIMO3_CUMULATIVE_DISTRIBUTE")
+        if dist_env is not None:
+            if dist_env.lower() in ("0", "false", "no"):
+                self.cumulative_distribute = False
+            else:
+                self.cumulative_distribute = True
+
     def compute_budget(self) -> float:
         """Compute the budget for the next problem.
 
@@ -95,13 +136,43 @@ class TimeBudgetTracker:
         flex_reserve = min(self.flex_pool_remaining_s, remaining)
         available = max(0.0, remaining - flex_reserve)
 
-        # 3. Divide evenly among remaining problems.
-        equal_share = available / self.problems_remaining
+        # 3. Divide evenly among remaining problems (excluding any carryover
+        # amount which we'll treat separately when using cumulative mode).
+        # Subtract current carryover from available so it won't be double-counted.
+        carry = max(0.0, self.carryover_pool_s)
+        available_excl_carry = max(0.0, available - carry)
+        equal_share = available_excl_carry / self.problems_remaining
 
-        # 4. Make budget at least the maximum of the rolling average and the
-        # configured base timeout. This ensures we allocate at least what we've
-        # been spending on average or the base expectation for a single problem.
-        budget = max(equal_share, self.avg_solve_time_s, self.base_timeout_s)
+        # 4. Strategy selection
+        strat = (self.budget_strategy or "hybrid").lower()
+        budget = equal_share
+
+        if strat == "equal":
+            budget = equal_share
+        elif strat == "base":
+            budget = self.base_timeout_s
+        elif strat == "avg":
+            budget = self.avg_solve_time_s
+        elif strat == "cumulative":
+            # Distribute carryover across remaining problems (or apply all to
+            # next problem if distribution disabled).
+            if carry <= 0.0:
+                additional = 0.0
+            elif self.cumulative_distribute:
+                additional = carry / self.problems_remaining
+            else:
+                additional = carry
+
+            # Use at least the equal share or base, then add the carryover
+            budget = max(equal_share, self.base_timeout_s) + additional
+            # Reserve the portion of carry that we're allocating now so it's
+            # not repeatedly applied. We subtract the portion we intend to
+            # allocate immediately.
+            reserved = min(additional, self.carryover_pool_s)
+            self.carryover_pool_s = max(0.0, self.carryover_pool_s - reserved)
+        else:
+            # hybrid: be conservative and use max of equal, avg and base
+            budget = max(equal_share, self.avg_solve_time_s, self.base_timeout_s)
 
         # 5. Apply bounds.
         budget = max(self.min_budget_s, budget)
@@ -145,14 +216,29 @@ class TimeBudgetTracker:
         self.extensions_granted += 1
         return extension
 
-    def record_solve(self, time_used_s: float) -> None:
-        """Record completion of a problem."""
+    
+
+    def record_solve(self, time_used_s: float, allocated_budget_s: Optional[float] = None) -> None:  # type: ignore[override]
+        """Record completion of a problem.
+
+        If `allocated_budget_s` is provided and the problem used less than the
+        allocated amount, the leftover is added to the carryover pool so it
+        can be used (or distributed) to future problems when using the
+        cumulative strategy.
+        """
+        # base bookkeeping
         self.problems_solved += 1
         self.total_time_used_s += time_used_s
         self.solve_times.append(time_used_s)
         # Keep rolling window of last 10 for average
         if len(self.solve_times) > 10:
             self.solve_times.pop(0)
+
+        # accumulate leftover into carryover pool
+        if allocated_budget_s is not None:
+            leftover = max(0.0, allocated_budget_s - time_used_s)
+            if leftover > 0.0:
+                self.carryover_pool_s += leftover
 
     def status_summary(self) -> str:
         """Return a short status string for logging."""
