@@ -153,6 +153,29 @@ class AIMO3Config:
     top_p: float = 1.0  # Nucleus sampling (1.0 = disabled)
     top_k: int = -1  # Top-k sampling (-1 = disabled)
 
+    # ---------- Answer-conditional verification phase ----------
+    # After the generation phase, stress-test the top candidate answers by
+    # running short, focused verification attempts (substitution, counterexample,
+    # alternative-method checks).  This catches "wrong but popular" answers on
+    # hard problems without materially increasing wall-clock time.
+    verify_phase_enabled: bool = True
+    # Max wall-clock seconds for the entire verification phase.
+    verify_timeout_s: float = 60.0
+    # Max completion tokens per verification attempt (short & focused).
+    verify_max_tokens: int = 16384
+    # Number of parallel verification attempts per candidate answer.
+    verify_attempts_per_candidate: int = 3
+    # How many of the top-ranked distinct candidates to verify.
+    verify_top_k_candidates: int = 2
+    # Only trigger verification when the top answer has fewer than this many votes.
+    # If consensus is already strong, skip verification to save time.
+    verify_trigger_max_votes: int = 4
+    # Minimum remaining time (seconds) to even attempt verification.
+    # If the budget is tighter than this, skip.
+    verify_min_remaining_s: float = 90.0
+    # Temperature for verification attempts (lower = more deterministic checks).
+    verify_temperature: float = 0.6
+
     # Hardware requirements
     # vLLM (as used in Kaggle) typically requires an NVIDIA GPU with a working driver.
     # If True and no CUDA driver/GPU is detected, we fail fast with a helpful error.
@@ -274,6 +297,33 @@ class AIMO3Config:
             "AIMO3_EASY_EXIT_MIN_VERIFIED", AIMO3Config.easy_exit_min_verified
         )
 
+        # Verification phase tuning
+        verify_phase_enabled = os.getenv(
+            "AIMO3_VERIFY_PHASE_ENABLED", "1"
+        ).strip().lower() not in {"0", "false", "no"}
+        verify_timeout_s = _env_float(
+            "AIMO3_VERIFY_TIMEOUT", AIMO3Config.verify_timeout_s
+        )
+        verify_max_tokens = _env_int(
+            "AIMO3_VERIFY_MAX_TOKENS", AIMO3Config.verify_max_tokens
+        )
+        verify_attempts_per_candidate = _env_int(
+            "AIMO3_VERIFY_ATTEMPTS_PER_CANDIDATE",
+            AIMO3Config.verify_attempts_per_candidate,
+        )
+        verify_top_k_candidates = _env_int(
+            "AIMO3_VERIFY_TOP_K_CANDIDATES", AIMO3Config.verify_top_k_candidates
+        )
+        verify_trigger_max_votes = _env_int(
+            "AIMO3_VERIFY_TRIGGER_MAX_VOTES", AIMO3Config.verify_trigger_max_votes
+        )
+        verify_min_remaining_s = _env_float(
+            "AIMO3_VERIFY_MIN_REMAINING", AIMO3Config.verify_min_remaining_s
+        )
+        verify_temperature = _env_float(
+            "AIMO3_VERIFY_TEMPERATURE", AIMO3Config.verify_temperature
+        )
+
         # Adaptive budget tuning
         adaptive_budget_flex_pool_fraction = _env_float(
             "AIMO3_ADAPTIVE_BUDGET_FLEX_POOL_FRACTION",
@@ -386,4 +436,12 @@ class AIMO3Config:
             min_tokens_before_stream_extraction=min_tokens_before_stream_extraction,
             strict_fallback_extraction=strict_fallback_extraction,
             require_verification_marker=require_verification_marker,
+            verify_phase_enabled=verify_phase_enabled,
+            verify_timeout_s=verify_timeout_s,
+            verify_max_tokens=verify_max_tokens,
+            verify_attempts_per_candidate=verify_attempts_per_candidate,
+            verify_top_k_candidates=verify_top_k_candidates,
+            verify_trigger_max_votes=verify_trigger_max_votes,
+            verify_min_remaining_s=verify_min_remaining_s,
+            verify_temperature=verify_temperature,
         )

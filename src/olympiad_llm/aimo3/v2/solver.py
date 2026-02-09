@@ -28,7 +28,7 @@ from .sandbox import AIMO3Sandbox
 from .trace import TraceRecorder, stable_problem_id
 from .vllm_server import VLLMServer
 from .require import _require_harmony, _require_openai
-from .template import AIMO3Template
+from .template import AIMO3Template, VERIFY_STRATEGIES
 from .tools import AIMO3Tool
 
 
@@ -273,6 +273,315 @@ class AIMO3Solver:
         if need <= 0:
             return True
         return verified >= need
+
+    # ------------------------------------------------------------------
+    # Answer-conditional verification phase
+    # ------------------------------------------------------------------
+
+    def _should_run_verification(
+        self,
+        ranked: list,
+        time_remaining_s: float,
+    ) -> bool:
+        """Decide whether the verification phase should trigger."""
+        if not self.cfg.verify_phase_enabled:
+            return False
+        if not ranked:
+            return False
+        if time_remaining_s < self.cfg.verify_min_remaining_s:
+            return False
+        # Skip if consensus is already strong.
+        top_votes = ranked[0][1].get("votes", 0)
+        if top_votes > self.cfg.verify_trigger_max_votes:
+            return False
+        return True
+
+    def _run_verify_attempt(
+        self,
+        problem: str,
+        candidate_answer: int,
+        strategy_template: str,
+        attempt_seed: int,
+        deadline: float,
+    ) -> dict:
+        """Run a single short verification attempt.
+
+        Returns a dict with keys:
+          - candidate: the answer being verified
+          - verdict: "CORRECT" | "INCORRECT" | "UNKNOWN"
+          - alt_answer: int | None  (if the verifier found a different answer)
+        """
+        result = {
+            "candidate": candidate_answer,
+            "verdict": "UNKNOWN",
+            "alt_answer": None,
+        }
+
+        if time.time() > deadline:
+            return result
+
+        sandbox = None
+        try:
+            sandbox = self.sandbox_pool.get(timeout=self.cfg.sandbox_timeout)
+
+            local_tool = AIMO3Tool(
+                local_jupyter_timeout=self.cfg.jupyter_timeout,
+                tool_prompt=self.cfg.tool_prompt,
+                sandbox=sandbox,
+            )
+
+            # Build the verification prompt.
+            verify_user_text = strategy_template.format(
+                answer=candidate_answer,
+                problem=problem,
+            )
+            verify_dev_prompt = (
+                "You are a world-class mathematical verifier. "
+                "Your ONLY job is to check whether the proposed answer is correct. "
+                "Use Python to compute — do NOT just reason about it. "
+                "Be concise. The final answer must be a non-negative integer between 0 and 99999."
+            )
+
+            messages = self.template.apply_chat_template(
+                verify_dev_prompt, verify_user_text, local_tool.tool_config
+            )
+
+            Conversation = self._h["Conversation"]
+            conversation = Conversation.from_messages(messages)
+
+            text_parts: list[str] = []
+
+            for _turn in range(32):  # Cap turns for verification.
+                if time.time() > deadline:
+                    break
+
+                prompt_ids = self.encoding.render_conversation_for_completion(
+                    conversation, self.Role
+                )
+                max_tokens = min(
+                    self.cfg.verify_max_tokens,
+                    self.cfg.context_tokens - len(prompt_ids),
+                )
+                if max_tokens < self.cfg.buffer_tokens:
+                    break
+
+                extra = {
+                    "min_p": self.cfg.min_p,
+                    "stop_token_ids": self.stop_token_ids,
+                    "return_token_ids": True,
+                }
+
+                stream = self.client.completions.create(
+                    model=self.cfg.served_model_name,
+                    temperature=self.cfg.verify_temperature,
+                    top_p=self.cfg.top_p,
+                    max_tokens=max_tokens,
+                    prompt=prompt_ids,
+                    seed=attempt_seed,
+                    stream=True,
+                    extra_body=extra,
+                )
+
+                try:
+                    token_buffer: list = []
+                    for chunk in stream:
+                        if time.time() > deadline:
+                            break
+                        choice = chunk.choices[0]
+                        new_tokens = choice.token_ids
+                        new_text = choice.text
+                        if new_tokens:
+                            token_buffer.extend(new_tokens)
+                            text_parts.append(new_text)
+                finally:
+                    stream.close()
+
+                if not token_buffer:
+                    break
+
+                new_messages = (
+                    self.encoding.parse_messages_from_completion_tokens(
+                        token_buffer, self.Role
+                    )
+                )
+                if not new_messages:
+                    break
+
+                conversation.messages = conversation.messages + list(new_messages)
+                last_message = new_messages[-1]
+
+                # Handle tool calls during verification.
+                if last_message.recipient == "python":
+                    tool_responses = local_tool.process_sync_plus(last_message)
+                    conversation.messages = conversation.messages + list(tool_responses)
+                    continue
+
+                # If it's a "final" channel or no more tool calls, we're done.
+                break
+
+            # Parse the verification verdict from accumulated text.
+            full_text = "".join(text_parts)
+            upper = full_text.upper()
+
+            if "VERDICT: CORRECT" in upper:
+                result["verdict"] = "CORRECT"
+            elif "VERDICT: INCORRECT" in upper:
+                result["verdict"] = "INCORRECT"
+                # Try to extract an alternative answer.
+                alt = self._extractor.extract_boxed_int(full_text)
+                if alt is not None and alt != candidate_answer:
+                    result["alt_answer"] = alt
+
+        except Exception:  # noqa: BLE001
+            pass  # Verification attempt failed — verdict stays UNKNOWN.
+
+        finally:
+            if sandbox is not None:
+                with contextlib.suppress(Exception):
+                    sandbox.reset()
+                with contextlib.suppress(Exception):
+                    self.sandbox_pool.put(sandbox)
+
+        return result
+
+    def _verify_candidates(
+        self,
+        problem: str,
+        ranked: list,
+        deadline: float,
+    ) -> list:
+        """Run the answer-conditional verification phase.
+
+        Takes the top-K ranked candidates, runs short parallel verification
+        attempts for each, and returns a re-ranked list of (answer, info_dict)
+        tuples.  The info_dict is augmented with 'verify_correct' / 'verify_incorrect'
+        counts.
+
+        If verification proves one candidate and disproves others, the proven
+        candidate is promoted regardless of original vote count.
+        """
+        top_k = min(self.cfg.verify_top_k_candidates, len(ranked))
+        candidates_to_check = ranked[:top_k]
+        per_candidate = self.cfg.verify_attempts_per_candidate
+        n_strategies = len(VERIFY_STRATEGIES)
+
+        # Build all verification tasks.
+        verify_tasks = []
+        for cand_idx, (answer, _data) in enumerate(candidates_to_check):
+            for v_idx in range(per_candidate):
+                strategy = VERIFY_STRATEGIES[(cand_idx * per_candidate + v_idx) % n_strategies]
+                seed = (self.cfg.seed + 1000 + cand_idx * 100 + v_idx) ** 2
+                verify_tasks.append((answer, strategy, seed))
+
+        # Run all verification attempts in parallel.
+        verify_results: list[dict] = []
+        executor = ThreadPoolExecutor(
+            max_workers=min(len(verify_tasks), self.cfg.workers)
+        )
+        try:
+            futures = []
+            for answer, strategy, seed in verify_tasks:
+                f = executor.submit(
+                    self._run_verify_attempt,
+                    problem,
+                    answer,
+                    strategy,
+                    seed,
+                    deadline,
+                )
+                futures.append(f)
+
+            for future in as_completed(futures):
+                try:
+                    verify_results.append(future.result())
+                except Exception:  # noqa: BLE001
+                    continue
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
+
+        # Aggregate verdicts per candidate.
+        verify_scores: dict[int, dict] = defaultdict(
+            lambda: {"correct": 0, "incorrect": 0, "unknown": 0, "alt_answers": []}
+        )
+        for vr in verify_results:
+            cand = vr["candidate"]
+            v = vr["verdict"]
+            if v == "CORRECT":
+                verify_scores[cand]["correct"] += 1
+            elif v == "INCORRECT":
+                verify_scores[cand]["incorrect"] += 1
+                if vr["alt_answer"] is not None:
+                    verify_scores[cand]["alt_answers"].append(vr["alt_answer"])
+            else:
+                verify_scores[cand]["unknown"] += 1
+
+        # Log verification results.
+        for cand, scores in verify_scores.items():
+            print(
+                f"  [Verify] Candidate {cand}: "
+                f"correct={scores['correct']}, "
+                f"incorrect={scores['incorrect']}, "
+                f"unknown={scores['unknown']}"
+            )
+
+        # Re-rank: augment the original ranking data with verification info
+        # and re-sort.  Verification results are weighted heavily.
+        augmented = []
+        for answer, data in ranked:
+            vs = verify_scores.get(answer)
+            if vs:
+                data = dict(data)  # Copy to avoid mutating the original.
+                data["verify_correct"] = vs["correct"]
+                data["verify_incorrect"] = vs["incorrect"]
+            else:
+                data = dict(data)
+                data["verify_correct"] = 0
+                data["verify_incorrect"] = 0
+            augmented.append((answer, data))
+
+        # Sort: net verification score first, then verified votes, then raw votes.
+        augmented.sort(
+            key=lambda kv: (
+                kv[1].get("verify_correct", 0) - kv[1].get("verify_incorrect", 0),
+                kv[1]["verified"],
+                kv[1]["votes"],
+            ),
+            reverse=True,
+        )
+
+        # Check if any alternative answer emerged consistently from verifiers.
+        # If multiple verifiers independently proposed the same alt answer and
+        # it wasn't already in our candidate set, inject it.
+        all_alt_answers: list[int] = []
+        for vs in verify_scores.values():
+            all_alt_answers.extend(vs["alt_answers"])
+        if all_alt_answers:
+            from collections import Counter as _Counter
+
+            alt_counts = _Counter(all_alt_answers)
+            best_alt, best_alt_count = alt_counts.most_common(1)[0]
+            existing_answers = {a for a, _ in augmented}
+            # Need at least 2 independent verifiers to propose the same alt.
+            if best_alt not in existing_answers and best_alt_count >= 2:
+                print(
+                    f"  [Verify] Injecting alt answer {best_alt} "
+                    f"(proposed by {best_alt_count} verifiers)"
+                )
+                augmented.insert(
+                    0,
+                    (
+                        best_alt,
+                        {
+                            "votes": best_alt_count,
+                            "verified": best_alt_count,
+                            "verify_correct": best_alt_count,
+                            "verify_incorrect": 0,
+                            "entropy_score": 0.0,
+                        },
+                    ),
+                )
+
+        return augmented
 
     @staticmethod
     def _probe_server_ready(client, attempts: int, sleep_s: float = 0.5) -> bool:
@@ -881,12 +1190,36 @@ class AIMO3Solver:
         # Select answer via ranking.
         ranked = rank_candidates(detailed_results, filter_to_verified_if_any=True)
 
+        # --- Answer-conditional verification phase ---
+        # If consensus is weak, stress-test the top candidates to catch
+        # "wrong but popular" answers.
+        time_remaining_for_verify = (
+            self._budget_tracker.time_remaining_s - time_used
+        )
+        if self._should_run_verification(ranked, time_remaining_for_verify):
+            verify_deadline = time.time() + min(
+                self.cfg.verify_timeout_s, time_remaining_for_verify * 0.8
+            )
+            print("[Verify] Weak consensus — running verification phase...")
+            ranked = self._verify_candidates(
+                problem, ranked, verify_deadline
+            )
+            # Update time_used to include verification.
+            time_used = time.time() - problem_start
+
         if ranked:
             final_answer = ranked[0][0]
             data = ranked[0][1]
+            verify_info = ""
+            if "verify_correct" in data:
+                verify_info = (
+                    f", verify_ok={data['verify_correct']}"
+                    f", verify_fail={data['verify_incorrect']}"
+                )
             print(
                 f"\nFinal Answer: {final_answer} "
-                f"(votes={data['votes']}, verified={data['verified']})\n"
+                f"(votes={data['votes']}, verified={data['verified']}"
+                f"{verify_info})\n"
             )
         else:
             final_answer = 0
@@ -908,6 +1241,8 @@ class AIMO3Solver:
                         "answer": a,
                         "votes": d["votes"],
                         "verified": d["verified"],
+                        "verify_correct": d.get("verify_correct"),
+                        "verify_incorrect": d.get("verify_incorrect"),
                     }
                     for a, d in ranked[:5]
                 ]

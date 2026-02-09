@@ -5,6 +5,52 @@ import contextlib
 from .require import _require_harmony
 
 
+# ---------------------------------------------------------------------------
+# Verification prompt strategies
+# ---------------------------------------------------------------------------
+# Each strategy is a short, focused prompt that tells the model to check
+# a candidate answer via a specific method.  The model gets tool access
+# (Python sandbox) so it can compute.
+
+VERIFY_SUBSTITUTION = (
+    "A proposed answer to the following problem is {answer}.\n\n"
+    "Problem: {problem}\n\n"
+    "Your task: VERIFY this answer by substituting it back into the problem conditions. "
+    "Use Python to compute every step explicitly. "
+    "At the end, print ONLY one of:\n"
+    "  VERDICT: CORRECT\n"
+    "  VERDICT: INCORRECT\n"
+    "If you find it incorrect, also print the correct answer inside \\boxed{{}}."
+)
+
+VERIFY_SMALL_CASES = (
+    "A proposed answer to the following problem is {answer}.\n\n"
+    "Problem: {problem}\n\n"
+    "Your task: CHECK this answer by computing small cases and boundary cases in Python. "
+    "Build the answer from scratch using brute-force enumeration or exhaustive search on "
+    "small instances, then compare with the proposed answer. "
+    "At the end, print ONLY one of:\n"
+    "  VERDICT: CORRECT\n"
+    "  VERDICT: INCORRECT\n"
+    "If you find it incorrect, also print the correct answer inside \\boxed{{}}."
+)
+
+VERIFY_ALTERNATIVE = (
+    "A proposed answer to the following problem is {answer}.\n\n"
+    "Problem: {problem}\n\n"
+    "Your task: SOLVE this problem from scratch using a COMPLETELY DIFFERENT method "
+    "than you would normally use. Use Python to compute. "
+    "Compare your independent result with the proposed answer. "
+    "At the end, print ONLY one of:\n"
+    "  VERDICT: CORRECT\n"
+    "  VERDICT: INCORRECT\n"
+    "If you find it incorrect, also print the correct answer inside \\boxed{{}}."
+)
+
+# Ordered list — we rotate through them for each candidate's verification attempts.
+VERIFY_STRATEGIES = [VERIFY_SUBSTITUTION, VERIFY_SMALL_CASES, VERIFY_ALTERNATIVE]
+
+
 class AIMO3Template:
     """AIMO-3 prompt template management with lazy Harmony imports."""
 
