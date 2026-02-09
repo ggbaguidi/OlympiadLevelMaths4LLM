@@ -131,8 +131,6 @@ class AnswerExtractor:
         if not contents:
             return None
 
-        toks = []
-
         for raw_content in reversed(contents):
             cleaned = _clean_box_content(raw_content)
 
@@ -153,10 +151,10 @@ class AnswerExtractor:
                 continue
             # Prefer the longest token (e.g., avoid picking the trailing "5" in "10^{5}").
             toks_sorted = sorted(
-                toks,
-                key=lambda s: (len(s.replace(",", "").lstrip("+-")), toks.index(s)),
+                enumerate(toks),
+                key=lambda item: (len(item[1].replace(",", "").lstrip("+-")), item[0]),
             )
-            cand = toks_sorted[-1]
+            cand = toks_sorted[-1][1]
             cand2 = cand.replace(",", "")
             try:
                 val = int(cand2)
