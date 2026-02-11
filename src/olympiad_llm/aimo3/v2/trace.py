@@ -28,6 +28,7 @@ def stable_problem_id(problem_text: str) -> str:
 @dataclass
 class TraceRecorder:
     """Utility for recording structured events during problem-solving runs."""
+
     enabled: bool
     path: str
     include_problem_text: bool = False

@@ -48,6 +48,10 @@ class AIMO3Config:
     trace_path: str = "aimo3_trace.jsonl"
     # If True, include the full problem text in the trace. Off by default to avoid leakage.
     trace_include_problem_text: bool = False
+    # If enabled, record per-attempt transcripts (including python tool call code/output).
+    trace_attempts_enabled: bool = False
+    # Hard cap on total characters stored per attempt transcript payload.
+    trace_attempts_max_chars: int = 20000
 
     # If True, delete (reset) the trace file at solver startup.
     # Useful in notebooks where you want a fresh trace on each kernel restart.
@@ -257,6 +261,12 @@ class AIMO3Config:
             "false",
             "no",
         }
+        trace_attempts_enabled = os.getenv(
+            "AIMO3_TRACE_ATTEMPTS", "0"
+        ).strip().lower() not in {"0", "false", "no"}
+        trace_attempts_max_chars = _env_int(
+            "AIMO3_TRACE_ATTEMPTS_MAX_CHARS", AIMO3Config.trace_attempts_max_chars
+        )
         trace_env_packages = (
             os.getenv("AIMO3_TRACE_ENV_PACKAGES", AIMO3Config.trace_env_packages) or ""
         ).strip() or AIMO3Config.trace_env_packages
@@ -421,6 +431,8 @@ class AIMO3Config:
             magnitude_aware_ranking_enabled=magnitude_aware_ranking_enabled,
             trace_path=trace_path,
             trace_include_problem_text=trace_include_problem_text,
+            trace_attempts_enabled=trace_attempts_enabled,
+            trace_attempts_max_chars=trace_attempts_max_chars,
             trace_reset_on_start=trace_reset_on_start,
             trace_env_enabled=trace_env_enabled,
             trace_env_packages=trace_env_packages,

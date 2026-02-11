@@ -411,6 +411,7 @@ class AIMO3Solver:
         strategy_template: str,
         attempt_seed: int,
         deadline: float,
+        problem_id: str | None = None,
     ) -> dict:
         """Run a single short verification attempt.
 
@@ -429,6 +430,8 @@ class AIMO3Solver:
             return result
 
         sandbox = None
+        transcript_python_calls: list[str] = []
+        transcript_python_outputs: list[str] = []
         try:
             sandbox = self.sandbox_pool.get(timeout=self.cfg.sandbox_timeout)
 
@@ -518,7 +521,15 @@ class AIMO3Solver:
 
                 # Handle tool calls during verification.
                 if last_message.recipient == "python":
+                    with contextlib.suppress(Exception):
+                        transcript_python_calls.append(
+                            str(last_message.content[0].text or "")
+                        )
                     tool_responses = local_tool.process_sync_plus(last_message)
+                    with contextlib.suppress(Exception):
+                        transcript_python_outputs.append(
+                            str(tool_responses[0].content[0].text or "")
+                        )
                     conversation.messages = conversation.messages + list(tool_responses)
                     continue
 
@@ -581,6 +592,48 @@ class AIMO3Solver:
                     f"  [Verify UNKNOWN] Candidate {candidate_answer} — full output:\n{full_text}..."
                 )
 
+            if bool(getattr(self.cfg, "trace_attempts_enabled", False)) and bool(
+                getattr(self.cfg, "trace_enabled", False)
+            ):
+                max_chars = int(getattr(self.cfg, "trace_attempts_max_chars", 0) or 0)
+
+                def _cap_list(
+                    items: list[str], per_item_chars: int = 4000, max_items: int = 20
+                ) -> list[str]:
+                    per_item_chars = max(0, int(per_item_chars))
+                    max_items = max(0, int(max_items))
+                    if max_items and len(items) > max_items:
+                        items = items[-max_items:]
+                    if per_item_chars > 0:
+                        return [self._truncate(s, per_item_chars) for s in items]
+                    return items
+
+                payload = {
+                    "event": "verify_attempt_end",
+                    "problem_id": problem_id,
+                    "candidate_answer": int(candidate_answer),
+                    "attempt_seed": int(attempt_seed),
+                    "verdict": result["verdict"],
+                    "alt_answer": result["alt_answer"],
+                    "python_calls": len(transcript_python_calls),
+                    "python_calls_text": _cap_list(transcript_python_calls),
+                    "python_outputs_text": _cap_list(transcript_python_outputs),
+                    "verify_output_text": (
+                        self._truncate(full_text, max_chars)
+                        if max_chars > 0
+                        else full_text
+                    ),
+                }
+                if not payload.get("python_calls_text"):
+                    payload.pop("python_calls_text", None)
+                if not payload.get("python_outputs_text"):
+                    payload.pop("python_outputs_text", None)
+                if not payload.get("verify_output_text"):
+                    payload.pop("verify_output_text", None)
+
+                with contextlib.suppress(Exception):
+                    self._trace.record(payload)
+
         except Exception:  # noqa: BLE001
             pass  # Verification attempt failed — verdict stays UNKNOWN.
 
@@ -598,6 +651,7 @@ class AIMO3Solver:
         problem: str,
         ranked: list,
         deadline: float,
+        problem_id: str | None = None,
     ) -> list:
         """Run the answer-conditional verification phase.
 
@@ -639,6 +693,7 @@ class AIMO3Solver:
                     strategy,
                     seed,
                     deadline,
+                    problem_id,
                 )
                 futures.append(f)
 
@@ -909,9 +964,7 @@ class AIMO3Solver:
     def _extractor(self) -> AnswerExtractor:
         return self._cached_extractor
 
-    def _build_attempt_prompt(
-        self, attempt_index: int
-    ) -> tuple[str, str | None]:
+    def _build_attempt_prompt(self, attempt_index: int) -> tuple[str, str | None]:
         """Build attempt-level developer prompt with optional strategy card."""
 
         developer_prompt = self.cfg.system_prompt
@@ -963,6 +1016,7 @@ class AIMO3Solver:
         attempt_tag: str | None,
         stop_event: threading.Event,
         deadline: float,
+        problem_id: str | None = None,
         continuation_context: str | None = None,
     ) -> AttemptResult:
         """Run a single solver attempt with streaming completions and tool execution.
@@ -992,6 +1046,8 @@ class AIMO3Solver:
         final_answer = None
         logprobs_buffer: list = []
         text_tail: deque = deque(maxlen=int(self.cfg.capture_attempt_text_chars))
+        transcript_python_calls: list[str] = []
+        transcript_python_outputs: list[str] = []
         verification_marker_found = False
         deadline_exceeded = False
 
@@ -1132,8 +1188,14 @@ class AIMO3Solver:
 
                 if last_message.recipient == "python":
                     python_calls += 1
+                    with contextlib.suppress(Exception):
+                        transcript_python_calls.append(
+                            str(last_message.content[0].text or "")
+                        )
                     tool_responses = local_tool.process_sync_plus(last_message)
                     response_text = tool_responses[0].content[0].text
+                    with contextlib.suppress(Exception):
+                        transcript_python_outputs.append(str(response_text or ""))
 
                     if (
                         response_text.startswith("[ERROR]")
@@ -1180,7 +1242,7 @@ class AIMO3Solver:
         mean_entropy = self._compute_mean_entropy(logprobs_buffer)
         output_text = "".join(text_tail)
 
-        return AttemptResult(
+        result = AttemptResult(
             attempt=attempt_index + 1,
             answer=final_answer,
             stats=AttemptStats(
@@ -1201,6 +1263,61 @@ class AIMO3Solver:
             output_text=output_text,
             tag=attempt_tag,
         )
+
+        if bool(getattr(self.cfg, "trace_attempts_enabled", False)) and bool(
+            getattr(self.cfg, "trace_enabled", False)
+        ):
+            max_chars = int(getattr(self.cfg, "trace_attempts_max_chars", 0) or 0)
+
+            def _cap_list(
+                items: list[str], per_item_chars: int = 4000, max_items: int = 20
+            ) -> list[str]:
+                per_item_chars = max(0, int(per_item_chars))
+                max_items = max(0, int(max_items))
+                if max_items and len(items) > max_items:
+                    items = items[-max_items:]
+                if per_item_chars > 0:
+                    return [self._truncate(s, per_item_chars) for s in items]
+                return items
+
+            payload = {
+                "event": "attempt_end",
+                "problem_id": problem_id,
+                "attempt": int(result.attempt),
+                "tag": result.tag,
+                "answer": (
+                    int(result.answer) if isinstance(result.answer, int) else None
+                ),
+                "token_count": int(result.stats.token_count),
+                "python_calls": int(result.stats.python_calls),
+                "lean_calls": int(getattr(result.stats, "lean_calls", 0) or 0),
+                "python_errors": int(result.stats.python_errors),
+                "timeout_count": int(getattr(result.stats, "timeout_count", 0) or 0),
+                "deadline_exceeded": bool(
+                    getattr(result.stats, "deadline_exceeded", False)
+                ),
+                "last_error": result.stats.last_error,
+                "assistant_text": (
+                    self._truncate(output_text, max_chars)
+                    if max_chars > 0
+                    else output_text
+                ),
+                "python_calls_text": _cap_list(transcript_python_calls),
+                "python_outputs_text": _cap_list(transcript_python_outputs),
+            }
+            if not payload.get("assistant_text"):
+                payload.pop("assistant_text", None)
+            if not payload.get("python_calls_text"):
+                payload.pop("python_calls_text", None)
+            if not payload.get("python_outputs_text"):
+                payload.pop("python_outputs_text", None)
+            if not payload.get("last_error"):
+                payload.pop("last_error", None)
+
+            with contextlib.suppress(Exception):
+                self._trace.record(payload)
+
+        return result
 
     def solve_problem(self, problem: str) -> int:
         """Solve a single problem with multiple parallel attempts and answer ranking."""
@@ -1254,6 +1371,7 @@ class AIMO3Solver:
                     tag,
                     stop_event,
                     deadline,
+                    problem_id,
                 )
                 futures.append(f)
 
@@ -1322,6 +1440,7 @@ class AIMO3Solver:
                             tag,
                             stop_event_2,
                             new_deadline,
+                            problem_id,
                             continuation_context=cont_ctx,
                         )
                         futures_2.append(f2)
@@ -1370,7 +1489,7 @@ class AIMO3Solver:
             )
             print("[Verify] Weak consensus — running verification phase...")
             ranked = self._verify_candidates(
-                problem, ranked_for_verify, verify_deadline
+                problem, ranked_for_verify, verify_deadline, problem_id
             )
             # Update time_used to include verification.
             time_used = time.time() - problem_start
