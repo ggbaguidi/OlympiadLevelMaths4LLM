@@ -213,6 +213,7 @@ class AIMO3Config:
         ).strip().lower() not in {"0", "false", "no"}
 
         seed = _env_int("AIMO3_SEED", AIMO3Config.seed)
+        search_tokens = _env_int("AIMO3_SEARCH_TOKENS", AIMO3Config.search_tokens)
         preference_prompt = os.getenv(
             "AIMO3_PREFERENCE_PROMPT", AIMO3Config.preference_prompt
         )
@@ -396,6 +397,7 @@ class AIMO3Config:
 
         return AIMO3Config(
             seed=seed,
+            search_tokens=search_tokens,
             system_prompt=system_prompt,
             tool_prompt=tool_prompt,
             preference_prompt=preference_prompt,
