@@ -210,6 +210,7 @@ class AIMO3Solver:
             "Tokens": int(r.stats.token_count),
             "Entropy": ent,
             "Snippet": snippet,
+            "LastError": r.stats.last_error,
         }
 
     def _display_candidates(self, attempts: list[AttemptResult]) -> None:
@@ -966,6 +967,7 @@ class AIMO3Solver:
         local_tool = None
         python_calls = 0
         python_errors = 0
+        last_error: str | None = None
         lean_calls = 0
         timeout_count = 0
         total_tokens = 0
@@ -1123,6 +1125,8 @@ class AIMO3Solver:
                         python_errors += 1
                         if "timed out" in response_text.lower():
                             timeout_count += 1
+                        # Capture the error message (truncate if too long).
+                        last_error = response_text[:500]
 
                     if "VERIFY_OK" in response_text:
                         verification_marker_found = True
@@ -1169,11 +1173,12 @@ class AIMO3Solver:
                 timeout_count=timeout_count,
                 mean_entropy=mean_entropy,
                 verification_marker_found=(
-                    verification_marker_found
-                    if python_calls > 0 and self.cfg.require_verification_marker
-                    else None
+                    True
+                    if verification_marker_found
+                    else (False if self.cfg.require_verification_marker else None)
                 ),
                 deadline_exceeded=deadline_exceeded,
+                last_error=last_error,
             ),
             output_text=output_text,
             tag=attempt_tag,
