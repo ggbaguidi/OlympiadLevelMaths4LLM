@@ -129,7 +129,7 @@ class AIMO3Sandbox:
                         os.remove(connection_file)
 
                 # Exponential backoff with jitter to avoid thundering herd.
-                time.sleep(min(2.0, 0.1 * (2 ** attempt) + random.uniform(0, 0.2)))
+                time.sleep(min(2.0, 0.1 * (2**attempt) + random.uniform(0, 0.2)))
 
         if self._client is None or self._km is None:
             raise RuntimeError(

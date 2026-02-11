@@ -178,6 +178,7 @@ def rank_candidates(
 @dataclass
 class AIMO3Solver:
     """AIMO-3 multi-attempt solver with streaming and tool use."""
+
     cfg: AIMO3Config
     port: int = 8000
 
@@ -263,9 +264,7 @@ class AIMO3Solver:
         # Only meaningful if the optional dependency stack is present.
         sb: AIMO3Sandbox | None = None
         try:
-            sb = self.sandbox_pool.get(
-                timeout=max(self.cfg.sandbox_timeout, 0.5)
-            )
+            sb = self.sandbox_pool.get(timeout=max(self.cfg.sandbox_timeout, 0.5))
         except Exception:
             sb = None
 
@@ -393,8 +392,7 @@ class AIMO3Solver:
         # we allow verification to trigger even if we have less than 90s left.
         # We use the minimum of the configured buffer and 25% of the base timeout.
         adaptive_min_rem = min(
-            self.cfg.verify_min_remaining_s,
-            self.cfg.base_problem_timeout * 0.25
+            self.cfg.verify_min_remaining_s, self.cfg.base_problem_timeout * 0.25
         )
         if time_remaining_s < adaptive_min_rem:
             return False
@@ -507,10 +505,8 @@ class AIMO3Solver:
                 if not token_buffer:
                     break
 
-                new_messages = (
-                    self.encoding.parse_messages_from_completion_tokens(
-                        token_buffer, self.Role
-                    )
+                new_messages = self.encoding.parse_messages_from_completion_tokens(
+                    token_buffer, self.Role
                 )
                 if not new_messages:
                     break
@@ -579,7 +575,9 @@ class AIMO3Solver:
 
             # Log full output for UNKNOWN verdicts to debug prompt compliance.
             if result["verdict"] == "UNKNOWN":
-                print(f"  [Verify UNKNOWN] Candidate {candidate_answer} — full output:\n{full_text}...")
+                print(
+                    f"  [Verify UNKNOWN] Candidate {candidate_answer} — full output:\n{full_text}..."
+                )
 
         except Exception:  # noqa: BLE001
             pass  # Verification attempt failed — verdict stays UNKNOWN.
@@ -618,7 +616,9 @@ class AIMO3Solver:
         verify_tasks = []
         for cand_idx, (answer, _data) in enumerate(candidates_to_check):
             for v_idx in range(per_candidate):
-                strategy = VERIFY_STRATEGIES[(cand_idx * per_candidate + v_idx) % n_strategies]
+                strategy = VERIFY_STRATEGIES[
+                    (cand_idx * per_candidate + v_idx) % n_strategies
+                ]
                 seed = (self.cfg.seed + 1000 + cand_idx * 100 + v_idx) ** 2
                 verify_tasks.append((answer, strategy, seed))
 
@@ -1069,13 +1069,8 @@ class AIMO3Solver:
 
                             if self.cfg.entropy_weighting_enabled:
                                 chunk_lp = choice.logprobs
-                                if (
-                                    chunk_lp is not None
-                                    and chunk_lp.top_logprobs
-                                ):
-                                    logprobs_buffer.extend(
-                                        chunk_lp.top_logprobs
-                                    )
+                                if chunk_lp is not None and chunk_lp.top_logprobs:
+                                    logprobs_buffer.extend(chunk_lp.top_logprobs)
 
                         if (
                             "}" in (new_text or "")
@@ -1085,9 +1080,7 @@ class AIMO3Solver:
                             search_text = "".join(
                                 text_chunks[-self.cfg.search_tokens :]
                             )
-                            answer = self._extractor.extract_boxed_int(
-                                search_text
-                            )
+                            answer = self._extractor.extract_boxed_int(search_text)
                             if answer is not None:
                                 final_answer = answer
                                 break
@@ -1101,10 +1094,8 @@ class AIMO3Solver:
                 if not token_buffer:
                     break
 
-                new_messages = (
-                    self.encoding.parse_messages_from_completion_tokens(
-                        token_buffer, Role.ASSISTANT
-                    )
+                new_messages = self.encoding.parse_messages_from_completion_tokens(
+                    token_buffer, Role.ASSISTANT
                 )
                 if not new_messages:
                     break
@@ -1114,13 +1105,9 @@ class AIMO3Solver:
 
                 if last_message.channel == "final":
                     answer_text = last_message.content[0].text
-                    final_answer = self._extractor.extract_boxed_int(
-                        answer_text
-                    )
+                    final_answer = self._extractor.extract_boxed_int(answer_text)
                     if final_answer is None:
-                        final_answer = self._extractor.extract_int_fallback(
-                            answer_text
-                        )
+                        final_answer = self._extractor.extract_int_fallback(answer_text)
                     break
 
                 if last_message.recipient == "python":
@@ -1142,9 +1129,7 @@ class AIMO3Solver:
 
                     # Heuristic: detect Lean tool use inside Python code.
                     with contextlib.suppress(Exception):
-                        code_text = (
-                            last_message.content[0].text or ""
-                        ).lower()
+                        code_text = (last_message.content[0].text or "").lower()
                         if "lean" in code_text or "lake" in code_text:
                             lean_calls += 1
 
@@ -1185,8 +1170,7 @@ class AIMO3Solver:
                 mean_entropy=mean_entropy,
                 verification_marker_found=(
                     verification_marker_found
-                    if python_calls > 0
-                    and self.cfg.require_verification_marker
+                    if python_calls > 0 and self.cfg.require_verification_marker
                     else None
                 ),
                 deadline_exceeded=deadline_exceeded,
@@ -1227,9 +1211,7 @@ class AIMO3Solver:
                 env_snapshot = self._sandbox_env_snapshot()
 
         # Build task list: (developer_prompt, attempt_index, tag).
-        tasks = [
-            (self.cfg.system_prompt, i, None) for i in range(self.cfg.attempts)
-        ]
+        tasks = [(self.cfg.system_prompt, i, None) for i in range(self.cfg.attempts)]
 
         detailed_results: list[AttemptResult] = []
         stop_event = threading.Event()
@@ -1322,9 +1304,7 @@ class AIMO3Solver:
                             detailed_results.append(result)
 
                             time_spent_2 = time.time() - problem_start
-                            if self._should_early_stop(
-                                detailed_results, time_spent_2
-                            ):
+                            if self._should_early_stop(detailed_results, time_spent_2):
                                 stop_event_2.set()
                                 for f2 in futures_2:
                                     f2.cancel()
@@ -1355,9 +1335,7 @@ class AIMO3Solver:
             filter_to_verified_if_any=False,
             magnitude_aware=bool(self.cfg.magnitude_aware_ranking_enabled),
         )
-        time_remaining_for_verify = (
-            self._budget_tracker.time_remaining_s - time_used
-        )
+        time_remaining_for_verify = self._budget_tracker.time_remaining_s - time_used
         if self._should_run_verification(ranked_for_verify, time_remaining_for_verify):
             verify_deadline = time.time() + min(
                 self.cfg.verify_timeout_s, time_remaining_for_verify * 0.8
@@ -1386,7 +1364,7 @@ class AIMO3Solver:
         else:
             final_answer = 0
             print("\nFinal Answer: 0 (no valid candidates)\n")
-        
+
         # Pass the allocated budget so leftover time can be added to carryover pool
         try:
             self._budget_tracker.record_solve(time_used, allocated_budget_s=budget)
@@ -1406,18 +1384,20 @@ class AIMO3Solver:
                 "attempts_with_answer": sum(
                     1 for r in detailed_results if r.answer is not None
                 ),
-                "ranking": [
-                    {
-                        "answer": a,
-                        "votes": d["votes"],
-                        "verified": d["verified"],
-                        "verify_correct": d.get("verify_correct"),
-                        "verify_incorrect": d.get("verify_incorrect"),
-                    }
-                    for a, d in ranked[:5]
-                ]
-                if ranked
-                else [],
+                "ranking": (
+                    [
+                        {
+                            "answer": a,
+                            "votes": d["votes"],
+                            "verified": d["verified"],
+                            "verify_correct": d.get("verify_correct"),
+                            "verify_incorrect": d.get("verify_incorrect"),
+                        }
+                        for a, d in ranked[:5]
+                    ]
+                    if ranked
+                    else []
+                ),
                 "env": env_snapshot,
             }
         )

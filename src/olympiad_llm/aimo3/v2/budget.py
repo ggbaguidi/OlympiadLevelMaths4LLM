@@ -216,8 +216,6 @@ class TimeBudgetTracker:
         self.extensions_granted += 1
         return extension
 
-    
-
     def record_solve(self, time_used_s: float, allocated_budget_s: Optional[float] = None) -> None:  # type: ignore[override]
         """Record completion of a problem.
 
