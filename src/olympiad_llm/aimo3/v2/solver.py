@@ -1470,7 +1470,7 @@ class AIMO3Solver:
         # Select answer via ranking.
         ranked = rank_candidates(
             detailed_results,
-            filter_to_verified_if_any=True,
+            filter_to_verified_if_any=bool(self.cfg.filter_to_verified_if_any),
             magnitude_aware=bool(self.cfg.magnitude_aware_ranking_enabled),
         )
 
