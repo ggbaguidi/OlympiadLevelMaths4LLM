@@ -36,11 +36,11 @@ class AttemptStats:
         # If the model explicitly said "VERIFY_OK", trust it even if there were errors.
         if self.verification_marker_found:
             return True
-        
+
         # Legacy/Fallback: requires no errors.
         if self.python_calls <= 0 or self.python_errors > 0:
             return False
-            
+
         if self.verification_marker_found is None:
             return True
         return bool(self.verification_marker_found)

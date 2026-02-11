@@ -30,6 +30,7 @@ from .vllm_server import VLLMServer
 from .require import _require_harmony, _require_openai
 from .template import AIMO3Template, VERIFY_STRATEGIES
 from .tools import AIMO3Tool
+from .wickelgren import augment_developer_prompt_with_meta
 
 
 def _magnitude_bucket(x: int) -> int:
@@ -908,6 +909,23 @@ class AIMO3Solver:
     def _extractor(self) -> AnswerExtractor:
         return self._cached_extractor
 
+    def _build_attempt_prompt(
+        self, attempt_index: int
+    ) -> tuple[str, str | None]:
+        """Build attempt-level developer prompt with optional strategy card."""
+
+        developer_prompt = self.cfg.system_prompt
+        attempt_tag: str | None = None
+
+        if bool(self.cfg.wickelgren_strategies_enabled):
+            developer_prompt, meta = augment_developer_prompt_with_meta(
+                developer_prompt,
+                attempt_index=attempt_index,
+            )
+            attempt_tag = f"wickelgren:{meta.get('card', 'unknown')}"
+
+        return developer_prompt, attempt_tag
+
     @staticmethod
     def _compute_mean_entropy(logprobs_buffer: list) -> float:
         """Compute mean per-token entropy from streaming logprobs."""
@@ -1216,7 +1234,10 @@ class AIMO3Solver:
                 env_snapshot = self._sandbox_env_snapshot()
 
         # Build task list: (developer_prompt, attempt_index, tag).
-        tasks = [(self.cfg.system_prompt, i, None) for i in range(self.cfg.attempts)]
+        tasks = []
+        for i in range(self.cfg.attempts):
+            dev_prompt, tag = self._build_attempt_prompt(i)
+            tasks.append((dev_prompt, i, tag))
 
         detailed_results: list[AttemptResult] = []
         stop_event = threading.Event()
@@ -1291,12 +1312,14 @@ class AIMO3Solver:
                 try:
                     futures_2 = []
                     for i in range(self.cfg.attempts):
+                        attempt_idx = wave2_start + i
+                        dev_prompt, tag = self._build_attempt_prompt(attempt_idx)
                         f2 = executor_2.submit(
                             self._process_attempt,
                             user_input,
-                            self.cfg.system_prompt,
-                            wave2_start + i,
-                            None,
+                            dev_prompt,
+                            attempt_idx,
+                            tag,
                             stop_event_2,
                             new_deadline,
                             continuation_context=cont_ctx,

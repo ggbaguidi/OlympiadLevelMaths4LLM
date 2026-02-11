@@ -28,6 +28,9 @@ class AIMO3Config:
     preference_prompt: str = (
         "You have access to `math`, `numpy` and `sympy` to solve the problem."
     )
+    # If enabled, append a rotating strategy-card block to each attempt's
+    # developer prompt. Disable to run only with `system_prompt`.
+    wickelgren_strategies_enabled: bool = True
 
     # Notebook display / logging
     # If True, show a table of attempts (candidate answers + stats + snippet) after solving.
@@ -228,6 +231,11 @@ class AIMO3Config:
             "false",
             "no",
         }
+        wick = os.getenv("AIMO3_WICKELGREN", "1").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+        }
 
         trace_enabled = os.getenv("AIMO3_TRACE", "0").strip().lower() not in {
             "0",
@@ -406,6 +414,7 @@ class AIMO3Config:
             preload_model_weights=preload_model_weights,
             preload_model_workers=preload_model_workers,
             reuse_existing_server=reuse,
+            wickelgren_strategies_enabled=wick,
             display_candidates=disp,
             trace_enabled=trace_enabled,
             entropy_weighting_enabled=entropy_weighting_enabled,
