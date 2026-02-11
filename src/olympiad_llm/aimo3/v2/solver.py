@@ -1336,13 +1336,6 @@ class AIMO3Solver:
                     executor_2.shutdown(wait=True, cancel_futures=True)
 
         time_used = time.time() - problem_start
-        # Pass the allocated budget so leftover time can be added to carryover pool
-        try:
-            self._budget_tracker.record_solve(time_used, allocated_budget_s=budget)
-        except TypeError:
-            # Fallback for compatibility: older trackers may not accept allocated_budget_s
-            self._budget_tracker.record_solve(time_used)
-        self.problems_remaining = self._budget_tracker.problems_remaining
 
         # Display candidates.
         self._display_candidates(detailed_results)
@@ -1393,6 +1386,14 @@ class AIMO3Solver:
         else:
             final_answer = 0
             print("\nFinal Answer: 0 (no valid candidates)\n")
+        
+        # Pass the allocated budget so leftover time can be added to carryover pool
+        try:
+            self._budget_tracker.record_solve(time_used, allocated_budget_s=budget)
+        except TypeError:
+            # Fallback for compatibility: older trackers may not accept allocated_budget_s
+            self._budget_tracker.record_solve(time_used)
+        self.problems_remaining = self._budget_tracker.problems_remaining
 
         # Record trace end.
         self._trace.record(
