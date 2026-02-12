@@ -1,12 +1,12 @@
 # pylint: disable=broad-exception-caught,missing-function-docstring,line-too-long,missing-module-docstring,import-outside-toplevel,invalid-name,too-many-instance-attributes
-"""Wickelgren-inspired problem-solving strategies.
+"""Wickelgren-inspired prompt augmentation and lightweight retrieval.
 
-This module provides *paraphrased* strategy checklists inspired by classical
-math problem-solving heuristics (including Wickelgren-style guidance), without
-reproducing any book text.
+This module provides:
+- strategy-card augmentation for developer prompts
+- CPU-friendly math knowledge retrieval (embedding-first, lexical fallback)
 
-Goal: reduce prompt brittleness by giving the model a concrete, varied
-"strategy card" each attempt (understand → explore → plan → execute → check).
+All injected retrieval/strategy blocks are explicitly marked as META context,
+not part of the user problem statement.
 """
 
 from __future__ import annotations
@@ -24,16 +24,12 @@ from typing import Any
 
 @dataclass(frozen=True)
 class StrategyCard:
-    """Concise, concrete, action-oriented problem-solving instructions."""
-
     name: str
     instructions: list[str]
 
 
 @dataclass(frozen=True)
 class MathConcept:
-    """Compact concept record loaded from the v1 knowledge-base format."""
-
     concept_type: str
     title: str | None
     content: str
@@ -56,8 +52,6 @@ class MathConcept:
 
 @dataclass(frozen=True)
 class RetrievalResult:
-    """Single retriever hit."""
-
     concept: MathConcept
     score: float
     rank: int
@@ -99,8 +93,6 @@ def _tokenize(text: str) -> list[str]:
 
 
 def _concept_from_obj(obj: Any) -> MathConcept | None:
-    """Best-effort conversion from JSON/pickle concept rows."""
-
     if isinstance(obj, MathConcept):
         return obj
 
@@ -116,7 +108,6 @@ def _concept_from_obj(obj: Any) -> MathConcept | None:
             page=(int(obj.get("page")) if obj.get("page") is not None else None),
         )
 
-    # Pickled v1 concepts may be dataclass instances with the same attributes.
     concept_type = getattr(obj, "concept_type", None)
     content = getattr(obj, "content", None)
     if concept_type is None and content is None:
@@ -141,15 +132,30 @@ def _concept_from_obj(obj: Any) -> MathConcept | None:
     )
 
 
-class FastMathRetriever:
-    """CPU-only lexical retriever for the v1 knowledge-base format.
+def _format_retrieved_block(
+    rows: list[tuple[MathConcept, float]], max_chars_per_item: int = 320
+) -> str:
+    if not rows:
+        return ""
 
-    Design goals:
-    - no GPU use
-    - no transformer loading at runtime
-    - fast enough for per-problem retrieval
-    - compatible with existing v1 KB files (concepts.json / concepts.pkl)
-    """
+    lines = [
+        "[META_RETRIEVED_MATH_KNOWLEDGE]",
+        "This block is retrieved reference context, not part of the user problem statement.",
+        "Use it only as optional support; prioritize the given problem constraints.",
+    ]
+    for rank, (c, score) in enumerate(rows, start=1):
+        ctype = (c.concept_type or "concept").upper()
+        title = f"{c.title}: " if c.title else ""
+        content = (c.content or "").strip().replace("\n", " ")
+        if max_chars_per_item > 0 and len(content) > max_chars_per_item:
+            content = content[: max_chars_per_item - 3] + "..."
+        lines.append(f"{rank}. [{ctype} score={score:.3f}] {title}{content}")
+    lines.append("[/META_RETRIEVED_MATH_KNOWLEDGE]")
+    return "\n".join(lines)
+
+
+class FastMathRetriever:
+    """CPU-only lexical retriever over v1 KB files (concepts.json/pkl)."""
 
     def __init__(self, concepts: list[MathConcept]):
         self.concepts = concepts
@@ -182,15 +188,12 @@ class FastMathRetriever:
         concepts: list[MathConcept] = []
         for row in raw_rows:
             c = _concept_from_obj(row)
-            if c is None:
-                continue
-            if not c.content.strip():
+            if c is None or not c.content.strip():
                 continue
             concepts.append(c)
 
         if max_concepts > 0:
             concepts = concepts[: max(1, int(max_concepts))]
-
         if not concepts:
             raise ValueError("Knowledge base has no valid concepts")
 
@@ -230,10 +233,8 @@ class FastMathRetriever:
         include_definitions: bool = True,
     ) -> tuple[list[RetrievalResult], dict[str, Any]]:
         start = time.time()
-        query_toks = _tokenize(query)
-        q_tf = Counter(query_toks)
+        q_tf = Counter(_tokenize(query))
 
-        # Query weights in the same TF-IDF space.
         q_weights: dict[str, float] = {}
         q_norm_sq = 0.0
         for tok, cnt in q_tf.items():
@@ -259,31 +260,26 @@ class FastMathRetriever:
                 continue
             if not include_definitions and ctype == "definition":
                 continue
-
             score = dot / (q_norm * max(self._doc_norms[idx], 1e-9))
             if score < float(min_score):
                 continue
             results.append(RetrievalResult(concept=c, score=float(score), rank=0))
 
         results.sort(key=lambda r: r.score, reverse=True)
-        top_k = max(0, int(top_k))
         if top_k > 0:
-            results = results[:top_k]
+            results = results[: max(1, int(top_k))]
 
-        # Populate ranks after sorting/slicing.
         results = [
             RetrievalResult(concept=r.concept, score=r.score, rank=i + 1)
             for i, r in enumerate(results)
         ]
-
         metadata = {
+            "backend": "lexical",
             "retrieval_time_ms": round((time.time() - start) * 1000.0, 2),
             "query_len": len(query or ""),
             "results_count": len(results),
             "top_k_requested": int(top_k),
             "min_score_threshold": float(min_score),
-            "include_examples": bool(include_examples),
-            "include_definitions": bool(include_definitions),
             "avg_score": (
                 round(sum(r.score for r in results) / len(results), 4)
                 if results
@@ -291,6 +287,9 @@ class FastMathRetriever:
             ),
         }
         return results, metadata
+
+    def warmup(self) -> None:
+        self.retrieve("warmup query", top_k=1, min_score=0.0)
 
     def retrieve_for_problem(
         self,
@@ -308,33 +307,82 @@ class FastMathRetriever:
             include_examples=include_examples,
             include_definitions=include_definitions,
         )
+        rows = [(r.concept, r.score) for r in results]
+        return _format_retrieved_block(rows, max_chars_per_item), metadata
 
-        if not results:
-            return "", metadata
 
-        lines = [
-            "[META_RETRIEVED_MATH_KNOWLEDGE]",
-            "This block is retrieved reference context, not part of the user problem statement.",
-            "Use it only as optional support; prioritize the given problem constraints.",
-        ]
+class EmbeddingMathRetriever:
+    """Adapter around the v1 embedding retriever (CPU capable)."""
+
+    def __init__(self, wrapped: Any):
+        self._wrapped = wrapped
+
+    @classmethod
+    def load(
+        cls, kb_dir: str | Path, model_path: str | None = None, cpu_only: bool = True
+    ) -> "EmbeddingMathRetriever":
+        from ..v1.math_retriever import MathRetriever as V1MathRetriever
+
+        wrapped = V1MathRetriever.load(
+            kb_dir=kb_dir,
+            model_path=model_path,
+            cpu_only=cpu_only,
+        )
+        return cls(wrapped)
+
+    def warmup(self) -> None:
+        with_errors = False
+        try:
+            _ = self._wrapped.encode_query("warmup query")
+        except Exception:  # noqa: BLE001
+            with_errors = True
+        if with_errors:
+            return
+
+    def retrieve_for_problem(
+        self,
+        problem: str,
+        top_k: int = 5,
+        min_score: float = 0.08,
+        include_examples: bool = True,
+        include_definitions: bool = True,
+        max_chars_per_item: int = 320,
+    ) -> tuple[str, dict[str, Any]]:
+        concept_types = None
+        if not include_examples or not include_definitions:
+            concept_types = ["theorem", "lemma", "corollary", "proposition", "axiom"]
+            if include_definitions:
+                concept_types.append("definition")
+            if include_examples:
+                concept_types.append("example")
+
+        results, metadata = self._wrapped.retrieve(
+            query=problem,
+            top_k=top_k,
+            concept_types=concept_types,
+            min_score=min_score,
+        )
+
+        rows: list[tuple[MathConcept, float]] = []
         for r in results:
-            c = r.concept
-            ctype = (c.concept_type or "concept").upper()
-            title = f"{c.title}: " if c.title else ""
-            content = (c.content or "").strip().replace("\n", " ")
-            if max_chars_per_item > 0 and len(content) > max_chars_per_item:
-                content = content[: max_chars_per_item - 3] + "..."
-            lines.append(f"{r.rank}. [{ctype} score={r.score:.3f}] {title}{content}")
-        lines.append("[/META_RETRIEVED_MATH_KNOWLEDGE]")
-        return "\n".join(lines), metadata
+            c = _concept_from_obj(getattr(r, "concept", None))
+            if c is None:
+                continue
+            score = float(getattr(r, "score", 0.0) or 0.0)
+            rows.append((c, score))
+
+        if metadata is None or not isinstance(metadata, dict):
+            metadata = {}
+        metadata = dict(metadata)
+        metadata["backend"] = "embedding"
+        return _format_retrieved_block(rows, max_chars_per_item), metadata
 
 
-# Per-process retriever cache keyed by KB path.
-_RETRIEVER_CACHE: dict[str, FastMathRetriever] = {}
+_RETRIEVER_CACHE: dict[str, Any] = {}
 
 
-def init_math_retriever_from_cfg(cfg: Any) -> FastMathRetriever | None:
-    """Initialize/load a CPU retriever from config (compatible env names with v1)."""
+def init_math_retriever_from_cfg(cfg: Any) -> Any | None:
+    """Load retriever from config, embedding-first with lexical fallback."""
 
     if not bool(getattr(cfg, "retriever_enabled", False)):
         return None
@@ -343,42 +391,54 @@ def init_math_retriever_from_cfg(cfg: Any) -> FastMathRetriever | None:
     if not kb_path:
         return None
 
-    if kb_path in _RETRIEVER_CACHE:
-        return _RETRIEVER_CACHE[kb_path]
+    backend = str(getattr(cfg, "retriever_backend", "auto") or "auto").strip().lower()
+    if backend not in {"auto", "embedding", "lexical"}:
+        backend = "auto"
 
-    max_concepts = 0
-    with_errors = False
-    try:
-        # Optional knob for huge KBs; not required in config.
-        max_concepts = int(getattr(cfg, "retriever_max_concepts", 0) or 0)
-    except Exception:  # noqa: BLE001
-        max_concepts = 0
+    model_path = str(getattr(cfg, "retriever_model_path", "") or "").strip() or None
+    cpu_only = bool(getattr(cfg, "retriever_cpu_only", True))
+    warmup = bool(getattr(cfg, "retriever_warmup_on_init", True))
+    max_concepts = int(getattr(cfg, "retriever_max_concepts", 0) or 0)
 
-    try:
-        retriever = FastMathRetriever.load(kb_path, max_concepts=max_concepts)
-        if bool(getattr(cfg, "retriever_warmup_on_init", True)):
-            # Lightweight warmup.
-            retriever.retrieve(
-                "warmup query",
-                top_k=1,
-                min_score=0.0,
-                include_examples=True,
-                include_definitions=True,
-            )
-        _RETRIEVER_CACHE[kb_path] = retriever
-        return retriever
-    except Exception:  # noqa: BLE001
-        with_errors = True
+    if backend == "embedding":
+        backends = ["embedding", "lexical"]
+    elif backend == "lexical":
+        backends = ["lexical"]
+    else:
+        backends = ["embedding", "lexical"]
 
-    if with_errors:
-        return None
+    for b in backends:
+        key = f"{b}|{kb_path}|{model_path}|{int(cpu_only)}|{int(max_concepts)}"
+        if key in _RETRIEVER_CACHE:
+            return _RETRIEVER_CACHE[key]
+
+        try:
+            if b == "embedding":
+                retriever = EmbeddingMathRetriever.load(
+                    kb_dir=kb_path,
+                    model_path=model_path,
+                    cpu_only=cpu_only,
+                )
+            else:
+                retriever = FastMathRetriever.load(
+                    kb_dir=kb_path,
+                    max_concepts=max_concepts,
+                )
+            if warmup and hasattr(retriever, "warmup"):
+                with_errors = False
+                try:
+                    retriever.warmup()
+                except Exception:  # noqa: BLE001
+                    with_errors = True
+                if with_errors:
+                    pass
+            _RETRIEVER_CACHE[key] = retriever
+            return retriever
+        except Exception:  # noqa: BLE001
+            continue
+
     return None
 
-
-# =============================================================================
-# REWRITTEN STRATEGY CARDS: Concise, concrete, action-oriented
-# Each card is a SHORT directive that biases the model toward a specific approach
-# =============================================================================
 
 GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
     StrategyCard(
@@ -457,20 +517,12 @@ GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
 
 
 def select_strategy(attempt_index: int) -> StrategyCard:
-    """Select a strategy card for the given attempt index."""
-
     if not GENERIC_STRATEGY_CARDS:
         raise RuntimeError("No strategy cards configured")
     return GENERIC_STRATEGY_CARDS[int(attempt_index) % len(GENERIC_STRATEGY_CARDS)]
 
 
 def render_strategy_card(card: StrategyCard) -> str:
-    """Render a strategy card as an explicit meta-instruction block.
-
-    The block is wrapped in markers so it is less likely to be interpreted as
-    part of the user's math problem statement.
-    """
-
     lines = [
         "[META_STRATEGY_CARD]",
         "This block is solver guidance, not part of the user problem statement.",
@@ -488,22 +540,17 @@ def augment_developer_prompt_with_meta(
     *,
     attempt_index: int,
     problem_text: str | None = None,
-    retriever: FastMathRetriever | None = None,
+    retriever: Any | None = None,
     retriever_top_k: int = 5,
     retriever_min_score: float = 0.08,
     retriever_include_examples: bool = True,
     retriever_include_definitions: bool = True,
 ) -> tuple[str, dict[str, Any]]:
-    """Append a strategy-card block to the developer prompt.
-
-    Returns the augmented prompt and metadata for tracing/debug tags.
-    """
-
     card = select_strategy(int(attempt_index))
     strategy_block = render_strategy_card(card)
+
     retrieved_block = ""
     retrieval_meta: dict[str, Any] = {}
-
     if retriever is not None and (problem_text or "").strip():
         with_errors = False
         try:
@@ -526,6 +573,7 @@ def augment_developer_prompt_with_meta(
     meta = {
         "card": card.name,
         "retriever_used": bool(retrieved_block),
+        "retriever_backend": str(retrieval_meta.get("backend", "")),
         "retriever_results": int(retrieval_meta.get("results_count", 0) or 0),
         "retriever_avg_score": float(retrieval_meta.get("avg_score", 0.0) or 0.0),
     }
@@ -533,8 +581,6 @@ def augment_developer_prompt_with_meta(
 
 
 def augment_developer_prompt(base_prompt: str, *, attempt_index: int) -> str:
-    """Backward-compatible wrapper returning only the prompt text."""
-
     out, _meta = augment_developer_prompt_with_meta(
         base_prompt, attempt_index=attempt_index
     )

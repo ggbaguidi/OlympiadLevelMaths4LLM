@@ -1013,7 +1013,10 @@ class AIMO3Solver:
             )
             attempt_tag = f"wickelgren:{meta.get('card', 'unknown')}"
             if bool(meta.get("retriever_used")):
-                attempt_tag += f"|rag={meta.get('retriever_results', 0)}"
+                attempt_tag += (
+                    f"|rag={meta.get('retriever_results', 0)}"
+                    f"|rag_backend={meta.get('retriever_backend', 'unknown')}"
+                )
 
         return developer_prompt, attempt_tag
 

@@ -34,6 +34,11 @@ class AIMO3Config:
     # CPU-only retriever settings (compatible env names with v1).
     # The retriever is used from wickelgren prompt augmentation.
     retriever_enabled: bool = False
+    # Retriever backend:
+    # - "embedding": v1 embedding retriever
+    # - "lexical": fast CPU lexical retriever
+    # - "auto": embedding first, lexical fallback
+    retriever_backend: str = "auto"
     retriever_knowledge_base_path: str = ""
     retriever_model_path: str = ""
     retriever_cpu_only: bool = True
@@ -261,6 +266,11 @@ class AIMO3Config:
         retriever_enabled = os.getenv(
             "AIMO3_RETRIEVER_ENABLED", "0"
         ).strip().lower() not in {"0", "false", "no"}
+        retriever_backend = (
+            os.getenv("AIMO3_RETRIEVER_BACKEND", AIMO3Config.retriever_backend) or ""
+        ).strip().lower()
+        if retriever_backend not in {"auto", "embedding", "lexical"}:
+            retriever_backend = AIMO3Config.retriever_backend
         retriever_knowledge_base_path = os.path.expanduser(
             (os.getenv("AIMO3_RETRIEVER_KB_PATH", "") or "").strip()
         )
@@ -479,6 +489,7 @@ class AIMO3Config:
             reuse_existing_server=reuse,
             wickelgren_strategies_enabled=wick,
             retriever_enabled=retriever_enabled,
+            retriever_backend=retriever_backend,
             retriever_knowledge_base_path=retriever_knowledge_base_path,
             retriever_model_path=retriever_model_path,
             retriever_cpu_only=retriever_cpu_only,
