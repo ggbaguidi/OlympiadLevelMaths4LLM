@@ -85,11 +85,16 @@ def rank_candidates(
     results: list,
     filter_to_verified_if_any: bool = True,
     magnitude_aware: bool = True,
+    ranking_strategy: str = "verified_then_votes",
 ) -> list:
     """Rank candidate answers by votes, verification status and quality heuristics.
 
-    Ranking is verified-first: if any candidate has at least one clean tool run,
-    we (optionally) discard candidates with verified==0.
+    Ranking strategy is configurable:
+    - ``verified_then_votes``: verification status first (legacy behavior)
+    - ``votes_then_verified``: vote count first (robust under noisy tool failures)
+
+    Independently, we can optionally discard candidates with verified==0 when
+    any verified candidate exists.
 
     We also penalize answers derived from attempts that timed out or hit the
     absolute problem deadline.
@@ -153,11 +158,25 @@ def rank_candidates(
     if should_filter_verified and has_any_verified:
         groups = {k: v for k, v in groups.items() if v["verified"] > 0}
 
+    strategy = (ranking_strategy or "verified_then_votes").strip().lower()
+    if strategy not in {"verified_then_votes", "votes_then_verified"}:
+        strategy = "verified_then_votes"
+
     def _sort_key(item):
         ans, data = item
         # Magnitude boost: outliers get a verified status boost
         mag_verified_boost = 1 if (magnitude_aware and ans in outlier_answers) else 0
         mag_vote_boost = 3 if (magnitude_aware and ans in outlier_answers) else 0
+
+        if strategy == "votes_then_verified":
+            return (
+                data["votes"] + mag_vote_boost,
+                int(data["verified"] > 0) + mag_verified_boost,
+                data["verified"] + mag_verified_boost,
+                data["entropy_score"],
+                -data["timeout_attempts"],
+                -data["deadline_exceeded_attempts"],
+            )
 
         return (
             int(data["verified"] > 0) + mag_verified_boost,
@@ -348,6 +367,7 @@ class AIMO3Solver:
             detailed,
             filter_to_verified_if_any=False,
             magnitude_aware=bool(self.cfg.magnitude_aware_ranking_enabled),
+            ranking_strategy=str(getattr(self.cfg, "ranking_strategy", "")),
         )
         if not ranked_all:
             return False
@@ -1472,6 +1492,7 @@ class AIMO3Solver:
             detailed_results,
             filter_to_verified_if_any=bool(self.cfg.filter_to_verified_if_any),
             magnitude_aware=bool(self.cfg.magnitude_aware_ranking_enabled),
+            ranking_strategy=str(getattr(self.cfg, "ranking_strategy", "")),
         )
 
         # --- Answer-conditional verification phase ---
@@ -1481,6 +1502,7 @@ class AIMO3Solver:
             detailed_results,
             filter_to_verified_if_any=False,
             magnitude_aware=bool(self.cfg.magnitude_aware_ranking_enabled),
+            ranking_strategy=str(getattr(self.cfg, "ranking_strategy", "")),
         )
         time_remaining_for_verify = self._budget_tracker.time_remaining_s - time_used
         if self._should_run_verification(ranked_for_verify, time_remaining_for_verify):

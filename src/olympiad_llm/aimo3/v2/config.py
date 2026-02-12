@@ -110,9 +110,13 @@ class AIMO3Config:
     # to slightly bias ranking toward more confident attempts.
     entropy_weighting_enabled: bool = False
     magnitude_aware_ranking_enabled: bool = True
+    # Ranking strategy for candidate answers:
+    # - "verified_then_votes": legacy behavior (verification status is primary key)
+    # - "votes_then_verified": robust behavior for noisy tool runs (votes are primary key)
+    ranking_strategy: str = "votes_then_verified"
     # If True, final ranking drops all answers with verified==0 whenever at least
     # one verified candidate exists. Disable to avoid hard elimination.
-    filter_to_verified_if_any: bool = True
+    filter_to_verified_if_any: bool = False
     top_logprobs: int = 5
     batch_size: int = 256
     early_stop: int = 3
@@ -289,8 +293,13 @@ class AIMO3Config:
         magnitude_aware_ranking_enabled = os.getenv(
             "AIMO3_MAGNITUDE_AWARE_RANKING", "1"
         ).strip().lower() not in {"0", "false", "no"}
+        ranking_strategy = (
+            os.getenv("AIMO3_RANKING_STRATEGY", AIMO3Config.ranking_strategy) or ""
+        ).strip().lower()
+        if ranking_strategy not in {"verified_then_votes", "votes_then_verified"}:
+            ranking_strategy = AIMO3Config.ranking_strategy
         filter_to_verified_if_any = os.getenv(
-            "AIMO3_FILTER_TO_VERIFIED_IF_ANY", "1"
+            "AIMO3_FILTER_TO_VERIFIED_IF_ANY", "0"
         ).strip().lower() not in {"0", "false", "no"}
 
         # Startup perf knobs
@@ -435,6 +444,7 @@ class AIMO3Config:
             trace_enabled=trace_enabled,
             entropy_weighting_enabled=entropy_weighting_enabled,
             magnitude_aware_ranking_enabled=magnitude_aware_ranking_enabled,
+            ranking_strategy=ranking_strategy,
             filter_to_verified_if_any=filter_to_verified_if_any,
             trace_path=trace_path,
             trace_include_problem_text=trace_include_problem_text,
