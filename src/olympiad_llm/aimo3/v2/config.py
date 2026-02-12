@@ -31,6 +31,17 @@ class AIMO3Config:
     # If enabled, append a rotating strategy-card block to each attempt's
     # developer prompt. Disable to run only with `system_prompt`.
     wickelgren_strategies_enabled: bool = True
+    # CPU-only retriever settings (compatible env names with v1).
+    # The retriever is used from wickelgren prompt augmentation.
+    retriever_enabled: bool = False
+    retriever_knowledge_base_path: str = ""
+    retriever_model_path: str = ""
+    retriever_cpu_only: bool = True
+    retriever_top_k: int = 5
+    retriever_min_score: float = 0.08
+    retriever_include_examples: bool = True
+    retriever_include_definitions: bool = True
+    retriever_warmup_on_init: bool = True
 
     # Notebook display / logging
     # If True, show a table of attempts (candidate answers + stats + snippet) after solving.
@@ -247,6 +258,31 @@ class AIMO3Config:
             "false",
             "no",
         }
+        retriever_enabled = os.getenv(
+            "AIMO3_RETRIEVER_ENABLED", "0"
+        ).strip().lower() not in {"0", "false", "no"}
+        retriever_knowledge_base_path = os.path.expanduser(
+            (os.getenv("AIMO3_RETRIEVER_KB_PATH", "") or "").strip()
+        )
+        retriever_model_path = os.path.expanduser(
+            (os.getenv("AIMO3_RETRIEVER_MODEL_PATH", "") or "").strip()
+        )
+        retriever_top_k = _env_int("AIMO3_RETRIEVER_TOP_K", AIMO3Config.retriever_top_k)
+        retriever_min_score = _env_float(
+            "AIMO3_RETRIEVER_MIN_SCORE", AIMO3Config.retriever_min_score
+        )
+        retriever_include_examples = os.getenv(
+            "AIMO3_RETRIEVER_INCLUDE_EXAMPLES", "1"
+        ).strip().lower() not in {"0", "false", "no"}
+        retriever_include_definitions = os.getenv(
+            "AIMO3_RETRIEVER_INCLUDE_DEFINITIONS", "1"
+        ).strip().lower() not in {"0", "false", "no"}
+        retriever_cpu_only = os.getenv(
+            "AIMO3_RETRIEVER_CPU_ONLY", "1"
+        ).strip().lower() not in {"0", "false", "no"}
+        retriever_warmup_on_init = os.getenv(
+            "AIMO3_RETRIEVER_WARMUP_ON_INIT", "1"
+        ).strip().lower() not in {"0", "false", "no"}
 
         trace_enabled = os.getenv("AIMO3_TRACE", "0").strip().lower() not in {
             "0",
@@ -294,8 +330,10 @@ class AIMO3Config:
             "AIMO3_MAGNITUDE_AWARE_RANKING", "1"
         ).strip().lower() not in {"0", "false", "no"}
         ranking_strategy = (
-            os.getenv("AIMO3_RANKING_STRATEGY", AIMO3Config.ranking_strategy) or ""
-        ).strip().lower()
+            (os.getenv("AIMO3_RANKING_STRATEGY", AIMO3Config.ranking_strategy) or "")
+            .strip()
+            .lower()
+        )
         if ranking_strategy not in {"verified_then_votes", "votes_then_verified"}:
             ranking_strategy = AIMO3Config.ranking_strategy
         filter_to_verified_if_any = os.getenv(
@@ -440,6 +478,15 @@ class AIMO3Config:
             preload_model_workers=preload_model_workers,
             reuse_existing_server=reuse,
             wickelgren_strategies_enabled=wick,
+            retriever_enabled=retriever_enabled,
+            retriever_knowledge_base_path=retriever_knowledge_base_path,
+            retriever_model_path=retriever_model_path,
+            retriever_cpu_only=retriever_cpu_only,
+            retriever_top_k=retriever_top_k,
+            retriever_min_score=retriever_min_score,
+            retriever_include_examples=retriever_include_examples,
+            retriever_include_definitions=retriever_include_definitions,
+            retriever_warmup_on_init=retriever_warmup_on_init,
             display_candidates=disp,
             trace_enabled=trace_enabled,
             entropy_weighting_enabled=entropy_weighting_enabled,

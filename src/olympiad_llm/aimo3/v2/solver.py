@@ -30,7 +30,7 @@ from .vllm_server import VLLMServer
 from .require import _require_harmony, _require_openai
 from .template import AIMO3Template, VERIFY_STRATEGIES
 from .tools import AIMO3Tool
-from .wickelgren import augment_developer_prompt_with_meta
+from .wickelgren import augment_developer_prompt_with_meta, init_math_retriever_from_cfg
 
 
 def _magnitude_bucket(x: int) -> int:
@@ -851,6 +851,8 @@ class AIMO3Solver:
                 raise ValueError(f"model_path does not exist: {mp_expanded}")
 
         self.template = AIMO3Template()
+        # Optional CPU-only retriever for prompt augmentation (loaded from v1 KB format).
+        self._wickelgren_retriever = init_math_retriever_from_cfg(self.cfg)
         self.encoding = h["load_harmony_encoding"](
             h["HarmonyEncodingName"].HARMONY_GPT_OSS
         )
@@ -984,7 +986,9 @@ class AIMO3Solver:
     def _extractor(self) -> AnswerExtractor:
         return self._cached_extractor
 
-    def _build_attempt_prompt(self, attempt_index: int) -> tuple[str, str | None]:
+    def _build_attempt_prompt(
+        self, attempt_index: int, problem_text: str | None = None
+    ) -> tuple[str, str | None]:
         """Build attempt-level developer prompt with optional strategy card."""
 
         developer_prompt = self.cfg.system_prompt
@@ -994,8 +998,22 @@ class AIMO3Solver:
             developer_prompt, meta = augment_developer_prompt_with_meta(
                 developer_prompt,
                 attempt_index=attempt_index,
+                problem_text=problem_text,
+                retriever=getattr(self, "_wickelgren_retriever", None),
+                retriever_top_k=int(getattr(self.cfg, "retriever_top_k", 5) or 5),
+                retriever_min_score=float(
+                    getattr(self.cfg, "retriever_min_score", 0.08) or 0.08
+                ),
+                retriever_include_examples=bool(
+                    getattr(self.cfg, "retriever_include_examples", True)
+                ),
+                retriever_include_definitions=bool(
+                    getattr(self.cfg, "retriever_include_definitions", True)
+                ),
             )
             attempt_tag = f"wickelgren:{meta.get('card', 'unknown')}"
+            if bool(meta.get("retriever_used")):
+                attempt_tag += f"|rag={meta.get('retriever_results', 0)}"
 
         return developer_prompt, attempt_tag
 
@@ -1373,7 +1391,7 @@ class AIMO3Solver:
         # Build task list: (developer_prompt, attempt_index, tag).
         tasks = []
         for i in range(self.cfg.attempts):
-            dev_prompt, tag = self._build_attempt_prompt(i)
+            dev_prompt, tag = self._build_attempt_prompt(i, problem)
             tasks.append((dev_prompt, i, tag))
 
         detailed_results: list[AttemptResult] = []
@@ -1451,7 +1469,9 @@ class AIMO3Solver:
                     futures_2 = []
                     for i in range(self.cfg.attempts):
                         attempt_idx = wave2_start + i
-                        dev_prompt, tag = self._build_attempt_prompt(attempt_idx)
+                        dev_prompt, tag = self._build_attempt_prompt(
+                            attempt_idx, problem
+                        )
                         f2 = executor_2.submit(
                             self._process_attempt,
                             user_input,
