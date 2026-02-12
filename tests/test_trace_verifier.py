@@ -2,7 +2,9 @@ import json
 from pathlib import Path
 
 
-def analyze_trace(trace_path: Path, ground_truth: dict[str, int]) -> list[tuple[str, int, int]]:
+def analyze_trace(
+    trace_path: Path, ground_truth: dict[str, int]
+) -> list[tuple[str, int, int]]:
     """Return a list of (problem_id, answer, gt) for solve_end events that have a ground truth."""
     mismatches: list[tuple[str, int, int]] = []
     with open(trace_path, "r", encoding="utf-8") as f:
