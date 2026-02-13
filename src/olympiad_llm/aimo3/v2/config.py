@@ -177,12 +177,6 @@ class AIMO3Config:
     # Z3 tool timeout (seconds)
     z3_tool_timeout: float = 60.0
 
-    # Phase 3: Enhanced tool output verification
-    # Enable enhanced verification of tool outputs (numerical validation, error detection)
-    tool_verification_enabled: bool = True
-    # Minimum confidence threshold for verification (0.0 to 1.0)
-    tool_verification_min_confidence: float = 0.5
-
     # Strict extraction mode
     strict_fallback_extraction: bool = True
 
@@ -227,6 +221,18 @@ class AIMO3Config:
     # If a full verification phase yields only UNKNOWN verdicts (no correct/incorrect
     # signal), disable verification for the rest of the run to save budget.
     verify_disable_globally_if_all_unknown: bool = True
+
+    # ---------- Meta-learning configuration ----------
+    # Enable adaptive strategy selection using contextual bandits
+    meta_learning_enabled: bool = True
+    # File to persist strategy learning state across runs
+    meta_learning_experience_file: str = "aimo3_meta_learning.pkl"
+    # Exploration factor for Thompson Sampling (higher = more exploration)
+    meta_learning_exploration: float = 1.0
+    # Similarity threshold for problem clustering (0-1, higher = stricter clustering)
+    meta_learning_similarity_threshold: float = 0.7
+    # Track which strategies have been used per problem to avoid repetition
+    meta_learning_track_strategies: bool = True
 
     # Hardware requirements
     # vLLM (as used in Kaggle) typically requires an NVIDIA GPU with a working driver.
@@ -514,6 +520,27 @@ class AIMO3Config:
             "AIMO3_Z3_TOOL_TIMEOUT", AIMO3Config.z3_tool_timeout
         )
 
+        # Meta-learning configuration
+        meta_learning_enabled = os.getenv(
+            "AIMO3_META_LEARNING_ENABLED", "1"
+        ).strip().lower() not in {"0", "false", "no"}
+        meta_learning_experience_file = os.path.expanduser(
+            os.getenv(
+                "AIMO3_META_LEARNING_EXPERIENCE_FILE",
+                AIMO3Config.meta_learning_experience_file,
+            )
+        )
+        meta_learning_exploration = _env_float(
+            "AIMO3_META_LEARNING_EXPLORATION", AIMO3Config.meta_learning_exploration
+        )
+        meta_learning_similarity_threshold = _env_float(
+            "AIMO3_META_LEARNING_SIMILARITY_THRESHOLD",
+            AIMO3Config.meta_learning_similarity_threshold,
+        )
+        meta_learning_track_strategies = os.getenv(
+            "AIMO3_META_LEARNING_TRACK_STRATEGIES", "1"
+        ).strip().lower() not in {"0", "false", "no"}
+
         return AIMO3Config(
             seed=seed,
             search_tokens=search_tokens,
@@ -592,4 +619,9 @@ class AIMO3Config:
             verify_disable_globally_if_all_unknown=verify_disable_globally_if_all_unknown,
             z3_tool_enabled=z3_tool_enabled,
             z3_tool_timeout=z3_tool_timeout,
+            meta_learning_enabled=meta_learning_enabled,
+            meta_learning_experience_file=meta_learning_experience_file,
+            meta_learning_exploration=meta_learning_exploration,
+            meta_learning_similarity_threshold=meta_learning_similarity_threshold,
+            meta_learning_track_strategies=meta_learning_track_strategies,
         )

@@ -516,10 +516,45 @@ GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
 ]
 
 
-def select_strategy(attempt_index: int) -> StrategyCard:
+def select_strategy(
+    attempt_index: int,
+    problem_text: str | None = None,
+    used_strategies: list[str] | None = None,
+) -> tuple[StrategyCard, dict[str, Any]]:
+    """Select strategy using meta-learning bandit when available.
+
+    Returns tuple of (strategy_card, metadata) where metadata includes
+    selection method and exploration info for tracing.
+    """
     if not GENERIC_STRATEGY_CARDS:
         raise RuntimeError("No strategy cards configured")
-    return GENERIC_STRATEGY_CARDS[int(attempt_index) % len(GENERIC_STRATEGY_CARDS)]
+
+    # Try meta-learning bandit if problem text is available
+    if problem_text:
+        try:
+            from .meta_learning import get_global_bandit, get_global_embedder
+
+            embedder = get_global_embedder()
+            features = embedder.embed(problem_text)
+
+            strategy_names = [card.name for card in GENERIC_STRATEGY_CARDS]
+            bandit = get_global_bandit(strategy_names=strategy_names)
+
+            strategy_name, meta = bandit.select_strategy(
+                features, attempt_index, used_strategies or []
+            )
+
+            # Find the strategy card
+            for card in GENERIC_STRATEGY_CARDS:
+                if card.name == strategy_name:
+                    return card, meta
+        except Exception:
+            # Fallback to rotation on any error
+            pass
+
+    # Fallback: simple rotation
+    card = GENERIC_STRATEGY_CARDS[int(attempt_index) % len(GENERIC_STRATEGY_CARDS)]
+    return card, {"method": "rotation", "exploration": True}
 
 
 def render_strategy_card(card: StrategyCard) -> str:
@@ -545,8 +580,11 @@ def augment_developer_prompt_with_meta(
     retriever_min_score: float = 0.08,
     retriever_include_examples: bool = True,
     retriever_include_definitions: bool = True,
+    used_strategies: list[str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    card = select_strategy(int(attempt_index))
+    card, strategy_meta = select_strategy(
+        int(attempt_index), problem_text, used_strategies
+    )
     strategy_block = render_strategy_card(card)
 
     retrieved_block = ""
@@ -572,6 +610,9 @@ def augment_developer_prompt_with_meta(
     out = extra if not base_prompt else base_prompt.rstrip() + "\n\n" + extra
     meta = {
         "card": card.name,
+        "strategy_selection_method": strategy_meta.get("method", "rotation"),
+        "strategy_exploration": strategy_meta.get("exploration", False),
+        "strategy_cluster": strategy_meta.get("cluster", "unknown"),
         "retriever_used": bool(retrieved_block),
         "retriever_backend": str(retrieval_meta.get("backend", "")),
         "retriever_results": int(retrieval_meta.get("results_count", 0) or 0),

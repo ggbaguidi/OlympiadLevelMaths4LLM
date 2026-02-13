@@ -77,12 +77,10 @@ class AIMO3Tool:
         lines = code.split("\n")
         first_line = lines[0].strip().lower() if lines else ""
 
-        # Check for explicit Z3 marker in first line
         if first_line.startswith("# z3") or first_line.startswith("#z3"):
             return "z3"
 
         lower_code = code.lower()
-        # Z3 keywords
         z3_keywords = [
             "z3.",
             "from z3 import",
@@ -93,21 +91,10 @@ class AIMO3Tool:
         if any(keyword in lower_code for keyword in z3_keywords):
             return "z3"
 
-        # SymPy keywords
-        sympy_keywords = ["sympy.", "sp."]
-        if any(keyword in lower_code for keyword in sympy_keywords):
-            return "sympy"
-
         return "python"
 
     @staticmethod
     def _ensure_last_print(code: str) -> str:
-        # Best-effort UX: if the user ends their tool snippet with a simple expression,
-        # auto-wrap it in print(...). This helps avoid the common warning:
-        #   [WARN] No output. Use print() to see results.
-        #
-        # Safety: do NOT rewrite multi-line blocks (function/class defs, loops, returns,
-        # indented code, etc.) because that can change semantics or introduce SyntaxError.
         src = str(code or "")
         stripped = src.strip("\n")
         if not stripped.strip():
@@ -122,12 +109,10 @@ class AIMO3Tool:
         if not last or last.startswith("#"):
             return src
 
-        # If the last line is indented, it's almost certainly inside a block.
         indent = raw_last_line[: len(raw_last_line) - len(raw_last_line.lstrip())]
         if indent:
             return src
 
-        # Heuristic: avoid rewriting statements/headers.
         statement_prefixes = (
             "return",
             "def ",
@@ -158,32 +143,20 @@ class AIMO3Tool:
         if lower_last.endswith(":") or lower_last.startswith(statement_prefixes):
             return src
 
-        # Skip Jupyter magic commands (! for shell, % for magic)
-        # e.g., "!pip install foo" or "%timeit foo()"
         if last.startswith("!") or last.startswith("%"):
             return src
 
-        # If it already prints, do nothing.
         if last.startswith("print(") or "print" in last:
             return src
 
-        # CRITICAL: Do not wrap assignment statements - this causes SyntaxError:
-        # print(x = foo()) is invalid (= looks like keyword argument)
-        # Check for assignment: contains '=' but not '==', '!=', '<=', '>=', '+=', etc.
         if "=" in last:
-            # Match standalone = (assignment) but not compound operators
             if re.search(r"(?<![=!<>+\-*/%&|^])=(?!=)", last):
                 return src
 
-        # Strip trailing comments before wrapping - otherwise print(x # comment) is invalid
-        # because the # hides the closing parenthesis
         expr = last
         comment = ""
         if "#" in last:
-            # Find the comment part (not inside a string)
-            # Simple heuristic: split on # and check if it's likely a comment
             hash_idx = last.find("#")
-            # Check if # is inside quotes (very rough check)
             before_hash = last[:hash_idx]
             if before_hash.count('"') % 2 == 0 and before_hash.count("'") % 2 == 0:
                 expr = last[:hash_idx].rstrip()
@@ -192,7 +165,6 @@ class AIMO3Tool:
         if not expr:
             return src
 
-        # Only apply to single-line snippets or when the last line is a top-level expression.
         lines[-1] = f"print({expr}){comment}"
         return "\n".join(lines)
 
@@ -226,7 +198,6 @@ class AIMO3Tool:
         ToolNamespaceConfig = self._h["ToolNamespaceConfig"]
 
         if self._z3_enabled:
-            # Combine both Python and Z3 info into a single tool config
             combined_description = (
                 f"{self._tool_prompt}\n\n"
                 f"Z3 SMT SOLVER: You can also use Z3 for constraint solving. "
@@ -267,7 +238,6 @@ class AIMO3Tool:
 
         backend = self._decide_backend(raw_script)
 
-        # Apply best-effort rewrites for known API mismatches before execution.
         final_script = self._ensure_last_print(raw_script)
 
         timeout_s: float | None = None
@@ -281,23 +251,6 @@ class AIMO3Tool:
 
         with self._execution_lock:
             output = self._jupyter_session.execute(final_script, timeout=timeout_s)
-
-        # Phase 3: Enhanced verification
-        verification_info = ""
-        if self._enable_verification and self._verifier:
-            vresult = self._verifier.verify_output(output, expected_answer)
-            if not vresult.is_valid:
-                verification_info = f"\n[VERIFICATION WARNING] {vresult.error_type}"
-                if vresult.error_details:
-                    verification_info += f": {vresult.error_details}"
-            elif vresult.warnings:
-                verification_info = "\n[VERIFICATION NOTICE] " + "; ".join(
-                    vresult.warnings
-                )
-
-            # Append verification info to output
-            if verification_info:
-                output = output + verification_info
 
         return [
             self._make_response(

@@ -1,11 +1,10 @@
 # pylint: disable=broad-exception-caught,missing-function-docstring,line-too-long,missing-module-docstring,invalid-name
-"""Tool output verification and validation for Phase 3.
+"""Tool output verification and validation.
 
-This module provides enhanced verification capabilities:
+This module provides verification capabilities:
 - Numerical result validation (NaN, Infinity, bounds checking)
 - Error pattern detection and classification
 - Output format validation
-- Result consistency tracking
 """
 
 from __future__ import annotations
@@ -13,8 +12,6 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Any
-
 
 @dataclass
 class VerificationResult:
@@ -304,77 +301,3 @@ class ToolOutputVerifier:
                 break
 
         return max(0.0, min(1.0, confidence))
-
-
-class ResultConsistencyTracker:
-    """Tracks consistency of results across multiple tool calls."""
-
-    def __init__(self, tolerance: float = 1e-6):
-        self.tolerance = tolerance
-        self.results: list[tuple[Any, float]] = []  # (result, confidence)
-
-    def add_result(self, result: Any, confidence: float = 1.0) -> None:
-        """Add a result with confidence."""
-        self.results.append((result, confidence))
-
-    def get_consensus(self) -> tuple[Any, float] | None:
-        """Get the consensus result with confidence.
-
-        Returns:
-            Tuple of (consensus_result, confidence) or None if no results
-        """
-        if not self.results:
-            return None
-
-        # Group results by value (within tolerance for numbers)
-        groups: dict[Any, list[float]] = {}
-
-        for result, conf in self.results:
-            found_group = False
-            for key in groups:
-                if self._values_equal(result, key):
-                    groups[key].append(conf)
-                    found_group = True
-                    break
-            if not found_group:
-                groups[result] = [conf]
-
-        # Find the group with highest total confidence
-        best_result = None
-        best_confidence = 0.0
-
-        for result, confidences in groups.items():
-            total_conf = sum(confidences)
-            if total_conf > best_confidence:
-                best_confidence = total_conf
-                best_result = result
-
-        if best_result is None:
-            return None
-
-        # Calculate consensus confidence as fraction of total
-        total_conf = sum(c for _, c in self.results)
-        consensus_ratio = best_confidence / total_conf if total_conf > 0 else 0.0
-
-        return best_result, consensus_ratio
-
-    def _values_equal(self, a: Any, b: Any) -> bool:
-        """Check if two values are equal (within tolerance for numbers)."""
-        if type(a) != type(b):
-            return False
-
-        if isinstance(a, (int, float)) and isinstance(b, (int, float)):
-            return abs(a - b) < self.tolerance
-
-        return a == b
-
-    def is_consistent(self, threshold: float = 0.7) -> bool:
-        """Check if results are consistent above threshold."""
-        consensus = self.get_consensus()
-        if consensus is None:
-            return False
-        return consensus[1] >= threshold
-
-    def reset(self) -> None:
-        """Clear all tracked results."""
-        self.results.clear()
