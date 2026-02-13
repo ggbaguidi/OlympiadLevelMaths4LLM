@@ -270,8 +270,10 @@ class AIMO3Config:
             "AIMO3_RETRIEVER_ENABLED", "0"
         ).strip().lower() not in {"0", "false", "no"}
         retriever_backend = (
-            os.getenv("AIMO3_RETRIEVER_BACKEND", AIMO3Config.retriever_backend) or ""
-        ).strip().lower()
+            (os.getenv("AIMO3_RETRIEVER_BACKEND", AIMO3Config.retriever_backend) or "")
+            .strip()
+            .lower()
+        )
         if retriever_backend not in {"auto", "embedding", "lexical"}:
             retriever_backend = AIMO3Config.retriever_backend
         retriever_knowledge_base_path = os.path.expanduser(

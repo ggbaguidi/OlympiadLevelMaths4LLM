@@ -1566,9 +1566,8 @@ class AIMO3Solver:
                 > 0
                 for _a, d in ranked
             )
-            if (
-                not had_decisive_signal
-                and bool(getattr(self.cfg, "verify_disable_globally_if_all_unknown", True))
+            if not had_decisive_signal and bool(
+                getattr(self.cfg, "verify_disable_globally_if_all_unknown", True)
             ):
                 self._verify_runtime_disabled = True
                 print(
