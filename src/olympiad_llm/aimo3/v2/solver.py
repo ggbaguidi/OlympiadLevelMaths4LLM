@@ -240,7 +240,6 @@ class AIMO3Solver:
             "PyCalls": int(r.stats.python_calls),
             "Timeouts": int(r.stats.timeout_count),
             "PyErrors": int(r.stats.python_errors),
-            "LeanCalls": int(r.stats.lean_calls),
             "Tokens": int(r.stats.token_count),
             "Entropy": ent,
             "Snippet": snippet,
@@ -1102,7 +1101,6 @@ class AIMO3Solver:
         python_calls = 0
         python_errors = 0
         last_error: str | None = None
-        lean_calls = 0
         timeout_count = 0
         total_tokens = 0
         final_answer = None
@@ -1311,12 +1309,6 @@ class AIMO3Solver:
                                 0.8  # Good confidence with warnings
                             )
 
-                    # Heuristic: detect Lean tool use inside Python code.
-                    with contextlib.suppress(Exception):
-                        code_text = (last_message.content[0].text or "").lower()
-                        if "lean" in code_text or "lake" in code_text:
-                            lean_calls += 1
-
                     conversation.messages = conversation.messages + list(tool_responses)
 
         except Exception:  # noqa: BLE001
@@ -1349,7 +1341,6 @@ class AIMO3Solver:
                 token_count=total_tokens,
                 python_calls=python_calls,
                 python_errors=python_errors,
-                lean_calls=lean_calls,
                 timeout_count=timeout_count,
                 mean_entropy=mean_entropy,
                 verification_marker_found=(
@@ -1396,7 +1387,6 @@ class AIMO3Solver:
                 ),
                 "token_count": int(result.stats.token_count),
                 "python_calls": int(result.stats.python_calls),
-                "lean_calls": int(getattr(result.stats, "lean_calls", 0) or 0),
                 "python_errors": int(result.stats.python_errors),
                 "timeout_count": int(getattr(result.stats, "timeout_count", 0) or 0),
                 "deadline_exceeded": bool(
