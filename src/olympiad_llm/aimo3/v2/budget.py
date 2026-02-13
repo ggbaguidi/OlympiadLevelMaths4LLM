@@ -166,10 +166,8 @@ class TimeBudgetTracker:
             # Use at least the equal share or base, then add the carryover
             budget = max(equal_share, self.base_timeout_s) + additional
             # Reserve the portion of carry that we're allocating now so it's
-            # not repeatedly applied. We subtract the portion we intend to
-            # allocate immediately.
-            reserved = min(additional, self.carryover_pool_s)
-            self.carryover_pool_s = max(0.0, self.carryover_pool_s - reserved)
+            # not repeatedly applied.
+            self.carryover_pool_s = max(0.0, self.carryover_pool_s - additional)
         else:
             # hybrid: be conservative and use max of equal, avg and base
             budget = max(equal_share, self.avg_solve_time_s, self.base_timeout_s)
@@ -216,7 +214,9 @@ class TimeBudgetTracker:
         self.extensions_granted += 1
         return extension
 
-    def record_solve(self, time_used_s: float, allocated_budget_s: Optional[float] = None) -> None:  # type: ignore[override]
+    def record_solve(
+        self, time_used_s: float, allocated_budget_s: Optional[float] = None
+    ) -> None:  # type: ignore[override]
         """Record completion of a problem.
 
         If `allocated_budget_s` is provided and the problem used less than the
