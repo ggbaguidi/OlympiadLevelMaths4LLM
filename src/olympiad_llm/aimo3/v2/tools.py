@@ -8,6 +8,11 @@ import threading
 from .sandbox import AIMO3Sandbox
 from .require import _require_harmony
 
+_TIMEOUT_DIRECTIVE_RE = re.compile(
+    r"^\s*#\s*timeout\s*[:=]\s*(?P<s>\d+(?:\.\d+)?)\s*$",
+    re.IGNORECASE,
+)
+
 
 class AIMO3Tool:
     """Bridges Harmony tool-call messages to a sandboxed Jupyter kernel."""
@@ -134,6 +139,27 @@ class AIMO3Tool:
         lines[-1] = f"print({expr}){comment}"
         return "\n".join(lines)
 
+    @staticmethod
+    def _parse_timeout_directive(
+        code: str | None, *, max_scan_lines: int = 5
+    ) -> float | None:
+        """Parse first non-empty '# timeout: N' directive (seconds)."""
+        src = str(code or "")
+        if not src:
+            return None
+        lines = src.splitlines()
+        for line in lines[: max(0, int(max_scan_lines))]:
+            if not line.strip():
+                continue
+            match = _TIMEOUT_DIRECTIVE_RE.match(line)
+            if not match:
+                return None
+            try:
+                return float(match.group("s"))
+            except Exception:  # noqa: BLE001
+                return None
+        return None
+
     @property
     def instruction(self) -> str:
         return self._tool_prompt
@@ -166,6 +192,8 @@ class AIMO3Tool:
         timeout_s: float | None = None
         if timeout_override_s is not None:
             timeout_s = float(timeout_override_s)
+        else:
+            timeout_s = self._parse_timeout_directive(raw_script)
 
         if timeout_s is not None and self._tool_timeout_cap_s is not None:
             timeout_s = min(float(timeout_s), float(self._tool_timeout_cap_s))
