@@ -12,6 +12,7 @@ import json
 import math
 import os
 import queue
+import re
 import threading
 import time
 from collections import defaultdict, deque, Counter
@@ -201,6 +202,19 @@ class AIMO3Solver:
 
     cfg: AIMO3Config
     port: int = 8000
+
+    _VERDICT_RE = re.compile(r"VERDICT\s*:\s*(CORRECT|INCORRECT)", re.IGNORECASE)
+
+    @classmethod
+    def _extract_verdict_label(cls, text: str | None) -> str | None:
+        """Extract the last explicit VERDICT label from text."""
+        matches = cls._VERDICT_RE.findall(str(text or ""))
+        if not matches:
+            return None
+        label = str(matches[-1]).upper()
+        if label in {"CORRECT", "INCORRECT"}:
+            return label
+        return None
 
     @staticmethod
     def _truncate(text: str | None, max_chars: int) -> str:
@@ -556,15 +570,18 @@ class AIMO3Solver:
                 # If it's a "final" channel or no more tool calls, we're done.
                 break
 
-            # Parse the verification verdict from accumulated text.
-            full_text = "\n".join(text_parts)
+            # Parse the verification verdict from both python tool output and assistant text.
+            assistant_text = "\n".join(text_parts)
+            tool_text = "\n".join(transcript_python_outputs)
+            full_text = "\n".join(
+                part for part in (tool_text, assistant_text) if part.strip()
+            )
             upper = full_text.upper()
 
             # 1. Exact match: "VERDICT: CORRECT" / "VERDICT: INCORRECT"
-            if "VERDICT: CORRECT" in upper or "VERDICT:CORRECT" in upper:
-                result["verdict"] = "CORRECT"
-            elif "VERDICT: INCORRECT" in upper or "VERDICT:INCORRECT" in upper:
-                result["verdict"] = "INCORRECT"
+            parsed_verdict = self._extract_verdict_label(full_text)
+            if parsed_verdict is not None:
+                result["verdict"] = parsed_verdict
             else:
                 # 2. Fuzzy match: look for strong signal phrases.
                 #    Check for INCORRECT first (more specific) to avoid false
