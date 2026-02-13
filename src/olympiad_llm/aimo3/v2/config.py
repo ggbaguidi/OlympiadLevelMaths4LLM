@@ -25,6 +25,12 @@ class AIMO3Config:
         "Use this tool to execute Python code. The environment is a stateful Jupyter notebook. "
         "You must use print() to output results."
     )
+    # Z3-specific tool prompt (used when z3_tool_enabled is True)
+    z3_tool_prompt: str = (
+        "Use Z3 SMT solver for constraint solving. Available as 'from z3 import *'. "
+        "Best for: Diophantine equations, combinatorial problems, proving propositions. "
+        "Examples: x = Int('x'); solve(x + y == 10, x > 0)"
+    )
     preference_prompt: str = (
         "You have access to `math`, `numpy` and `sympy` to solve the problem."
     )
@@ -164,6 +170,12 @@ class AIMO3Config:
     # Sandbox pool configuration
     kernel_init_workers: int = 2
     sandbox_pool_size: int = 8
+
+    # Z3 SMT solver tool configuration
+    # Enable Z3 tool for constraint solving and theorem proving
+    z3_tool_enabled: bool = False
+    # Z3 tool timeout (seconds)
+    z3_tool_timeout: float = 60.0
 
     # Strict extraction mode
     strict_fallback_extraction: bool = True
@@ -484,6 +496,18 @@ class AIMO3Config:
         top_p = _env_float("AIMO3_TOP_P", AIMO3Config.top_p)
         top_k = _env_int("AIMO3_TOP_K", AIMO3Config.top_k)
 
+        # Z3 tool configuration
+        z3_tool_enabled = os.getenv(
+            "AIMO3_Z3_TOOL_ENABLED", "0"
+        ).strip().lower() not in {
+            "0",
+            "false",
+            "no",
+        }
+        z3_tool_timeout = _env_float(
+            "AIMO3_Z3_TOOL_TIMEOUT", AIMO3Config.z3_tool_timeout
+        )
+
         return AIMO3Config(
             seed=seed,
             search_tokens=search_tokens,
@@ -560,4 +584,6 @@ class AIMO3Config:
             verify_min_remaining_s=verify_min_remaining_s,
             verify_temperature=verify_temperature,
             verify_disable_globally_if_all_unknown=verify_disable_globally_if_all_unknown,
+            z3_tool_enabled=z3_tool_enabled,
+            z3_tool_timeout=z3_tool_timeout,
         )

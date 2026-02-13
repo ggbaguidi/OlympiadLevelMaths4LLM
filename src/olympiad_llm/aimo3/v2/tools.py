@@ -13,6 +13,26 @@ _TIMEOUT_DIRECTIVE_RE = re.compile(
     re.IGNORECASE,
 )
 
+Z3_TOOL_PROMPT = """Use this tool to execute Z3 SMT solver code for constraint solving and theorem proving.
+The environment has 'from z3 import *' already imported.
+
+When to use Z3:
+- Integer/real constraints and Diophantine equations
+- Combinatorial problems (scheduling, assignment)
+- Proving mathematical propositions
+- Finding solutions to systems of constraints
+
+Z3 API examples:
+- Integers: x = Int('x'), y = Int('y')
+- Reals: x = Real('x'), y = Real('y')  
+- Booleans: p = Bool('p')
+- Solve: solve(x + y == 10, x > 0)
+- Optimize: opt = Optimize(); opt.add(x + y == 10); opt.maximize(x)
+- Check sat: s = Solver(); s.add(x**2 == 2); s.check()
+- Get model: s.model()[x]
+
+Always use print() to output results. The final answer must be a non-negative integer between 0 and 99999."""
+
 
 class AIMO3Tool:
     """Bridges Harmony tool-call messages to a sandboxed Jupyter kernel."""
@@ -200,6 +220,110 @@ class AIMO3Tool:
 
         with self._execution_lock:
             output = self._jupyter_session.execute(final_script, timeout=timeout_s)
+        return [self._make_response(output, channel=getattr(message, "channel", None))]
+
+    def close(self) -> None:
+        if self._jupyter_session is not None and self._owns_session:
+            self._jupyter_session.close()
+        self._jupyter_session = None
+
+    def __del__(self) -> None:
+        self.close()
+
+
+class Z3Tool:
+    """Bridges Harmony tool-call messages to Z3 SMT solver in a sandboxed Jupyter kernel."""
+
+    def __init__(
+        self,
+        local_jupyter_timeout: float,
+        tool_prompt: str | None = None,
+        sandbox: AIMO3Sandbox | None = None,
+        tool_timeout_cap_s: float | None = None,
+    ):
+        self._h = _require_harmony()
+        self._local_jupyter_timeout = float(local_jupyter_timeout)
+        self._tool_prompt = tool_prompt or Z3_TOOL_PROMPT
+        self._tool_timeout_cap_s = (
+            None if tool_timeout_cap_s is None else float(tool_timeout_cap_s)
+        )
+        self._jupyter_session = sandbox
+        self._owns_session = sandbox is None
+        self._execution_lock = threading.Lock()
+        self._init_lock = threading.Lock()
+
+    def _ensure_session(self) -> None:
+        if self._jupyter_session is None:
+            with self._init_lock:
+                if self._jupyter_session is None:
+                    self._jupyter_session = AIMO3Sandbox(
+                        timeout=self._local_jupyter_timeout
+                    )
+
+    @staticmethod
+    def _check_z3_available(session: AIMO3Sandbox) -> bool:
+        """Check if Z3 is available in the sandbox."""
+        result = session.execute("import z3; print('Z3_AVAILABLE')")
+        return "Z3_AVAILABLE" in result
+
+    @staticmethod
+    def _parse_timeout_directive(
+        code: str | None, *, max_scan_lines: int = 5
+    ) -> float | None:
+        """Parse first non-empty '# timeout: N' directive (seconds)."""
+        src = str(code or "")
+        if not src:
+            return None
+        lines = src.splitlines()
+        for line in lines[: max(0, int(max_scan_lines))]:
+            if not line.strip():
+                continue
+            match = _TIMEOUT_DIRECTIVE_RE.match(line)
+            if not match:
+                return None
+            try:
+                return float(match.group("s"))
+            except Exception:
+                return None
+        return None
+
+    @property
+    def instruction(self) -> str:
+        return self._tool_prompt
+
+    @property
+    def tool_config(self):
+        ToolNamespaceConfig = self._h["ToolNamespaceConfig"]
+        return ToolNamespaceConfig(name="z3", description=self.instruction, tools=[])
+
+    def _make_response(self, output: str, channel: str | None = None):
+        TextContent = self._h["TextContent"]
+        Author = self._h["Author"]
+        Message = self._h["Message"]
+        Role = self._h["Role"]
+        content = TextContent(text=output)
+        author = Author(role=Role.TOOL, name="z3")
+        msg = Message(author=author, content=[content]).with_recipient("assistant")
+        if channel:
+            msg = msg.with_channel(channel)
+        return msg
+
+    def process_sync_plus(self, message, timeout_override_s: float | None = None):
+        self._ensure_session()
+
+        raw_script = message.content[0].text
+
+        timeout_s: float | None = None
+        if timeout_override_s is not None:
+            timeout_s = float(timeout_override_s)
+        else:
+            timeout_s = self._parse_timeout_directive(raw_script)
+
+        if timeout_s is not None and self._tool_timeout_cap_s is not None:
+            timeout_s = min(float(timeout_s), float(self._tool_timeout_cap_s))
+
+        with self._execution_lock:
+            output = self._jupyter_session.execute(raw_script, timeout=timeout_s)
         return [self._make_response(output, channel=getattr(message, "channel", None))]
 
     def close(self) -> None:

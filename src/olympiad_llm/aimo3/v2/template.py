@@ -84,20 +84,22 @@ class AIMO3Template:
         # Per the Harmony prompt-format guidance, the system message identity should remain stable.
         return "You are ChatGPT, a large language model trained by OpenAI."
 
-    def get_system_content(self, tool_config):
+    def get_system_content(self, tool_configs):
         SystemContent = self._h["SystemContent"]
         ReasoningEffort = self._h["ReasoningEffort"]
         return (
             SystemContent.new()
             .with_model_identity(self._default_model_identity())
             .with_reasoning_effort(reasoning_effort=ReasoningEffort.HIGH)
-            .with_tools(tool_config)
+            .with_tools(tool_configs)
         )
 
-    def apply_chat_template(self, developer_prompt: str, user_prompt: str, tool_config):
+    def apply_chat_template(
+        self, developer_prompt: str, user_prompt: str, tool_configs
+    ):
         Message = self._h["Message"]
         Role = self._h["Role"]
-        system_content = self.get_system_content(tool_config)
+        system_content = self.get_system_content(tool_configs)
         system_message = Message.from_role_and_content(Role.SYSTEM, system_content)
 
         # The project prompts ("system prompts" in older code) are the DEVELOPER instructions

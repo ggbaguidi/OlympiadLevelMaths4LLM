@@ -58,6 +58,11 @@ try:
     from ortools.sat.python import cp_model  # noqa: F401
 except Exception:
     pass
+try:
+    from z3 import *  # noqa: F401, F403
+    z3_available = True
+except Exception:
+    z3_available = False
 """
 
 

@@ -30,7 +30,7 @@ from .trace import TraceRecorder, stable_problem_id
 from .vllm_server import VLLMServer
 from .require import _require_harmony, _require_openai
 from .template import AIMO3Template, VERIFY_STRATEGIES
-from .tools import AIMO3Tool
+from .tools import AIMO3Tool, Z3Tool
 from .wickelgren import augment_developer_prompt_with_meta, init_math_retriever_from_cfg
 
 
@@ -1119,14 +1119,36 @@ class AIMO3Solver:
         try:
             sandbox = self.sandbox_pool.get(timeout=self.cfg.sandbox_timeout)
 
+            # Build tool prompt - add Z3 info if enabled
+            tool_prompt = self.cfg.tool_prompt
+            if bool(getattr(self.cfg, "z3_tool_enabled", False)):
+                z3_info = (
+                    "\n\nZ3 SMT SOLVER AVAILABLE: You can use 'from z3 import *' for constraint "
+                    "solving. Best for Diophantine equations, combinatorial problems, and proving "
+                    "propositions. Example: x = Int('x'); solve(x**2 == 2)"
+                )
+                tool_prompt = tool_prompt + z3_info
+
             local_tool = AIMO3Tool(
                 local_jupyter_timeout=self.cfg.jupyter_timeout,
-                tool_prompt=self.cfg.tool_prompt,
+                tool_prompt=tool_prompt,
                 sandbox=sandbox,
             )
 
+            # Create Z3 tool if enabled
+            local_z3_tool = None
+            if bool(getattr(self.cfg, "z3_tool_enabled", False)):
+                local_z3_tool = Z3Tool(
+                    local_jupyter_timeout=getattr(self.cfg, "z3_tool_timeout", 60.0),
+                    sandbox=sandbox,
+                )
+
+            tool_configs = [local_tool.tool_config]
+            if local_z3_tool:
+                tool_configs.append(local_z3_tool.tool_config)
+
             messages = self.template.apply_chat_template(
-                developer_prompt, problem, local_tool.tool_config
+                developer_prompt, problem, tool_configs
             )
 
             # Inject continuation context from a previous incomplete wave.
@@ -1277,6 +1299,32 @@ class AIMO3Solver:
                         code_text = (last_message.content[0].text or "").lower()
                         if "lean" in code_text or "lake" in code_text:
                             lean_calls += 1
+
+                    conversation.messages = conversation.messages + list(tool_responses)
+
+                elif last_message.recipient == "z3" and local_z3_tool is not None:
+                    python_calls += 1
+                    with contextlib.suppress(Exception):
+                        transcript_python_calls.append(
+                            str(last_message.content[0].text or "")
+                        )
+                    tool_responses = local_z3_tool.process_sync_plus(last_message)
+                    response_text = tool_responses[0].content[0].text
+                    with contextlib.suppress(Exception):
+                        transcript_python_outputs.append(str(response_text or ""))
+
+                    if (
+                        response_text.startswith("[ERROR]")
+                        or "Traceback" in response_text
+                        or "Error:" in response_text
+                    ):
+                        python_errors += 1
+                        if "timed out" in response_text.lower():
+                            timeout_count += 1
+                        last_error = response_text[:500]
+
+                    if "VERIFY_OK" in response_text:
+                        verification_marker_found = True
 
                     conversation.messages = conversation.messages + list(tool_responses)
 

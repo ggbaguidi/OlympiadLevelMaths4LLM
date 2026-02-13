@@ -32,6 +32,7 @@ REQUIRED_LIBRARIES = [
     "ortools",
     "sentence-transformers",
     "scikit-learn",  # Required by sentence-transformers
+    "z3-solver",
 ]
 
 
