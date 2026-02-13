@@ -547,17 +547,82 @@ _EMBEDDER_INSTANCE: Optional[ProblemEmbedder] = None
 
 def get_global_bandit(
     strategy_names: Optional[List[str]] = None,
+    exploration_factor: Optional[float] = None,
+    similarity_threshold: Optional[float] = None,
     experience_file: Optional[Path] = None,
 ) -> StrategyBandit:
     """Get or create global bandit instance."""
     global _BANDIT_INSTANCE
+
+    requested_strategy_names = list(strategy_names or [])
+    requested_exploration = (
+        float(exploration_factor) if exploration_factor is not None else 1.0
+    )
+    requested_similarity = (
+        float(similarity_threshold) if similarity_threshold is not None else 0.7
+    )
+
     if _BANDIT_INSTANCE is None:
         if strategy_names is None:
             raise ValueError("strategy_names required for bandit initialization")
         _BANDIT_INSTANCE = StrategyBandit(
-            strategy_names=strategy_names,
+            strategy_names=requested_strategy_names,
+            exploration_factor=requested_exploration,
+            similarity_threshold=requested_similarity,
             experience_file=experience_file,
         )
+        return _BANDIT_INSTANCE
+
+    reinitialize = False
+    if (
+        requested_strategy_names
+        and _BANDIT_INSTANCE.strategy_names != requested_strategy_names
+    ):
+        reinitialize = True
+    if exploration_factor is not None and not math.isclose(
+        float(_BANDIT_INSTANCE.exploration_factor),
+        requested_exploration,
+        rel_tol=1e-9,
+        abs_tol=1e-9,
+    ):
+        reinitialize = True
+    if similarity_threshold is not None and not math.isclose(
+        float(_BANDIT_INSTANCE.similarity_threshold),
+        requested_similarity,
+        rel_tol=1e-9,
+        abs_tol=1e-9,
+    ):
+        reinitialize = True
+    if (
+        experience_file is not None
+        and _BANDIT_INSTANCE.experience_file != experience_file
+    ):
+        reinitialize = True
+
+    if reinitialize:
+        _BANDIT_INSTANCE = StrategyBandit(
+            strategy_names=(
+                requested_strategy_names
+                if requested_strategy_names
+                else _BANDIT_INSTANCE.strategy_names
+            ),
+            exploration_factor=(
+                requested_exploration
+                if exploration_factor is not None
+                else float(_BANDIT_INSTANCE.exploration_factor)
+            ),
+            similarity_threshold=(
+                requested_similarity
+                if similarity_threshold is not None
+                else float(_BANDIT_INSTANCE.similarity_threshold)
+            ),
+            experience_file=(
+                experience_file
+                if experience_file is not None
+                else _BANDIT_INSTANCE.experience_file
+            ),
+        )
+
     return _BANDIT_INSTANCE
 
 

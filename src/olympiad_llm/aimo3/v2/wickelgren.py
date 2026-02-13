@@ -520,6 +520,11 @@ def select_strategy(
     attempt_index: int,
     problem_text: str | None = None,
     used_strategies: list[str] | None = None,
+    meta_learning_enabled: bool = True,
+    meta_learning_experience_file: str | Path | None = None,
+    meta_learning_exploration: float = 1.0,
+    meta_learning_similarity_threshold: float = 0.7,
+    preferred_strategy: str | None = None,
 ) -> tuple[StrategyCard, dict[str, Any]]:
     """Select strategy using meta-learning bandit when available.
 
@@ -529,8 +534,19 @@ def select_strategy(
     if not GENERIC_STRATEGY_CARDS:
         raise RuntimeError("No strategy cards configured")
 
+    used = list(used_strategies or [])
+
+    if preferred_strategy:
+        for card in GENERIC_STRATEGY_CARDS:
+            if card.name == preferred_strategy and card.name not in used:
+                return card, {
+                    "method": "preferred_strategy",
+                    "exploration": False,
+                    "cluster": "preferred",
+                }
+
     # Try meta-learning bandit if problem text is available
-    if problem_text:
+    if problem_text and meta_learning_enabled:
         try:
             from .meta_learning import get_global_bandit, get_global_embedder
 
@@ -538,11 +554,19 @@ def select_strategy(
             features = embedder.embed(problem_text)
 
             strategy_names = [card.name for card in GENERIC_STRATEGY_CARDS]
-            bandit = get_global_bandit(strategy_names=strategy_names)
-
-            strategy_name, meta = bandit.select_strategy(
-                features, attempt_index, used_strategies or []
+            experience_file = (
+                Path(str(meta_learning_experience_file).strip()).expanduser()
+                if str(meta_learning_experience_file or "").strip()
+                else None
             )
+            bandit = get_global_bandit(
+                strategy_names=strategy_names,
+                exploration_factor=float(meta_learning_exploration),
+                similarity_threshold=float(meta_learning_similarity_threshold),
+                experience_file=experience_file,
+            )
+
+            strategy_name, meta = bandit.select_strategy(features, attempt_index, used)
 
             # Find the strategy card
             for card in GENERIC_STRATEGY_CARDS:
@@ -552,7 +576,13 @@ def select_strategy(
             # Fallback to rotation on any error
             pass
 
-    # Fallback: simple rotation
+    # Fallback: rotation preferring strategies not used on this problem yet.
+    for offset in range(len(GENERIC_STRATEGY_CARDS)):
+        idx = (int(attempt_index) + offset) % len(GENERIC_STRATEGY_CARDS)
+        candidate = GENERIC_STRATEGY_CARDS[idx]
+        if candidate.name not in used:
+            return candidate, {"method": "rotation", "exploration": True}
+
     card = GENERIC_STRATEGY_CARDS[int(attempt_index) % len(GENERIC_STRATEGY_CARDS)]
     return card, {"method": "rotation", "exploration": True}
 
@@ -581,9 +611,21 @@ def augment_developer_prompt_with_meta(
     retriever_include_examples: bool = True,
     retriever_include_definitions: bool = True,
     used_strategies: list[str] | None = None,
+    meta_learning_enabled: bool = True,
+    meta_learning_experience_file: str | Path | None = None,
+    meta_learning_exploration: float = 1.0,
+    meta_learning_similarity_threshold: float = 0.7,
+    preferred_strategy: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     card, strategy_meta = select_strategy(
-        int(attempt_index), problem_text, used_strategies
+        int(attempt_index),
+        problem_text,
+        used_strategies,
+        meta_learning_enabled=bool(meta_learning_enabled),
+        meta_learning_experience_file=meta_learning_experience_file,
+        meta_learning_exploration=float(meta_learning_exploration),
+        meta_learning_similarity_threshold=float(meta_learning_similarity_threshold),
+        preferred_strategy=preferred_strategy,
     )
     strategy_block = render_strategy_card(card)
 

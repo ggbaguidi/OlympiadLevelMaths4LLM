@@ -19,6 +19,8 @@ from collections import defaultdict, deque, Counter
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import as_completed
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from .budget import TimeBudgetTracker
 from .answer_extraction import AnswerExtractor
@@ -31,7 +33,11 @@ from .vllm_server import VLLMServer
 from .require import _require_harmony, _require_openai
 from .template import AIMO3Template, VERIFY_STRATEGIES
 from .tools import AIMO3Tool
-from .wickelgren import augment_developer_prompt_with_meta, init_math_retriever_from_cfg
+from .wickelgren import (
+    GENERIC_STRATEGY_CARDS,
+    augment_developer_prompt_with_meta,
+    init_math_retriever_from_cfg,
+)
 
 
 def _magnitude_bucket(x: int) -> int:
@@ -365,7 +371,10 @@ class AIMO3Solver:
                 self.sandbox_pool.put(sb)
 
     def _should_early_stop(
-        self, detailed: list[AttemptResult], time_spent_s: float = float("inf")
+        self,
+        detailed: list[AttemptResult],
+        time_spent_s: float = float("inf"),
+        early_stop_target: int | None = None,
     ) -> bool:
         """Quality-aware early stop.
 
@@ -400,7 +409,12 @@ class AIMO3Solver:
 
         # Standard early stop logic
         need = max(0, int(self.cfg.early_stop_min_verified))
-        target_votes = max(1, int(self.cfg.early_stop))
+        target_votes = max(
+            1,
+            int(
+                self.cfg.early_stop if early_stop_target is None else early_stop_target
+            ),
+        )
 
         if votes < target_votes:
             return False
@@ -951,6 +965,39 @@ class AIMO3Solver:
             include_problem_text=self.cfg.trace_include_problem_text,
         )
         self._verify_runtime_disabled = False
+        self._meta_embedder = None
+        self._adaptive_hparams = None
+
+        if bool(getattr(self.cfg, "meta_learning_enabled", False)):
+            with contextlib.suppress(Exception):
+                from .meta_learning import (
+                    AdaptiveHyperparameters,
+                    get_global_bandit,
+                    get_global_embedder,
+                )
+
+                strategy_names = [card.name for card in GENERIC_STRATEGY_CARDS]
+                experience_file_raw = str(
+                    getattr(self.cfg, "meta_learning_experience_file", "") or ""
+                )
+                experience_file = (
+                    Path(experience_file_raw).expanduser()
+                    if experience_file_raw.strip()
+                    else None
+                )
+
+                get_global_bandit(
+                    strategy_names=strategy_names,
+                    exploration_factor=float(
+                        getattr(self.cfg, "meta_learning_exploration", 1.0)
+                    ),
+                    similarity_threshold=float(
+                        getattr(self.cfg, "meta_learning_similarity_threshold", 0.7)
+                    ),
+                    experience_file=experience_file,
+                )
+                self._meta_embedder = get_global_embedder()
+                self._adaptive_hparams = AdaptiveHyperparameters(self.cfg)
 
     def close(self) -> None:
         if hasattr(self, "sandbox_pool"):
@@ -1007,12 +1054,17 @@ class AIMO3Solver:
         return self._cached_extractor
 
     def _build_attempt_prompt(
-        self, attempt_index: int, problem_text: str | None = None
-    ) -> tuple[str, str | None]:
+        self,
+        attempt_index: int,
+        problem_text: str | None = None,
+        used_strategies: list[str] | None = None,
+        preferred_strategy: str | None = None,
+    ) -> tuple[str, str | None, str | None]:
         """Build attempt-level developer prompt with optional strategy card."""
 
         developer_prompt = self.cfg.system_prompt
         attempt_tag: str | None = None
+        strategy_name: str | None = None
 
         if bool(self.cfg.wickelgren_strategies_enabled):
             developer_prompt, meta = augment_developer_prompt_with_meta(
@@ -1030,15 +1082,150 @@ class AIMO3Solver:
                 retriever_include_definitions=bool(
                     getattr(self.cfg, "retriever_include_definitions", True)
                 ),
+                used_strategies=used_strategies,
+                meta_learning_enabled=bool(
+                    getattr(self.cfg, "meta_learning_enabled", True)
+                ),
+                meta_learning_experience_file=str(
+                    getattr(self.cfg, "meta_learning_experience_file", "") or ""
+                ),
+                meta_learning_exploration=float(
+                    getattr(self.cfg, "meta_learning_exploration", 1.0)
+                ),
+                meta_learning_similarity_threshold=float(
+                    getattr(self.cfg, "meta_learning_similarity_threshold", 0.7)
+                ),
+                preferred_strategy=preferred_strategy,
             )
-            attempt_tag = f"wickelgren:{meta.get('card', 'unknown')}"
+            strategy_name = str(meta.get("card", "") or "").strip() or None
+            attempt_tag = f"wickelgren:{strategy_name or 'unknown'}"
             if bool(meta.get("retriever_used")):
                 attempt_tag += (
                     f"|rag={meta.get('retriever_results', 0)}"
                     f"|rag_backend={meta.get('retriever_backend', 'unknown')}"
                 )
 
-        return developer_prompt, attempt_tag
+        return developer_prompt, attempt_tag, strategy_name
+
+    @staticmethod
+    def _strategy_from_attempt_tag(tag: str | None) -> str | None:
+        """Extract Wickelgren strategy name from attempt tag."""
+        raw = str(tag or "").strip()
+        if not raw.startswith("wickelgren:"):
+            return None
+        card_chunk = raw.split("|", maxsplit=1)[0]
+        card_name = card_chunk.split(":", maxsplit=1)[-1].strip()
+        return card_name or None
+
+    def _adapt_problem_hyperparameters(
+        self, problem_text: str
+    ) -> tuple[Any | None, dict[str, object]]:
+        """Resolve per-problem meta-learned hyperparameters."""
+        if not bool(getattr(self.cfg, "meta_learning_enabled", False)):
+            return None, {}
+        if getattr(self, "_meta_embedder", None) is None:
+            return None, {}
+        if getattr(self, "_adaptive_hparams", None) is None:
+            return None, {}
+
+        try:
+            problem_features = self._meta_embedder.embed(problem_text)
+            adaptive_cfg = self._adaptive_hparams.get_config(problem_features)
+            if isinstance(adaptive_cfg, dict):
+                return problem_features, dict(adaptive_cfg)
+        except Exception:  # noqa: BLE001
+            return None, {}
+        return None, {}
+
+    def _update_meta_learning_from_problem_outcome(
+        self,
+        *,
+        problem_features: Any | None,
+        adaptive_cfg_used: dict[str, object],
+        detailed_results: list[AttemptResult],
+        ranked: list,
+        time_used_s: float,
+    ) -> None:
+        """Feed solved-problem outcomes back into strategy and hyperparameter learners."""
+        if not bool(getattr(self.cfg, "meta_learning_enabled", False)):
+            return
+        if problem_features is None or not ranked:
+            return
+
+        top_answer = ranked[0][0]
+        top_data = ranked[0][1] if ranked else {}
+        verify_correct = int(top_data.get("verify_correct", 0) or 0)
+        verify_incorrect = int(top_data.get("verify_incorrect", 0) or 0)
+        verified_votes = int(top_data.get("verified", 0) or 0)
+        confidence_signal = verified_votes > 0 or verify_correct > verify_incorrect
+        if not confidence_signal:
+            return
+        if not any(
+            isinstance(r.answer, int) and int(r.answer) == int(top_answer)
+            for r in detailed_results
+        ):
+            return
+
+        with contextlib.suppress(Exception):
+            from .meta_learning import get_global_bandit
+
+            strategy_names = [card.name for card in GENERIC_STRATEGY_CARDS]
+            experience_file_raw = str(
+                getattr(self.cfg, "meta_learning_experience_file", "") or ""
+            )
+            experience_file = (
+                Path(experience_file_raw).expanduser()
+                if experience_file_raw.strip()
+                else None
+            )
+            bandit = get_global_bandit(
+                strategy_names=strategy_names,
+                exploration_factor=float(
+                    getattr(self.cfg, "meta_learning_exploration", 1.0)
+                ),
+                similarity_threshold=float(
+                    getattr(self.cfg, "meta_learning_similarity_threshold", 0.7)
+                ),
+                experience_file=experience_file,
+            )
+
+            winning_attempts = [
+                r
+                for r in detailed_results
+                if isinstance(r.answer, int) and int(r.answer) == int(top_answer)
+            ]
+            first_success_attempt = (
+                min((r.attempt for r in winning_attempts), default=1)
+                if winning_attempts
+                else 1
+            )
+
+            for r in detailed_results:
+                strategy_name = self._strategy_from_attempt_tag(r.tag)
+                if not strategy_name:
+                    continue
+                is_success = isinstance(r.answer, int) and int(r.answer) == int(
+                    top_answer
+                )
+                attempts_to_success = (
+                    first_success_attempt if is_success else max(1, int(r.attempt))
+                )
+                bandit.update(
+                    problem_features=problem_features,
+                    strategy_name=strategy_name,
+                    success=bool(is_success),
+                    attempts_to_success=attempts_to_success,
+                    time_spent=float(time_used_s),
+                )
+
+        if adaptive_cfg_used and getattr(self, "_adaptive_hparams", None) is not None:
+            with contextlib.suppress(Exception):
+                self._adaptive_hparams.update_from_outcome(
+                    problem_features=problem_features,
+                    config_used=adaptive_cfg_used,
+                    success=True,
+                    time_spent=float(time_used_s),
+                )
 
     @staticmethod
     def _compute_mean_entropy(logprobs_buffer: list) -> float:
@@ -1079,6 +1266,7 @@ class AIMO3Solver:
         deadline: float,
         problem_id: str | None = None,
         continuation_context: str | None = None,
+        temperature: float | None = None,
     ) -> AttemptResult:
         """Run a single solver attempt with streaming completions and tool execution.
 
@@ -1119,6 +1307,9 @@ class AIMO3Solver:
         extracted_numerical_value: float | int | None = None
 
         attempt_seed = (self.cfg.seed + attempt_index) ** 2
+        attempt_temperature = (
+            float(self.cfg.temperature) if temperature is None else float(temperature)
+        )
         Conversation = self._h["Conversation"]
         Role = self.Role
 
@@ -1187,7 +1378,7 @@ class AIMO3Solver:
 
                 stream = self.client.completions.create(
                     model=self.cfg.served_model_name,
-                    temperature=self.cfg.temperature,
+                    temperature=attempt_temperature,
                     top_p=self.cfg.top_p,
                     logprobs=(
                         self.cfg.top_logprobs
@@ -1274,9 +1465,9 @@ class AIMO3Solver:
                     # Phase 3: Pass expected answer for enhanced verification
                     tool_responses = local_tool.process_sync_plus(
                         last_message,
-                        expected_answer=final_answer
-                        if final_answer is not None
-                        else None,
+                        expected_answer=(
+                            final_answer if final_answer is not None else None
+                        ),
                     )
                     response_text = tool_responses[0].content[0].text
                     with contextlib.suppress(Exception):
@@ -1415,6 +1606,19 @@ class AIMO3Solver:
         print(f"\nProblem: {problem}\n")
 
         user_input = f"{problem} {self.cfg.preference_prompt}"
+        problem_features, adaptive_cfg = self._adapt_problem_hyperparameters(problem)
+        attempts_for_problem = max(
+            1, int(adaptive_cfg.get("attempts", self.cfg.attempts))
+        )
+        temperature_for_problem = float(
+            adaptive_cfg.get("temperature", self.cfg.temperature)
+        )
+        early_stop_for_problem = max(
+            1, int(adaptive_cfg.get("early_stop", self.cfg.early_stop))
+        )
+        preferred_strategy = (
+            str(adaptive_cfg.get("preferred_strategy") or "").strip() or None
+        )
 
         # Compute budget using adaptive tracker.
         budget = self._budget_tracker.compute_budget()
@@ -1440,11 +1644,36 @@ class AIMO3Solver:
             with contextlib.suppress(Exception):
                 env_snapshot = self._sandbox_env_snapshot()
 
+        if adaptive_cfg:
+            print(
+                "[Meta] "
+                f"attempts={attempts_for_problem}, "
+                f"temperature={temperature_for_problem:.2f}, "
+                f"early_stop={early_stop_for_problem}, "
+                f"preferred={preferred_strategy or 'none'}"
+            )
+
         # Build task list: (developer_prompt, attempt_index, tag).
         tasks = []
-        for i in range(self.cfg.attempts):
-            dev_prompt, tag = self._build_attempt_prompt(i, problem)
+        used_strategies: list[str] | None = (
+            []
+            if bool(getattr(self.cfg, "meta_learning_track_strategies", True))
+            else None
+        )
+        for i in range(attempts_for_problem):
+            dev_prompt, tag, strategy_name = self._build_attempt_prompt(
+                i,
+                problem,
+                used_strategies=used_strategies,
+                preferred_strategy=(preferred_strategy if i == 0 else None),
+            )
             tasks.append((dev_prompt, i, tag))
+            if (
+                used_strategies is not None
+                and strategy_name
+                and strategy_name not in used_strategies
+            ):
+                used_strategies.append(strategy_name)
 
         detailed_results: list[AttemptResult] = []
         stop_event = threading.Event()
@@ -1461,7 +1690,8 @@ class AIMO3Solver:
                     tag,
                     stop_event,
                     deadline,
-                    problem_id,
+                    problem_id=problem_id,
+                    temperature=temperature_for_problem,
                 )
                 futures.append(f)
 
@@ -1471,7 +1701,11 @@ class AIMO3Solver:
                     detailed_results.append(result)
 
                     time_spent = time.time() - problem_start
-                    if self._should_early_stop(detailed_results, time_spent):
+                    if self._should_early_stop(
+                        detailed_results,
+                        time_spent,
+                        early_stop_target=early_stop_for_problem,
+                    ):
                         stop_event.set()
                         for f in futures:
                             f.cancel()
@@ -1504,8 +1738,11 @@ class AIMO3Solver:
                         r.stats.python_calls,
                         r.stats.token_count,
                     ),
+                    default=None,
                 )
-                cont_ctx = best_w1.output_text or None
+                cont_ctx = (
+                    best_w1.output_text if best_w1 is not None else None
+                ) or None
 
                 print(
                     f"[Adaptive] No answer found — granted {extension:.0f}s "
@@ -1516,14 +1753,22 @@ class AIMO3Solver:
                 stop_event_2 = threading.Event()
                 executor_2 = ThreadPoolExecutor(max_workers=self.cfg.workers)
                 # Use fresh attempt indices so seeds differ from the first wave.
-                wave2_start = self.cfg.attempts
+                wave2_start = attempts_for_problem
                 try:
                     futures_2 = []
-                    for i in range(self.cfg.attempts):
+                    for i in range(attempts_for_problem):
                         attempt_idx = wave2_start + i
-                        dev_prompt, tag = self._build_attempt_prompt(
-                            attempt_idx, problem
+                        dev_prompt, tag, strategy_name = self._build_attempt_prompt(
+                            attempt_idx,
+                            problem,
+                            used_strategies=used_strategies,
                         )
+                        if (
+                            used_strategies is not None
+                            and strategy_name
+                            and strategy_name not in used_strategies
+                        ):
+                            used_strategies.append(strategy_name)
                         f2 = executor_2.submit(
                             self._process_attempt,
                             user_input,
@@ -1532,8 +1777,9 @@ class AIMO3Solver:
                             tag,
                             stop_event_2,
                             new_deadline,
-                            problem_id,
+                            problem_id=problem_id,
                             continuation_context=cont_ctx,
+                            temperature=temperature_for_problem,
                         )
                         futures_2.append(f2)
 
@@ -1543,7 +1789,11 @@ class AIMO3Solver:
                             detailed_results.append(result)
 
                             time_spent_2 = time.time() - problem_start
-                            if self._should_early_stop(detailed_results, time_spent_2):
+                            if self._should_early_stop(
+                                detailed_results,
+                                time_spent_2,
+                                early_stop_target=early_stop_for_problem,
+                            ):
                                 stop_event_2.set()
                                 for f2 in futures_2:
                                     f2.cancel()
@@ -1623,6 +1873,14 @@ class AIMO3Solver:
         else:
             final_answer = 0
             print("\nFinal Answer: 0 (no valid candidates)\n")
+
+        self._update_meta_learning_from_problem_outcome(
+            problem_features=problem_features,
+            adaptive_cfg_used=adaptive_cfg,
+            detailed_results=detailed_results,
+            ranked=ranked,
+            time_used_s=time_used,
+        )
 
         # Pass the allocated budget so leftover time can be added to carryover pool
         try:
