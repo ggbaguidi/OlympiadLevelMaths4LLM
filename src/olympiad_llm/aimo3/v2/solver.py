@@ -419,6 +419,8 @@ class AIMO3Solver:
         time_remaining_s: float,
     ) -> bool:
         """Decide whether the verification phase should trigger."""
+        if bool(getattr(self, "_verify_runtime_disabled", False)):
+            return False
         if not self.cfg.verify_phase_enabled:
             return False
         if not ranked:
@@ -948,6 +950,7 @@ class AIMO3Solver:
             path=self.cfg.trace_path,
             include_problem_text=self.cfg.trace_include_problem_text,
         )
+        self._verify_runtime_disabled = False
 
     def close(self) -> None:
         if hasattr(self, "sandbox_pool"):
@@ -1553,6 +1556,25 @@ class AIMO3Solver:
             ranked = self._verify_candidates(
                 problem, ranked_for_verify, verify_deadline, problem_id
             )
+            # If verifier produced no decisive signals at all, disable it for
+            # the rest of the run (optional) to avoid wasting budget.
+            had_decisive_signal = any(
+                (
+                    int(d.get("verify_correct", 0) or 0)
+                    + int(d.get("verify_incorrect", 0) or 0)
+                )
+                > 0
+                for _a, d in ranked
+            )
+            if (
+                not had_decisive_signal
+                and bool(getattr(self.cfg, "verify_disable_globally_if_all_unknown", True))
+            ):
+                self._verify_runtime_disabled = True
+                print(
+                    "[Verify] No decisive verification signal (all UNKNOWN). "
+                    "Disabling verification for remaining problems."
+                )
             # Update time_used to include verification.
             time_used = time.time() - problem_start
 

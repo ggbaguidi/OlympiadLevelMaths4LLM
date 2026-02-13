@@ -206,6 +206,9 @@ class AIMO3Config:
     verify_min_remaining_s: float = 90.0
     # Temperature for verification attempts (lower = more deterministic checks).
     verify_temperature: float = 0.3
+    # If a full verification phase yields only UNKNOWN verdicts (no correct/incorrect
+    # signal), disable verification for the rest of the run to save budget.
+    verify_disable_globally_if_all_unknown: bool = True
 
     # Hardware requirements
     # vLLM (as used in Kaggle) typically requires an NVIDIA GPU with a working driver.
@@ -412,6 +415,9 @@ class AIMO3Config:
         verify_temperature = _env_float(
             "AIMO3_VERIFY_TEMPERATURE", AIMO3Config.verify_temperature
         )
+        verify_disable_globally_if_all_unknown = os.getenv(
+            "AIMO3_VERIFY_DISABLE_GLOBALLY_IF_ALL_UNKNOWN", "1"
+        ).strip().lower() not in {"0", "false", "no"}
 
         # Adaptive budget tuning
         adaptive_budget_flex_pool_fraction = _env_float(
@@ -551,4 +557,5 @@ class AIMO3Config:
             verify_trigger_max_votes=verify_trigger_max_votes,
             verify_min_remaining_s=verify_min_remaining_s,
             verify_temperature=verify_temperature,
+            verify_disable_globally_if_all_unknown=verify_disable_globally_if_all_unknown,
         )
