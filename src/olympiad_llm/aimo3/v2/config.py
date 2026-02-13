@@ -177,6 +177,12 @@ class AIMO3Config:
     # Z3 tool timeout (seconds)
     z3_tool_timeout: float = 60.0
 
+    # Phase 3: Enhanced tool output verification
+    # Enable enhanced verification of tool outputs (numerical validation, error detection)
+    tool_verification_enabled: bool = True
+    # Minimum confidence threshold for verification (0.0 to 1.0)
+    tool_verification_min_confidence: float = 0.5
+
     # Strict extraction mode
     strict_fallback_extraction: bool = True
 

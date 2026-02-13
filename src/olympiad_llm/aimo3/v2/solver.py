@@ -30,7 +30,7 @@ from .trace import TraceRecorder, stable_problem_id
 from .vllm_server import VLLMServer
 from .require import _require_harmony, _require_openai
 from .template import AIMO3Template, VERIFY_STRATEGIES
-from .tools import AIMO3Tool, Z3Tool
+from .tools import AIMO3Tool
 from .wickelgren import augment_developer_prompt_with_meta, init_math_retriever_from_cfg
 
 
@@ -475,6 +475,7 @@ class AIMO3Solver:
                 local_jupyter_timeout=self.cfg.jupyter_timeout,
                 tool_prompt=self.cfg.tool_prompt,
                 sandbox=sandbox,
+                z3_enabled=bool(getattr(self.cfg, "z3_tool_enabled", False)),
             )
 
             # Build the verification prompt.
@@ -1112,6 +1113,13 @@ class AIMO3Solver:
         verification_marker_found = False
         deadline_exceeded = False
 
+        # Phase 3: Enhanced verification tracking
+        tool_output_verified = False
+        verification_confidence = 0.0
+        verification_error_type: str | None = None
+        verification_warnings: list[str] | None = None
+        extracted_numerical_value: float | int | None = None
+
         attempt_seed = (self.cfg.seed + attempt_index) ** 2
         Conversation = self._h["Conversation"]
         Role = self.Role
@@ -1133,22 +1141,12 @@ class AIMO3Solver:
                 local_jupyter_timeout=self.cfg.jupyter_timeout,
                 tool_prompt=tool_prompt,
                 sandbox=sandbox,
+                z3_enabled=bool(getattr(self.cfg, "z3_tool_enabled", False)),
             )
 
-            # Create Z3 tool if enabled
-            local_z3_tool = None
-            if bool(getattr(self.cfg, "z3_tool_enabled", False)):
-                local_z3_tool = Z3Tool(
-                    local_jupyter_timeout=getattr(self.cfg, "z3_tool_timeout", 60.0),
-                    sandbox=sandbox,
-                )
-
-            tool_configs = [local_tool.tool_config]
-            if local_z3_tool:
-                tool_configs.append(local_z3_tool.tool_config)
-
+            # Get tool configs - returns list if Z3 enabled, single config otherwise
             messages = self.template.apply_chat_template(
-                developer_prompt, problem, tool_configs
+                developer_prompt, problem, local_tool.tool_config
             )
 
             # Inject continuation context from a previous incomplete wave.
@@ -1269,13 +1267,19 @@ class AIMO3Solver:
                         final_answer = self._extractor.extract_int_fallback(answer_text)
                     break
 
-                if last_message.recipient == "python":
+                if last_message.recipient in ["python", "z3"]:
                     python_calls += 1
                     with contextlib.suppress(Exception):
                         transcript_python_calls.append(
                             str(last_message.content[0].text or "")
                         )
-                    tool_responses = local_tool.process_sync_plus(last_message)
+                    # Phase 3: Pass expected answer for enhanced verification
+                    tool_responses = local_tool.process_sync_plus(
+                        last_message,
+                        expected_answer=final_answer
+                        if final_answer is not None
+                        else None,
+                    )
                     response_text = tool_responses[0].content[0].text
                     with contextlib.suppress(Exception):
                         transcript_python_outputs.append(str(response_text or ""))
@@ -1294,37 +1298,24 @@ class AIMO3Solver:
                     if "VERIFY_OK" in response_text:
                         verification_marker_found = True
 
+                    # Phase 3: Capture enhanced verification results
+                    if "[VERIFICATION" in response_text:
+                        # Parse verification results from the response
+                        if "[VERIFICATION WARNING]" in response_text:
+                            # Tool output had issues
+                            pass  # Already counted as error above
+                        elif "[VERIFICATION NOTICE]" in response_text:
+                            # Tool output had warnings but passed
+                            tool_output_verified = True
+                            verification_confidence = (
+                                0.8  # Good confidence with warnings
+                            )
+
                     # Heuristic: detect Lean tool use inside Python code.
                     with contextlib.suppress(Exception):
                         code_text = (last_message.content[0].text or "").lower()
                         if "lean" in code_text or "lake" in code_text:
                             lean_calls += 1
-
-                    conversation.messages = conversation.messages + list(tool_responses)
-
-                elif last_message.recipient == "z3" and local_z3_tool is not None:
-                    python_calls += 1
-                    with contextlib.suppress(Exception):
-                        transcript_python_calls.append(
-                            str(last_message.content[0].text or "")
-                        )
-                    tool_responses = local_z3_tool.process_sync_plus(last_message)
-                    response_text = tool_responses[0].content[0].text
-                    with contextlib.suppress(Exception):
-                        transcript_python_outputs.append(str(response_text or ""))
-
-                    if (
-                        response_text.startswith("[ERROR]")
-                        or "Traceback" in response_text
-                        or "Error:" in response_text
-                    ):
-                        python_errors += 1
-                        if "timed out" in response_text.lower():
-                            timeout_count += 1
-                        last_error = response_text[:500]
-
-                    if "VERIFY_OK" in response_text:
-                        verification_marker_found = True
 
                     conversation.messages = conversation.messages + list(tool_responses)
 
@@ -1368,6 +1359,12 @@ class AIMO3Solver:
                 ),
                 deadline_exceeded=deadline_exceeded,
                 last_error=last_error,
+                # Phase 3: Enhanced verification fields
+                tool_output_verified=tool_output_verified,
+                verification_confidence=verification_confidence,
+                verification_error_type=verification_error_type,
+                verification_warnings=verification_warnings,
+                extracted_numerical_value=extracted_numerical_value,
             ),
             output_text=output_text,
             tag=attempt_tag,

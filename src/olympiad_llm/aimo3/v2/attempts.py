@@ -27,6 +27,18 @@ class AttemptStats:
     # None => use the legacy heuristic (python_calls>0 and python_errors==0).
     verification_marker_found: bool | None = None
 
+    # Phase 3: Enhanced verification fields
+    # Whether the tool output passed enhanced verification
+    tool_output_verified: bool = False
+    # Confidence score from verification (0.0 to 1.0)
+    verification_confidence: float = 0.0
+    # Type of error detected during verification (if any)
+    verification_error_type: str | None = None
+    # List of warnings from verification
+    verification_warnings: list[str] | None = None
+    # Numerical value extracted from tool output (if any)
+    extracted_numerical_value: float | int | None = None
+
     # Last error encountered during tool execution (if any).
     last_error: str | None = None
 
@@ -35,6 +47,10 @@ class AttemptStats:
         """Heuristic: attempt used the tool and tool produced no errors OR explicitly verified."""
         # If the model explicitly said "VERIFY_OK", trust it even if there were errors.
         if self.verification_marker_found:
+            return True
+
+        # Phase 3: Enhanced verification takes precedence
+        if self.tool_output_verified:
             return True
 
         # Legacy/Fallback: requires no errors.
