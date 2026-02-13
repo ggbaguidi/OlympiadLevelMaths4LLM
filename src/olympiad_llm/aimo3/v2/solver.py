@@ -1350,12 +1350,6 @@ class AIMO3Solver:
                 ),
                 deadline_exceeded=deadline_exceeded,
                 last_error=last_error,
-                # Phase 3: Enhanced verification fields
-                tool_output_verified=tool_output_verified,
-                verification_confidence=verification_confidence,
-                verification_error_type=verification_error_type,
-                verification_warnings=verification_warnings,
-                extracted_numerical_value=extracted_numerical_value,
             ),
             output_text=output_text,
             tag=attempt_tag,
