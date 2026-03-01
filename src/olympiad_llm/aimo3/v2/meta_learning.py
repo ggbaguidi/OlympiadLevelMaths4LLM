@@ -503,8 +503,8 @@ class AdaptiveHyperparameters:
             },
             "algebra": {
                 "attempts": 6,
-                "temperature": 0.7,
-                "early_stop": 2,
+                "temperature": 1,
+                "early_stop": 3,
                 "preferred_strategy": "algebraic_manipulation",
             },
             "geometry": {

@@ -135,6 +135,7 @@ class AIMO3Config:
     # Ranking strategy for candidate answers:
     # - "verified_then_votes": legacy behavior (verification status is primary key)
     # - "votes_then_verified": robust behavior for noisy tool runs (votes are primary key)
+    # - "votes_then_entropy": strict votes then entropy (ignores verified)
     ranking_strategy: str = "votes_then_verified"
     # If True, final ranking drops all answers with verified==0 whenever at least
     # one verified candidate exists. Disable to avoid hard elimination.
@@ -373,7 +374,11 @@ class AIMO3Config:
             .strip()
             .lower()
         )
-        if ranking_strategy not in {"verified_then_votes", "votes_then_verified"}:
+        if ranking_strategy not in {
+            "verified_then_votes",
+            "votes_then_verified",
+            "votes_then_entropy",
+        }:
             ranking_strategy = AIMO3Config.ranking_strategy
         filter_to_verified_if_any = os.getenv(
             "AIMO3_FILTER_TO_VERIFIED_IF_ANY", "0"

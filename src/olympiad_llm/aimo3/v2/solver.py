@@ -1,12 +1,6 @@
-# pylint: disable=broad-exception-caught,missing-function-docstring,line-too-long,missing-module-docstring,import-outside-toplevel,invalid-name,too-many-instance-attributes
-"""AIMO-3 multi-attempt solver (ported and modularized).
-
-This module intentionally keeps imports *lazy* so that the base project can be
-installed without the heavy AIMO-3 stack.
-"""
-
+# pylint: disable=broad-exception-caught,missing-function-docstring,line-too-long,missing-module-docstring,import-outside-toplevel,invalid-name,too-many-instance-attributes,missing-class-docstring,too-many-branches,too-many-statements
+"""AIMO-3 multi-attempt solver (optimized)."""
 from __future__ import annotations
-
 import contextlib
 import json
 import math
@@ -15,17 +9,14 @@ import queue
 import re
 import threading
 import time
-from collections import defaultdict, deque, Counter
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import as_completed
+from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
 from .budget import TimeBudgetTracker
 from .answer_extraction import AnswerExtractor
 from .attempts import AttemptResult, AttemptStats
-
 from .config import AIMO3Config
 from .sandbox import AIMO3Sandbox
 from .trace import TraceRecorder, stable_problem_id
@@ -39,52 +30,60 @@ from .wickelgren import (
     init_math_retriever_from_cfg,
 )
 
+_INF = float("inf")
+_VERDICT_RE = re.compile(r"VERDICT\s*:\s*(CORRECT|INCORRECT)", re.IGNORECASE)
+_INC_SIGNALS = frozenset(
+    {
+        "THE ANSWER IS INCORRECT",
+        "THE PROPOSED ANSWER IS INCORRECT",
+        "THE PROPOSED ANSWER IS WRONG",
+        "THIS IS INCORRECT",
+        "ANSWER IS WRONG",
+        "NOT CORRECT",
+    }
+)
+_COR_SIGNALS = frozenset(
+    {
+        "THE ANSWER IS CORRECT",
+        "THE PROPOSED ANSWER IS CORRECT",
+        "CONFIRMED CORRECT",
+        "THIS IS CORRECT",
+        "I CONFIRM THE ANSWER",
+        "ANSWER IS VERIFIED",
+    }
+)
+
 
 def _magnitude_bucket(x: int) -> int:
-    """Return magnitude bucket: 0 for 0, else floor(log10(abs(x)))."""
-    if x == 0:
-        return 0
-    return int(math.floor(math.log10(abs(x) + 1)))
+    return 0 if x == 0 else int(math.log10(abs(x) + 1))
 
 
-def _detect_magnitude_outlier(
-    groups: dict,
-) -> tuple[bool, int | None, set[int]]:
-    """Detect if there's a magnitude outlier that might be correct.
-
-    Returns (is_suspicious, dominant_bucket, outlier_answers).
-    """
+def _detect_magnitude_outlier(groups: dict) -> tuple[bool, int | None, set[int]]:
     if len(groups) < 3:
         return False, None, set()
 
-    # Count answers by magnitude bucket
-    bucket_votes: Counter[int] = Counter()
-    bucket_answers: dict[int, list[int]] = {}
+    bucket_votes: Counter = Counter()
+    bucket_answers: dict = defaultdict(list)
 
     for ans, data in groups.items():
         bucket = _magnitude_bucket(ans)
         bucket_votes[bucket] += data["votes"]
-        if bucket not in bucket_answers:
-            bucket_answers[bucket] = []
         bucket_answers[bucket].append(ans)
 
     if len(bucket_votes) < 2:
         return False, None, set()
 
-    # Find dominant bucket (most votes)
-    sorted_buckets = bucket_votes.most_common()
-    dominant_bucket, dominant_votes = sorted_buckets[0]
-
-    # Check for outliers: buckets that are 2+ orders of magnitude higher
-    outlier_answers: set[int] = set()
-    for bucket, answers in bucket_answers.items():
-        if bucket >= dominant_bucket + 2:
-            outlier_answers.update(answers)
-
+    dominant_bucket, dominant_votes = bucket_votes.most_common(1)[0]
+    outlier_answers = {
+        a
+        for b, answers in bucket_answers.items()
+        if b >= dominant_bucket + 2
+        for a in answers
+    }
     total_votes = sum(bucket_votes.values())
+
     if outlier_answers and dominant_votes >= total_votes * 0.5:
         return True, dominant_bucket, outlier_answers
-
     return False, dominant_bucket, set()
 
 
@@ -94,22 +93,10 @@ def rank_candidates(
     magnitude_aware: bool = True,
     ranking_strategy: str = "verified_then_votes",
 ) -> list:
-    """Rank candidate answers by votes, verification status and quality heuristics.
-
-    Ranking strategy is configurable:
-    - ``verified_then_votes``: verification status first (legacy behavior)
-    - ``votes_then_verified``: vote count first (robust under noisy tool failures)
-
-    Independently, we can optionally discard candidates with verified==0 when
-    any verified candidate exists.
-
-    We also penalize answers derived from attempts that timed out or hit the
-    absolute problem deadline.
-    """
     if not results:
         return []
 
-    groups: dict = defaultdict(
+    groups = defaultdict(
         lambda: {
             "votes": 0,
             "verified": 0,
@@ -121,10 +108,7 @@ def rank_candidates(
 
     for r in results:
         ans = r.answer if isinstance(r, AttemptResult) else r.get("Answer")
-        if ans is None:
-            continue
-        # Only integer answers are valid for AIMO feedback
-        if not isinstance(ans, int):
+        if ans is None or not isinstance(ans, int):
             continue
 
         g = groups[ans]
@@ -139,233 +123,170 @@ def rank_candidates(
                 g["deadline_exceeded_attempts"] += 1
             ent = r.stats.mean_entropy
         else:
-            # Compatibility with dict-shaped records
             if r.get("ToolVerified"):
                 g["verified"] += 1
             if r.get("Timeouts", 0) > 0:
                 g["timeout_attempts"] += 1
-            ent = r.get("Entropy", float("inf"))
+            ent = r.get("Entropy", _INF)
 
-        if ent != float("inf") and ent > 0:
+        if ent != _INF and ent > 0:
             g["entropy_score"] += 1.0 / max(ent, 1e-9)
 
     if not groups:
         return []
 
-    # Magnitude outlier detection
-    is_suspicious, _dominant_bucket, outlier_answers = _detect_magnitude_outlier(groups)
+    strategy = (ranking_strategy or "verified_then_votes").strip().lower()
+    if strategy == "votes_then_entropy":
+        return sorted(
+            ((ans, data) for ans, data in groups.items()),
+            key=lambda x: (
+                x[1]["votes"],
+                x[1]["entropy_score"],
+                -x[1]["timeout_attempts"],
+                -x[1]["deadline_exceeded_attempts"],
+            ),
+            reverse=True,
+        )
 
-    should_filter_verified = filter_to_verified_if_any
-    if magnitude_aware and is_suspicious:
-        # If we have outliers, don't filter to verified only, as the verified
-        # small answers might be "easy wrongs".
-        should_filter_verified = False
+    is_suspicious, _, outlier_answers = _detect_magnitude_outlier(groups)
 
-    has_any_verified = any(g["verified"] > 0 for g in groups.values())
-    if should_filter_verified and has_any_verified:
+    should_filter = filter_to_verified_if_any and not (
+        magnitude_aware and is_suspicious
+    )
+    if should_filter and any(g["verified"] > 0 for g in groups.values()):
         groups = {k: v for k, v in groups.items() if v["verified"] > 0}
 
-    strategy = (ranking_strategy or "verified_then_votes").strip().lower()
     if strategy not in {"verified_then_votes", "votes_then_verified"}:
         strategy = "verified_then_votes"
 
     def _sort_key(item):
         ans, data = item
-        # Magnitude boost: outliers get a verified status boost
-        mag_verified_boost = 1 if (magnitude_aware and ans in outlier_answers) else 0
-        mag_vote_boost = 3 if (magnitude_aware and ans in outlier_answers) else 0
+        mag_v = 1 if magnitude_aware and ans in outlier_answers else 0
+        mag_vote = 3 if magnitude_aware and ans in outlier_answers else 0
 
         if strategy == "votes_then_verified":
             return (
-                data["votes"] + mag_vote_boost,
-                int(data["verified"] > 0) + mag_verified_boost,
-                data["verified"] + mag_verified_boost,
+                data["votes"] + mag_vote,
+                int(data["verified"] > 0) + mag_v,
+                data["verified"] + mag_v,
                 data["entropy_score"],
                 -data["timeout_attempts"],
                 -data["deadline_exceeded_attempts"],
             )
-
         return (
-            int(data["verified"] > 0) + mag_verified_boost,
-            data["verified"] + mag_verified_boost,
-            data["votes"] + mag_vote_boost,
+            int(data["verified"] > 0) + mag_v,
+            data["verified"] + mag_v,
+            data["votes"] + mag_vote,
             data["entropy_score"],
             -data["timeout_attempts"],
             -data["deadline_exceeded_attempts"],
         )
 
-    ranked = sorted(
-        groups.items(),
-        key=_sort_key,
-        reverse=True,
+    return sorted(
+        ((ans, data) for ans, data in groups.items()), key=_sort_key, reverse=True
     )
-    return [(ans, data) for ans, data in ranked]
 
 
 @dataclass
 class AIMO3Solver:
-    """AIMO-3 multi-attempt solver with streaming and tool use."""
-
     cfg: AIMO3Config
     port: int = 8000
 
-    _VERDICT_RE = re.compile(r"VERDICT\s*:\s*(CORRECT|INCORRECT)", re.IGNORECASE)
-
     @classmethod
     def _extract_verdict_label(cls, text: str | None) -> str | None:
-        """Extract the last explicit VERDICT label from text."""
-        matches = cls._VERDICT_RE.findall(str(text or ""))
-        if not matches:
+        if not text:
             return None
-        label = str(matches[-1]).upper()
-        if label in {"CORRECT", "INCORRECT"}:
-            return label
-        return None
+        matches = _VERDICT_RE.findall(text)
+        return (
+            matches[-1].upper()
+            if matches and matches[-1].upper() in {"CORRECT", "INCORRECT"}
+            else None
+        )
 
     @staticmethod
     def _truncate(text: str | None, max_chars: int) -> str:
-        """Truncate text to max_chars, keeping the tail (most recent output)."""
-        s = str(text or "")
-        if len(s) <= max_chars:
-            return s
-        return "..." + s[-(max_chars - 3) :]
+        s = text or ""
+        return s if len(s) <= max_chars else "..." + s[-(max_chars - 3) :]
 
     def _attempt_to_row(self, r: AttemptResult) -> dict:
-        snippet = self._truncate(
-            r.output_text, int(self.cfg.display_attempt_text_chars)
-        )
         ent = None
         with contextlib.suppress(Exception):
             v = float(r.stats.mean_entropy)
-            if v != float("inf") and v > 0.0:
+            if v != _INF and v > 0.0:
                 ent = v
         return {
             "Attempt": r.attempt,
             "Answer": r.answer,
             "ToolVerified": bool(r.stats.tool_verified),
-            "PyCalls": int(r.stats.python_calls),
-            "Timeouts": int(r.stats.timeout_count),
-            "PyErrors": int(r.stats.python_errors),
-            "Tokens": int(r.stats.token_count),
+            "PyCalls": r.stats.python_calls,
+            "Timeouts": r.stats.timeout_count,
+            "PyErrors": r.stats.python_errors,
+            "Tokens": r.stats.token_count,
             "Entropy": ent,
-            "Snippet": snippet,
+            "Snippet": self._truncate(
+                r.output_text, self.cfg.display_attempt_text_chars
+            ),
             "LastError": r.stats.last_error,
         }
 
     def _display_candidates(self, attempts: list[AttemptResult]) -> None:
-        """Display attempt candidates in notebooks (best-effort).
-
-        - Uses pandas + IPython.display if available.
-        - Falls back to plain printing.
-        """
-
-        if not bool(self.cfg.display_candidates):
+        if not self.cfg.display_candidates or not attempts:
             return
 
-        rows = [self._attempt_to_row(r) for r in attempts]
-        if not rows:
-            return
+        rows = sorted(
+            (self._attempt_to_row(r) for r in attempts),
+            key=lambda r: (r["Answer"] is None, r["Attempt"]),
+        )[: max(1, self.cfg.display_max_rows)]
 
-        # Sort: attempts with an answer first, then by attempt number.
-        rows.sort(key=lambda r: (r["Answer"] is None, r["Attempt"]))
-
-        # Keep output manageable.
-        max_rows = max(1, int(self.cfg.display_max_rows))
-        rows = rows[:max_rows]
-
-        # Prefer notebook display.
         try:
-            import pandas as pd  # type: ignore
+            import pandas as pd
 
             df = pd.DataFrame(rows)
             try:
-                from IPython.display import display  # type: ignore
+                from IPython.display import display
 
                 display(df)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 print(df.to_string(index=False))
-        except Exception:  # noqa: BLE001
+        except Exception:
             for row in rows:
                 print(
-                    f"Attempt {row['Attempt']}: ans={row['Answer']} "
-                    f"verified={row['ToolVerified']} calls={row['PyCalls']} errors={row['PyErrors']} tokens={row['Tokens']}\n"
-                    f"  {row['Snippet']}\n"
+                    f"Attempt {row['Attempt']}: ans={row['Answer']} verified={row['ToolVerified']} "
+                    f"calls={row['PyCalls']} errors={row['PyErrors']} tokens={row['Tokens']}\n  {row['Snippet']}\n"
                 )
 
     def _sandbox_env_snapshot(self) -> dict | None:
-        """Best-effort: query one sandbox for python + package versions.
-
-        Uses a borrowed sandbox from the pool to reflect the actual kernel environment.
-        Returns a small dict (JSON-serializable) or None on failure.
-        """
-
         if not hasattr(self, "sandbox_pool"):
             return None
-        # Only meaningful if the optional dependency stack is present.
-        sb: AIMO3Sandbox | None = None
+
+        sb = None
         try:
             sb = self.sandbox_pool.get(timeout=max(self.cfg.sandbox_timeout, 0.5))
         except Exception:
-            sb = None
+            return None
 
         if sb is None:
             return None
 
         try:
-            pkg_raw = self.cfg.trace_env_packages or ""
-            packages = [p.strip() for p in pkg_raw.split(",") if p.strip()]
+            packages = [
+                p.strip()
+                for p in (self.cfg.trace_env_packages or "").split(",")
+                if p.strip()
+            ]
+            code = f"""import json, sys
+def _ver(n):
+    try: return __import__(n).__version__
+    except: return None
+print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.executable}},
+'packages': {{n: _ver(n) for n in {packages!r}}}}}, ensure_ascii=False))"""
 
-            # Emit a single JSON line as the *last* line, so we can parse robustly.
-            code = (
-                "import json, sys\n"
-                "try:\n"
-                "    import platform\n"
-                "    _platform = platform.platform()\n"
-                "except Exception:\n"
-                "    _platform = None\n"
-                "def _ver(name):\n"
-                "    try:\n"
-                "        m = __import__(name)\n"
-                "    except Exception:\n"
-                "        return None\n"
-                "    return getattr(m, '__version__', None)\n"
-                f"_names = {packages!r}\n"
-                "_pkgs = {n: _ver(n) for n in _names}\n"
-                "_info = {\n"
-                "  'python': {'version': sys.version, 'executable': sys.executable},\n"
-                "  'platform': _platform,\n"
-                "  'packages': _pkgs,\n"
-                "}\n"
-                "print(json.dumps(_info, ensure_ascii=False))\n"
-            )
-            out = sb.execute(
-                code,
-                timeout=min(2.0, self.cfg.jupyter_timeout),
-            )
-
-            # Find the last JSON-looking line.
-            last_json = None
-            for line in str(out or "").splitlines()[::-1]:
+            out = sb.execute(code, timeout=min(2.0, self.cfg.jupyter_timeout))
+            for line in reversed((out or "").splitlines()):
                 s = line.strip()
                 if s.startswith("{") and s.endswith("}"):
-                    last_json = s
-                    break
-            if not last_json:
-                return {"error": "no_json", "raw": self._truncate(str(out or ""), 1000)}
-            try:
-                parsed = json.loads(last_json)
-            except Exception:  # noqa: BLE001
-                return {"error": "bad_json", "raw": self._truncate(last_json, 1000)}
-
-            # Keep payload bounded.
-            if isinstance(parsed, dict):
-                # Avoid huge sys.version strings if something went weird.
-                with contextlib.suppress(Exception):
-                    py = parsed.get("python")
-                    if isinstance(py, dict) and "version" in py:
-                        py["version"] = str(py.get("version", ""))[:4000]
-                return parsed
-            return {"error": "unexpected_type"}
+                    return json.loads(s)
+            return {"error": "no_json"}
         finally:
             with contextlib.suppress(Exception):
                 self.sandbox_pool.put(sb)
@@ -373,32 +294,21 @@ class AIMO3Solver:
     def _should_early_stop(
         self,
         detailed: list[AttemptResult],
-        time_spent_s: float = float("inf"),
+        time_spent_s: float = _INF,
         early_stop_target: int | None = None,
     ) -> bool:
-        """Quality-aware early stop.
-
-        Default behavior requires at least one clean tool run for the leading candidate
-        before early stopping. This reduces the "wrong but popular" failure mode.
-
-        Easy exit mode: if we get consensus quickly (<60s) with verified support,
-        stop aggressively to bank time for harder problems.
-        """
-
-        ranked_all = rank_candidates(
+        ranked = rank_candidates(
             detailed,
             filter_to_verified_if_any=False,
-            magnitude_aware=bool(self.cfg.magnitude_aware_ranking_enabled),
-            ranking_strategy=str(getattr(self.cfg, "ranking_strategy", "")),
+            magnitude_aware=self.cfg.magnitude_aware_ranking_enabled,
+            ranking_strategy=self.cfg.ranking_strategy,
         )
-        if not ranked_all:
+        if not ranked:
             return False
 
-        _, top_d = ranked_all[0]
-        votes = int(top_d.get("votes", 0))
-        verified = int(top_d.get("verified", 0))
+        _, top_d = ranked[0]
+        votes, verified = top_d["votes"], top_d["verified"]
 
-        # Easy exit: aggressive early stop for problems solved quickly with good verification
         if (
             self.cfg.easy_exit_enabled
             and time_spent_s < self.cfg.easy_exit_time_threshold_s
@@ -407,51 +317,26 @@ class AIMO3Solver:
         ):
             return True
 
-        # Standard early stop logic
-        need = max(0, int(self.cfg.early_stop_min_verified))
-        target_votes = max(
-            1,
-            int(
-                self.cfg.early_stop if early_stop_target is None else early_stop_target
-            ),
+        need = max(0, self.cfg.early_stop_min_verified)
+        target = max(
+            1, self.cfg.early_stop if early_stop_target is None else early_stop_target
         )
+        return votes >= target and (need <= 0 or verified >= need)
 
-        if votes < target_votes:
-            return False
-        if need <= 0:
-            return True
-        return verified >= need
-
-    # ------------------------------------------------------------------
-    # Answer-conditional verification phase
-    # ------------------------------------------------------------------
-
-    def _should_run_verification(
-        self,
-        ranked: list,
-        time_remaining_s: float,
-    ) -> bool:
-        """Decide whether the verification phase should trigger."""
-        if bool(getattr(self, "_verify_runtime_disabled", False)):
-            return False
-        if not self.cfg.verify_phase_enabled:
-            return False
-        if not ranked:
+    def _should_run_verification(self, ranked: list, time_remaining_s: float) -> bool:
+        if (
+            getattr(self, "_verify_runtime_disabled", False)
+            or not self.cfg.verify_phase_enabled
+            or not ranked
+        ):
             return False
 
-        # Adaptive threshold: if the base timeout is small (e.g. 360s),
-        # we allow verification to trigger even if we have less than 90s left.
-        # We use the minimum of the configured buffer and 25% of the base timeout.
-        adaptive_min_rem = min(
+        adaptive_min = min(
             self.cfg.verify_min_remaining_s, self.cfg.base_problem_timeout * 0.25
         )
-        if time_remaining_s < adaptive_min_rem:
+        if time_remaining_s < adaptive_min:
             return False
-        # Skip if consensus is already strong.
-        top_votes = ranked[0][1].get("votes", 0)
-        if top_votes > self.cfg.verify_trigger_max_votes:
-            return False
-        return True
+        return ranked[0][1].get("votes", 0) <= self.cfg.verify_trigger_max_votes
 
     def _run_verify_attempt(
         self,
@@ -462,57 +347,36 @@ class AIMO3Solver:
         deadline: float,
         problem_id: str | None = None,
     ) -> dict:
-        """Run a single short verification attempt.
-
-        Returns a dict with keys:
-          - candidate: the answer being verified
-          - verdict: "CORRECT" | "INCORRECT" | "UNKNOWN"
-          - alt_answer: int | None  (if the verifier found a different answer)
-        """
         result = {
             "candidate": candidate_answer,
             "verdict": "UNKNOWN",
             "alt_answer": None,
         }
-
         if time.time() > deadline:
             return result
 
         sandbox = None
-        transcript_python_calls: list[str] = []
-        transcript_python_outputs: list[str] = []
         try:
             sandbox = self.sandbox_pool.get(timeout=self.cfg.sandbox_timeout)
-
             local_tool = AIMO3Tool(
                 local_jupyter_timeout=self.cfg.jupyter_timeout,
                 tool_prompt=self.cfg.tool_prompt,
                 sandbox=sandbox,
-                z3_enabled=bool(getattr(self.cfg, "z3_tool_enabled", False)),
-            )
-
-            # Build the verification prompt.
-            verify_user_text = strategy_template.format(
-                answer=candidate_answer,
-                problem=problem,
-            )
-            verify_dev_prompt = (
-                "You are a world-class mathematical verifier. "
-                "Your ONLY job is to check whether the proposed answer is correct. "
-                "Use Python to compute — do NOT just reason about it. "
-                "Be concise. The final answer must be a non-negative integer between 0 and 99999."
+                z3_enabled=self.cfg.z3_tool_enabled,
             )
 
             messages = self.template.apply_chat_template(
-                verify_dev_prompt, verify_user_text, local_tool.tool_config
+                "You are a world-class mathematical verifier. Your ONLY job is to check whether "
+                "the proposed answer is correct. Use Python to compute — do NOT just reason about it. "
+                "Be concise. The final answer must be a non-negative integer between 0 and 99999.",
+                strategy_template.format(answer=candidate_answer, problem=problem),
+                local_tool.tool_config,
             )
 
-            Conversation = self._h["Conversation"]
-            conversation = Conversation.from_messages(messages)
+            conversation = self._h["Conversation"].from_messages(messages)
+            text_parts, transcript = [], []
 
-            text_parts: list[str] = []
-
-            for _turn in range(32):  # Cap turns for verification.
+            for _ in range(32):
                 if time.time() > deadline:
                     break
 
@@ -526,12 +390,6 @@ class AIMO3Solver:
                 if max_tokens < self.cfg.buffer_tokens:
                     break
 
-                extra = {
-                    "min_p": self.cfg.min_p,
-                    "stop_token_ids": self.stop_token_ids,
-                    "return_token_ids": True,
-                }
-
                 stream = self.client.completions.create(
                     model=self.cfg.served_model_name,
                     temperature=self.cfg.verify_temperature,
@@ -540,265 +398,155 @@ class AIMO3Solver:
                     prompt=prompt_ids,
                     seed=attempt_seed,
                     stream=True,
-                    extra_body=extra,
+                    extra_body={
+                        "min_p": self.cfg.min_p,
+                        "stop_token_ids": self.stop_token_ids,
+                        "return_token_ids": True,
+                    },
                 )
 
                 try:
-                    token_buffer: list = []
+                    token_buffer = []
                     for chunk in stream:
                         if time.time() > deadline:
                             break
                         choice = chunk.choices[0]
-                        new_tokens = choice.token_ids
-                        new_text = choice.text
-                        if new_tokens:
-                            token_buffer.extend(new_tokens)
-                            text_parts.append(new_text)
+                        if choice.token_ids:
+                            token_buffer.extend(choice.token_ids)
+                            text_parts.append(choice.text)
                 finally:
                     stream.close()
 
                 if not token_buffer:
                     break
 
-                new_messages = self.encoding.parse_messages_from_completion_tokens(
+                new_msgs = self.encoding.parse_messages_from_completion_tokens(
                     token_buffer, self.Role
                 )
-                if not new_messages:
+                if not new_msgs:
                     break
 
-                conversation.messages = conversation.messages + list(new_messages)
-                last_message = new_messages[-1]
+                conversation.messages = conversation.messages + list(new_msgs)
+                last_msg = new_msgs[-1]
 
-                # Handle tool calls during verification.
-                if last_message.recipient == "python":
-                    with contextlib.suppress(Exception):
-                        transcript_python_calls.append(
-                            str(last_message.content[0].text or "")
-                        )
-                    tool_responses = local_tool.process_sync_plus(last_message)
-                    with contextlib.suppress(Exception):
-                        transcript_python_outputs.append(
-                            str(tool_responses[0].content[0].text or "")
-                        )
-                    conversation.messages = conversation.messages + list(tool_responses)
-                    continue
-
-                # If it's a "final" channel or no more tool calls, we're done.
-                break
-
-            # Parse the verification verdict from both python tool output and assistant text.
-            assistant_text = "\n".join(text_parts)
-            tool_text = "\n".join(transcript_python_outputs)
-            full_text = "\n".join(
-                part for part in (tool_text, assistant_text) if part.strip()
-            )
-            upper = full_text.upper()
-
-            # 1. Exact match: "VERDICT: CORRECT" / "VERDICT: INCORRECT"
-            parsed_verdict = self._extract_verdict_label(full_text)
-            if parsed_verdict is not None:
-                result["verdict"] = parsed_verdict
-            else:
-                # 2. Fuzzy match: look for strong signal phrases.
-                #    Check for INCORRECT first (more specific) to avoid false
-                #    positives from "the answer is correct" inside longer text.
-                incorrect_signals = [
-                    "THE ANSWER IS INCORRECT",
-                    "THE PROPOSED ANSWER IS INCORRECT",
-                    "THE PROPOSED ANSWER IS WRONG",
-                    "THIS IS INCORRECT",
-                    "ANSWER IS WRONG",
-                    "NOT CORRECT",
-                ]
-                correct_signals = [
-                    "THE ANSWER IS CORRECT",
-                    "THE PROPOSED ANSWER IS CORRECT",
-                    "CONFIRMED CORRECT",
-                    "THIS IS CORRECT",
-                    "I CONFIRM THE ANSWER",
-                    "ANSWER IS VERIFIED",
-                ]
-                if any(sig in upper for sig in incorrect_signals):
-                    result["verdict"] = "INCORRECT"
-                elif any(sig in upper for sig in correct_signals):
-                    result["verdict"] = "CORRECT"
+                if last_msg.recipient == "python":
+                    transcript.append(str(last_msg.content[0].text or ""))
+                    tool_resp = local_tool.process_sync_plus(last_msg)
+                    transcript.append(str(tool_resp[0].content[0].text or ""))
+                    conversation.messages = conversation.messages + list(tool_resp)
                 else:
-                    # 3. Fallback: if the verifier produced a \boxed{} answer,
-                    #    compare it with the candidate.
-                    verifier_answer = self._extractor.extract_boxed_int(full_text)
-                    if verifier_answer is not None:
-                        if verifier_answer == candidate_answer:
-                            result["verdict"] = "CORRECT"
-                        else:
-                            result["verdict"] = "INCORRECT"
-                            result["alt_answer"] = verifier_answer
+                    break
 
-            # Extract alt answer for any INCORRECT verdict (if not already set).
+            full_text = "\n".join(
+                filter(str.strip, ("\n".join(transcript), "\n".join(text_parts)))
+            ).upper()
+
+            parsed = self._extract_verdict_label(full_text)
+            if parsed:
+                result["verdict"] = parsed
+            elif any(s in full_text for s in _INC_SIGNALS):
+                result["verdict"] = "INCORRECT"
+            elif any(s in full_text for s in _COR_SIGNALS):
+                result["verdict"] = "CORRECT"
+            else:
+                result["verdict"] = "UNKNOWN"
+                verifier_ans = self._extractor.extract_boxed_int(full_text)
+                if verifier_ans is not None:
+                    result["verdict"] = (
+                        "CORRECT" if verifier_ans == candidate_answer else "INCORRECT"
+                    )
+                    if verifier_ans != candidate_answer:
+                        result["alt_answer"] = verifier_ans
+
             if result["verdict"] == "INCORRECT" and result["alt_answer"] is None:
                 alt = self._extractor.extract_boxed_int(full_text)
                 if alt is not None and alt != candidate_answer:
                     result["alt_answer"] = alt
 
-            # Log full output for UNKNOWN verdicts to debug prompt compliance.
             if result["verdict"] == "UNKNOWN":
                 print(
                     f"  [Verify UNKNOWN] Candidate {candidate_answer} — full output:\n{full_text}..."
                 )
 
-            if bool(getattr(self.cfg, "trace_attempts_enabled", False)) and bool(
-                getattr(self.cfg, "trace_enabled", False)
-            ):
-                max_chars = int(getattr(self.cfg, "trace_attempts_max_chars", 0) or 0)
-
-                def _cap_list(
-                    items: list[str], per_item_chars: int = 4000, max_items: int = 20
-                ) -> list[str]:
-                    per_item_chars = max(0, int(per_item_chars))
-                    max_items = max(0, int(max_items))
-                    if max_items and len(items) > max_items:
-                        items = items[-max_items:]
-                    if per_item_chars > 0:
-                        return [self._truncate(s, per_item_chars) for s in items]
-                    return items
-
-                payload = {
-                    "event": "verify_attempt_end",
-                    "problem_id": problem_id,
-                    "candidate_answer": int(candidate_answer),
-                    "attempt_seed": int(attempt_seed),
-                    "verdict": result["verdict"],
-                    "alt_answer": result["alt_answer"],
-                    "python_calls": len(transcript_python_calls),
-                    "python_calls_text": _cap_list(transcript_python_calls),
-                    "python_outputs_text": _cap_list(transcript_python_outputs),
-                    "verify_output_text": (
-                        self._truncate(full_text, max_chars)
-                        if max_chars > 0
-                        else full_text
-                    ),
-                }
-                if not payload.get("python_calls_text"):
-                    payload.pop("python_calls_text", None)
-                if not payload.get("python_outputs_text"):
-                    payload.pop("python_outputs_text", None)
-                if not payload.get("verify_output_text"):
-                    payload.pop("verify_output_text", None)
-
-                with contextlib.suppress(Exception):
-                    self._trace.record(payload)
-
-        except Exception:  # noqa: BLE001
-            pass  # Verification attempt failed — verdict stays UNKNOWN.
-
+        except Exception:
+            pass
         finally:
-            if sandbox is not None:
+            if sandbox:
                 with contextlib.suppress(Exception):
                     sandbox.reset()
-                with contextlib.suppress(Exception):
                     self.sandbox_pool.put(sandbox)
-
         return result
 
     def _verify_candidates(
-        self,
-        problem: str,
-        ranked: list,
-        deadline: float,
-        problem_id: str | None = None,
+        self, problem: str, ranked: list, deadline: float, problem_id: str | None = None
     ) -> list:
-        """Run the answer-conditional verification phase.
-
-        Takes the top-K ranked candidates, runs short parallel verification
-        attempts for each, and returns a re-ranked list of (answer, info_dict)
-        tuples.  The info_dict is augmented with 'verify_correct' / 'verify_incorrect'
-        counts.
-
-        If verification proves one candidate and disproves others, the proven
-        candidate is promoted regardless of original vote count.
-        """
         top_k = min(self.cfg.verify_top_k_candidates, len(ranked))
-        candidates_to_check = ranked[:top_k]
-        per_candidate = self.cfg.verify_attempts_per_candidate
-        n_strategies = len(VERIFY_STRATEGIES)
+        candidates, per_cand = ranked[:top_k], self.cfg.verify_attempts_per_candidate
+        n_strat = len(VERIFY_STRATEGIES)
 
-        # Build all verification tasks.
-        verify_tasks = []
-        for cand_idx, (answer, _data) in enumerate(candidates_to_check):
-            for v_idx in range(per_candidate):
-                strategy = VERIFY_STRATEGIES[
-                    (cand_idx * per_candidate + v_idx) % n_strategies
-                ]
-                seed = (self.cfg.seed + 1000 + cand_idx * 100 + v_idx) ** 2
-                verify_tasks.append((answer, strategy, seed))
+        tasks = [
+            (
+                ans,
+                VERIFY_STRATEGIES[(i * per_cand + j) % n_strat],
+                (self.cfg.seed + 1000 + i * 100 + j) ** 2,
+            )
+            for i, (ans, _) in enumerate(candidates)
+            for j in range(per_cand)
+        ]
 
-        # Run all verification attempts in parallel.
-        verify_results: list[dict] = []
-        executor = ThreadPoolExecutor(
-            max_workers=min(len(verify_tasks), self.cfg.workers)
-        )
-        try:
-            futures = []
-            for answer, strategy, seed in verify_tasks:
-                f = executor.submit(
+        results = []
+        with ThreadPoolExecutor(max_workers=min(len(tasks), self.cfg.workers)) as ex:
+            futures = [
+                ex.submit(
                     self._run_verify_attempt,
                     problem,
-                    answer,
-                    strategy,
+                    ans,
+                    strat,
                     seed,
                     deadline,
                     problem_id,
                 )
-                futures.append(f)
+                for ans, strat, seed in tasks
+            ]
+            for f in as_completed(futures):
+                with contextlib.suppress(Exception):
+                    results.append(f.result())
 
-            for future in as_completed(futures):
-                try:
-                    verify_results.append(future.result())
-                except Exception:  # noqa: BLE001
-                    continue
-        finally:
-            executor.shutdown(wait=True, cancel_futures=True)
-
-        # Aggregate verdicts per candidate.
-        verify_scores: dict[int, dict] = defaultdict(
+        scores = defaultdict(
             lambda: {"correct": 0, "incorrect": 0, "unknown": 0, "alt_answers": []}
         )
-        for vr in verify_results:
-            cand = vr["candidate"]
-            v = vr["verdict"]
+        for r in results:
+            v = r["verdict"]
             if v == "CORRECT":
-                verify_scores[cand]["correct"] += 1
+                scores[r["candidate"]]["correct"] += 1
             elif v == "INCORRECT":
-                verify_scores[cand]["incorrect"] += 1
-                if vr["alt_answer"] is not None:
-                    verify_scores[cand]["alt_answers"].append(vr["alt_answer"])
+                scores[r["candidate"]]["incorrect"] += 1
+                if r["alt_answer"] is not None:
+                    scores[r["candidate"]]["alt_answers"].append(r["alt_answer"])
             else:
-                verify_scores[cand]["unknown"] += 1
+                scores[r["candidate"]]["unknown"] += 1
 
-        # Log verification results.
-        for cand, scores in verify_scores.items():
+        for cand, sc in scores.items():
             print(
-                f"  [Verify] Candidate {cand}: "
-                f"correct={scores['correct']}, "
-                f"incorrect={scores['incorrect']}, "
-                f"unknown={scores['unknown']}"
+                f"  [Verify] Candidate {cand}: correct={sc['correct']}, incorrect={sc['incorrect']}, unknown={sc['unknown']}"
             )
 
-        # Re-rank: augment the original ranking data with verification info
-        # and re-sort.  Verification results are weighted heavily.
-        augmented = []
-        for answer, data in ranked:
-            vs = verify_scores.get(answer)
-            if vs:
-                data = dict(data)  # Copy to avoid mutating the original.
-                data["verify_correct"] = vs["correct"]
-                data["verify_incorrect"] = vs["incorrect"]
-            else:
-                data = dict(data)
-                data["verify_correct"] = 0
-                data["verify_incorrect"] = 0
-            augmented.append((answer, data))
+        augmented = [
+            (
+                (
+                    ans,
+                    {
+                        **data,
+                        "verify_correct": scores[ans]["correct"],
+                        "verify_incorrect": scores[ans]["incorrect"],
+                    },
+                )
+                if ans in scores
+                else {**data, "verify_correct": 0, "verify_incorrect": 0}
+            )
+            for ans, data in ranked
+        ]
 
-        # Sort: net verification score first, then verified votes, then raw votes.
         augmented.sort(
             key=lambda kv: (
                 kv[1].get("verify_correct", 0) - kv[1].get("verify_incorrect", 0),
@@ -808,149 +556,107 @@ class AIMO3Solver:
             reverse=True,
         )
 
-        # Check if any alternative answer emerged consistently from verifiers.
-        # If multiple verifiers independently proposed the same alt answer and
-        # it wasn't already in our candidate set, inject it.
-        all_alt_answers: list[int] = []
-        for vs in verify_scores.values():
-            all_alt_answers.extend(vs["alt_answers"])
-        if all_alt_answers:
-            alt_counts = Counter(all_alt_answers)
-            best_alt, best_alt_count = alt_counts.most_common(1)[0]
-            existing_answers = {a for a, _ in augmented}
-            # Need at least 2 independent verifiers to propose the same alt.
-            if best_alt not in existing_answers and best_alt_count >= 2:
+        all_alts = [a for vs in scores.values() for a in vs["alt_answers"]]
+        if all_alts:
+            alt_cnt = Counter(all_alts)
+            best_alt, cnt = alt_cnt.most_common(1)[0]
+            if best_alt not in {a for a, _ in augmented} and cnt >= 2:
                 print(
-                    f"  [Verify] Injecting alt answer {best_alt} "
-                    f"(proposed by {best_alt_count} verifiers)"
+                    f"  [Verify] Injecting alt answer {best_alt} (proposed by {cnt} verifiers)"
                 )
                 augmented.insert(
                     0,
                     (
                         best_alt,
                         {
-                            "votes": best_alt_count,
-                            "verified": best_alt_count,
-                            "verify_correct": best_alt_count,
+                            "votes": cnt,
+                            "verified": cnt,
+                            "verify_correct": cnt,
                             "verify_incorrect": 0,
                             "entropy_score": 0.0,
                         },
                     ),
                 )
-
         return augmented
 
     @staticmethod
     def _probe_server_ready(client, attempts: int, sleep_s: float = 0.5) -> bool:
-        """Return True if an OpenAI-compatible server responds to models.list()."""
-
-        for _ in range(max(1, int(attempts))):
+        for _ in range(max(1, attempts)):
             try:
                 client.models.list()
                 return True
-            except Exception:  # noqa: BLE001
-                time.sleep(float(sleep_s))
+            except Exception:
+                time.sleep(sleep_s)
         return False
 
     def __post_init__(self) -> None:
-        # Helpful env defaults from notebook.
         os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
         os.environ.setdefault("TRANSFORMERS_NO_FLAX", "1")
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-        # Avoid accidental network attempts when model_path is a local Kaggle input.
         os.environ.setdefault("HF_HUB_OFFLINE", "1")
         os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
-        # Optional seed setting if transformers is present.
         with contextlib.suppress(Exception):
-            from transformers import set_seed  # type: ignore
+            from transformers import set_seed
 
             set_seed(self.cfg.seed)
 
-        OpenAI = _require_openai()
-        h = _require_harmony()
+        self._h = _require_harmony()
 
-        # Keep Harmony symbols available for code paths that need to construct
-        # Message/TextContent objects (e.g., llama.cpp plain-text fallbacks).
-        self._h = h
-
-        # If the user provided a filesystem path, validate it early.
-        # This avoids accidentally "succeeding" by reusing an unrelated running server.
-        mp_raw = str(getattr(self.cfg, "model_path", "") or "")
-        if mp_raw:
-            mp_expanded = os.path.expanduser(mp_raw)
-            looks_like_path = mp_expanded.startswith(("/", "./", "../"))
-            if looks_like_path and not os.path.exists(mp_expanded):
-                raise ValueError(f"model_path does not exist: {mp_expanded}")
+        mp = self.cfg.model_path
+        if mp and not os.path.exists(os.path.expanduser(mp)):
+            raise ValueError(f"model_path does not exist: {mp}")
 
         self.template = AIMO3Template()
-        # Optional CPU-only retriever for prompt augmentation (loaded from v1 KB format).
         self._wickelgren_retriever = init_math_retriever_from_cfg(self.cfg)
-        self.encoding = h["load_harmony_encoding"](
-            h["HarmonyEncodingName"].HARMONY_GPT_OSS
+        enc = self._h["load_harmony_encoding"](
+            self._h["HarmonyEncodingName"].HARMONY_GPT_OSS
         )
-        self.Role = h["Role"]
-        self.stop_token_ids = self.encoding.stop_tokens_for_assistant_actions()
+        self.encoding = enc
+        self.Role = self._h["Role"]
+        self.stop_token_ids = enc.stop_tokens_for_assistant_actions()
 
-        self.base_url = f"http://0.0.0.0:{self.port}/v1"
-        self.server = None  # set below only if we need to start one
+        base_url = f"http://0.0.0.0:{self.port}/v1"
+        OpenAI = _require_openai()
 
-        # If a server is already running on this port, reuse it.
-        if bool(self.cfg.reuse_existing_server):
-            probe_client = OpenAI(
-                base_url=self.base_url,
+        if self.cfg.reuse_existing_server and self._probe_server_ready(
+            OpenAI(
+                base_url=base_url,
                 api_key="sk-local",
                 timeout=self.cfg.server_probe_timeout,
+            ),
+            self.cfg.server_probe_attempts,
+        ):
+            self.client = OpenAI(
+                base_url=base_url, api_key="sk-local", timeout=self.cfg.session_timeout
             )
-            if self._probe_server_ready(
-                probe_client, attempts=self.cfg.server_probe_attempts
-            ):
-                # Reuse: don't start a new process.
-                self.client = OpenAI(
-                    base_url=self.base_url,
-                    api_key="sk-local",
-                    timeout=self.cfg.session_timeout,
-                )
-            else:
-                self.server = VLLMServer(cfg=self.cfg, port=self.port)
-                self.server.start()
-                self.client = OpenAI(
-                    base_url=self.base_url,
-                    api_key="sk-local",
-                    timeout=self.cfg.session_timeout,
-                )
-                self.server.wait_ready(self.client)
+            self.server = None
         else:
             self.server = VLLMServer(cfg=self.cfg, port=self.port)
             self.server.start()
             self.client = OpenAI(
-                base_url=self.base_url,
-                api_key="sk-local",
-                timeout=self.cfg.session_timeout,
+                base_url=base_url, api_key="sk-local", timeout=self.cfg.session_timeout
             )
             self.server.wait_ready(self.client)
 
         self._initialize_kernels()
-        self.problems_remaining = int(self.cfg.problems_total)
+        self.problems_remaining = self.cfg.problems_total
 
-        # Dynamic time budgeting: track actual solve times to adjust per-problem budgets
         self._budget_tracker = TimeBudgetTracker(
-            total_budget_s=float(self.cfg.notebook_limit),
-            total_problems=int(self.cfg.problems_total),
-            base_timeout_s=float(self.cfg.base_problem_timeout),
-            high_timeout_s=float(self.cfg.high_problem_timeout),
+            total_budget_s=self.cfg.notebook_limit,
+            total_problems=self.cfg.problems_total,
+            base_timeout_s=self.cfg.base_problem_timeout,
+            high_timeout_s=self.cfg.high_problem_timeout,
             flex_pool_fraction=self.cfg.adaptive_budget_flex_pool_fraction,
             max_extension_multiplier=self.cfg.adaptive_budget_max_extension,
             hardness_trigger_fraction=self.cfg.adaptive_budget_hardness_trigger,
             hardness_min_distinct_answers=self.cfg.adaptive_budget_min_distinct,
         )
 
-        # Notebook-friendly tracing behavior: optionally reset the trace file at startup.
-        # Cache the answer extractor (avoid re-creating on every call).
         self._cached_extractor = AnswerExtractor(
             aimo_lo=0,
             aimo_hi=99999,
-            strict_fallback=bool(self.cfg.strict_fallback_extraction),
+            strict_fallback=self.cfg.strict_fallback_extraction,
         )
 
         if self.cfg.trace_enabled and self.cfg.trace_reset_on_start:
@@ -968,7 +674,7 @@ class AIMO3Solver:
         self._meta_embedder = None
         self._adaptive_hparams = None
 
-        if bool(getattr(self.cfg, "meta_learning_enabled", False)):
+        if self.cfg.meta_learning_enabled:
             with contextlib.suppress(Exception):
                 from .meta_learning import (
                     AdaptiveHyperparameters,
@@ -976,25 +682,17 @@ class AIMO3Solver:
                     get_global_embedder,
                 )
 
-                strategy_names = [card.name for card in GENERIC_STRATEGY_CARDS]
-                experience_file_raw = str(
-                    getattr(self.cfg, "meta_learning_experience_file", "") or ""
-                )
-                experience_file = (
-                    Path(experience_file_raw).expanduser()
-                    if experience_file_raw.strip()
+                strat_names = [c.name for c in GENERIC_STRATEGY_CARDS]
+                exp_file = (
+                    Path(self.cfg.meta_learning_experience_file).expanduser()
+                    if self.cfg.meta_learning_experience_file.strip()
                     else None
                 )
-
                 get_global_bandit(
-                    strategy_names=strategy_names,
-                    exploration_factor=float(
-                        getattr(self.cfg, "meta_learning_exploration", 1.0)
-                    ),
-                    similarity_threshold=float(
-                        getattr(self.cfg, "meta_learning_similarity_threshold", 0.7)
-                    ),
-                    experience_file=experience_file,
+                    strategy_names=strat_names,
+                    exploration_factor=self.cfg.meta_learning_exploration,
+                    similarity_threshold=self.cfg.meta_learning_similarity_threshold,
+                    experience_file=exp_file,
                 )
                 self._meta_embedder = get_global_embedder()
                 self._adaptive_hparams = AdaptiveHyperparameters(self.cfg)
@@ -1003,9 +701,8 @@ class AIMO3Solver:
         if hasattr(self, "sandbox_pool"):
             while not self.sandbox_pool.empty():
                 with contextlib.suppress(Exception):
-                    sb = self.sandbox_pool.get_nowait()
-                    sb.close()
-        if hasattr(self, "server") and self.server is not None:
+                    self.sandbox_pool.get_nowait().close()
+        if getattr(self, "server", None):
             with contextlib.suppress(Exception):
                 self.server.stop()
 
@@ -1013,41 +710,23 @@ class AIMO3Solver:
         self.close()
 
     def _initialize_kernels(self) -> None:
-        self.sandbox_pool: queue.Queue[AIMO3Sandbox] = queue.Queue()
-
-        pool_size = max(1, min(int(self.cfg.sandbox_pool_size), int(self.cfg.workers)))
+        self.sandbox_pool: queue.Queue = queue.Queue()
+        pool_sz = max(1, min(self.cfg.sandbox_pool_size, self.cfg.workers))
 
         def _create():
             return AIMO3Sandbox(timeout=self.cfg.jupyter_timeout)
 
-        init_workers = max(1, min(int(self.cfg.kernel_init_workers), pool_size))
-
-        # Creating many kernels in parallel can trigger port selection races in notebook runtimes.
-        # Limit concurrency during initialization, while still creating the full pool size.
-        created = 0
-        with ThreadPoolExecutor(max_workers=init_workers) as ex:
-            futures = [ex.submit(_create) for _ in range(pool_size)]
+        with ThreadPoolExecutor(
+            max_workers=max(1, min(self.cfg.kernel_init_workers, pool_sz))
+        ) as ex:
+            futures = [ex.submit(_create) for _ in range(pool_sz)]
             for f in as_completed(futures):
-                try:
-                    sb = f.result()
-                except Exception:  # noqa: BLE001
-                    # Transient kernel startup issues happen; we'll fill the pool below.
-                    continue
-                self.sandbox_pool.put(sb)
-                created += 1
+                with contextlib.suppress(Exception):
+                    self.sandbox_pool.put(f.result())
 
-        # Best-effort: fill any missing slots sequentially (reduces port collision races).
-        # Keep this bounded so we don't hang forever on a broken environment.
-        missing = max(0, int(pool_size) - int(created))
-        fill_attempts = 0
-        while missing > 0 and fill_attempts < max(2 * int(pool_size), 4):
-            fill_attempts += 1
-            try:
+        for _ in range(max(0, pool_sz - self.sandbox_pool.qsize())):
+            with contextlib.suppress(Exception):
                 self.sandbox_pool.put(_create())
-                missing -= 1
-            except Exception:  # noqa: BLE001
-                # Give the OS a moment to release ports (exponential backoff).
-                time.sleep(0.1 * fill_attempts)
 
     @property
     def _extractor(self) -> AnswerExtractor:
@@ -1057,204 +736,144 @@ class AIMO3Solver:
         self,
         attempt_index: int,
         problem_text: str | None = None,
-        used_strategies: list[str] | None = None,
+        used_strategies: list | None = None,
         preferred_strategy: str | None = None,
-    ) -> tuple[str, str | None, str | None]:
-        """Build attempt-level developer prompt with optional strategy card."""
+    ) -> tuple:
+        dev_prompt = self.cfg.system_prompt
+        strat_name, tag = None, None
 
-        developer_prompt = self.cfg.system_prompt
-        attempt_tag: str | None = None
-        strategy_name: str | None = None
-
-        if bool(self.cfg.wickelgren_strategies_enabled):
-            developer_prompt, meta = augment_developer_prompt_with_meta(
-                developer_prompt,
+        if self.cfg.wickelgren_strategies_enabled:
+            dev_prompt, meta = augment_developer_prompt_with_meta(
+                dev_prompt,
                 attempt_index=attempt_index,
                 problem_text=problem_text,
-                retriever=getattr(self, "_wickelgren_retriever", None),
-                retriever_top_k=int(getattr(self.cfg, "retriever_top_k", 5) or 5),
-                retriever_min_score=float(
-                    getattr(self.cfg, "retriever_min_score", 0.08) or 0.08
-                ),
-                retriever_include_examples=bool(
-                    getattr(self.cfg, "retriever_include_examples", True)
-                ),
-                retriever_include_definitions=bool(
-                    getattr(self.cfg, "retriever_include_definitions", True)
-                ),
+                retriever=self._wickelgren_retriever,
+                retriever_top_k=self.cfg.retriever_top_k,
+                retriever_min_score=self.cfg.retriever_min_score,
+                retriever_include_examples=self.cfg.retriever_include_examples,
+                retriever_include_definitions=self.cfg.retriever_include_definitions,
                 used_strategies=used_strategies,
-                meta_learning_enabled=bool(
-                    getattr(self.cfg, "meta_learning_enabled", True)
-                ),
-                meta_learning_experience_file=str(
-                    getattr(self.cfg, "meta_learning_experience_file", "") or ""
-                ),
-                meta_learning_exploration=float(
-                    getattr(self.cfg, "meta_learning_exploration", 1.0)
-                ),
-                meta_learning_similarity_threshold=float(
-                    getattr(self.cfg, "meta_learning_similarity_threshold", 0.7)
-                ),
+                meta_learning_enabled=self.cfg.meta_learning_enabled,
+                meta_learning_experience_file=self.cfg.meta_learning_experience_file,
+                meta_learning_exploration=self.cfg.meta_learning_exploration,
+                meta_learning_similarity_threshold=self.cfg.meta_learning_similarity_threshold,
                 preferred_strategy=preferred_strategy,
             )
-            strategy_name = str(meta.get("card", "") or "").strip() or None
-            attempt_tag = f"wickelgren:{strategy_name or 'unknown'}"
-            if bool(meta.get("retriever_used")):
-                attempt_tag += (
-                    f"|rag={meta.get('retriever_results', 0)}"
-                    f"|rag_backend={meta.get('retriever_backend', 'unknown')}"
-                )
-
-        return developer_prompt, attempt_tag, strategy_name
+            strat_name = (meta.get("card") or "").strip() or None
+            tag = f"wickelgren:{strat_name or 'unknown'}"
+            if meta.get("retriever_used"):
+                tag += f"|rag={meta.get('retriever_results', 0)}|rag_backend={meta.get('retriever_backend', 'unknown')}"
+        return dev_prompt, tag, strat_name
 
     @staticmethod
     def _strategy_from_attempt_tag(tag: str | None) -> str | None:
-        """Extract Wickelgren strategy name from attempt tag."""
-        raw = str(tag or "").strip()
-        if not raw.startswith("wickelgren:"):
-            return None
-        card_chunk = raw.split("|", maxsplit=1)[0]
-        card_name = card_chunk.split(":", maxsplit=1)[-1].strip()
-        return card_name or None
+        raw = (tag or "").strip()
+        return (
+            raw.split(":", 1)[-1].split("|")[0].strip()
+            if raw.startswith("wickelgren:")
+            else None
+        )
 
-    def _adapt_problem_hyperparameters(
-        self, problem_text: str
-    ) -> tuple[Any | None, dict[str, object]]:
-        """Resolve per-problem meta-learned hyperparameters."""
-        if not bool(getattr(self.cfg, "meta_learning_enabled", False)):
+    def _adapt_problem_hyperparameters(self, problem_text: str) -> tuple:
+        if (
+            not self.cfg.meta_learning_enabled
+            or not self._meta_embedder
+            or not self._adaptive_hparams
+        ):
             return None, {}
-        if getattr(self, "_meta_embedder", None) is None:
-            return None, {}
-        if getattr(self, "_adaptive_hparams", None) is None:
-            return None, {}
-
         try:
-            problem_features = self._meta_embedder.embed(problem_text)
-            adaptive_cfg = self._adaptive_hparams.get_config(problem_features)
-            if isinstance(adaptive_cfg, dict):
-                return problem_features, dict(adaptive_cfg)
-        except Exception:  # noqa: BLE001
+            feats = self._meta_embedder.embed(problem_text)
+            cfg = self._adaptive_hparams.get_config(feats)
+            return (feats, dict(cfg)) if isinstance(cfg, dict) else (None, {})
+        except Exception:
             return None, {}
-        return None, {}
 
     def _update_meta_learning_from_problem_outcome(
         self,
         *,
         problem_features: Any | None,
-        adaptive_cfg_used: dict[str, object],
+        adaptive_cfg_used: dict,
         detailed_results: list[AttemptResult],
         ranked: list,
         time_used_s: float,
     ) -> None:
-        """Feed solved-problem outcomes back into strategy and hyperparameter learners."""
-        if not bool(getattr(self.cfg, "meta_learning_enabled", False)):
-            return
-        if problem_features is None or not ranked:
+        if not self.cfg.meta_learning_enabled or problem_features is None or not ranked:
             return
 
-        top_answer = ranked[0][0]
-        top_data = ranked[0][1] if ranked else {}
-        verify_correct = int(top_data.get("verify_correct", 0) or 0)
-        verify_incorrect = int(top_data.get("verify_incorrect", 0) or 0)
-        verified_votes = int(top_data.get("verified", 0) or 0)
-        confidence_signal = verified_votes > 0 or verify_correct > verify_incorrect
-        if not confidence_signal:
+        top_ans, top_data = ranked[0]
+        verify_correct, verified_votes = top_data.get(
+            "verify_correct", 0
+        ), top_data.get("verified", 0)
+        if not (
+            verified_votes > 0 or verify_correct > top_data.get("verify_incorrect", 0)
+        ):
             return
         if not any(
-            isinstance(r.answer, int) and int(r.answer) == int(top_answer)
-            for r in detailed_results
+            isinstance(r.answer, int) and r.answer == top_ans for r in detailed_results
         ):
             return
 
         with contextlib.suppress(Exception):
             from .meta_learning import get_global_bandit
 
-            strategy_names = [card.name for card in GENERIC_STRATEGY_CARDS]
-            experience_file_raw = str(
-                getattr(self.cfg, "meta_learning_experience_file", "") or ""
-            )
-            experience_file = (
-                Path(experience_file_raw).expanduser()
-                if experience_file_raw.strip()
+            strat_names = [c.name for c in GENERIC_STRATEGY_CARDS]
+            exp_file = (
+                Path(self.cfg.meta_learning_experience_file).expanduser()
+                if self.cfg.meta_learning_experience_file.strip()
                 else None
             )
             bandit = get_global_bandit(
-                strategy_names=strategy_names,
-                exploration_factor=float(
-                    getattr(self.cfg, "meta_learning_exploration", 1.0)
-                ),
-                similarity_threshold=float(
-                    getattr(self.cfg, "meta_learning_similarity_threshold", 0.7)
-                ),
-                experience_file=experience_file,
+                strategy_names=strat_names,
+                exploration_factor=self.cfg.meta_learning_exploration,
+                similarity_threshold=self.cfg.meta_learning_similarity_threshold,
+                experience_file=exp_file,
             )
 
-            winning_attempts = [
+            winning = [
                 r
                 for r in detailed_results
-                if isinstance(r.answer, int) and int(r.answer) == int(top_answer)
+                if isinstance(r.answer, int) and r.answer == top_ans
             ]
-            first_success_attempt = (
-                min((r.attempt for r in winning_attempts), default=1)
-                if winning_attempts
-                else 1
-            )
+            first_succ = min((r.attempt for r in winning), default=1) if winning else 1
 
             for r in detailed_results:
-                strategy_name = self._strategy_from_attempt_tag(r.tag)
-                if not strategy_name:
+                strat = self._strategy_from_attempt_tag(r.tag)
+                if not strat:
                     continue
-                is_success = isinstance(r.answer, int) and int(r.answer) == int(
-                    top_answer
-                )
-                attempts_to_success = (
-                    first_success_attempt if is_success else max(1, int(r.attempt))
-                )
+                is_succ = isinstance(r.answer, int) and r.answer == top_ans
                 bandit.update(
                     problem_features=problem_features,
-                    strategy_name=strategy_name,
-                    success=bool(is_success),
-                    attempts_to_success=attempts_to_success,
-                    time_spent=float(time_used_s),
+                    strategy_name=strat,
+                    success=is_succ,
+                    attempts_to_success=first_succ if is_succ else max(1, r.attempt),
+                    time_spent=time_used_s,
                 )
 
-        if adaptive_cfg_used and getattr(self, "_adaptive_hparams", None) is not None:
+        if adaptive_cfg_used and self._adaptive_hparams:
             with contextlib.suppress(Exception):
                 self._adaptive_hparams.update_from_outcome(
                     problem_features=problem_features,
                     config_used=adaptive_cfg_used,
                     success=True,
-                    time_spent=float(time_used_s),
+                    time_spent=time_used_s,
                 )
 
     @staticmethod
     def _compute_mean_entropy(logprobs_buffer: list) -> float:
-        """Compute mean per-token entropy from streaming logprobs."""
         if not logprobs_buffer:
-            return float("inf")
-
-        total_entropy = 0.0
-        token_count = 0
-
-        for top_logprobs_dict in logprobs_buffer:
-            if not isinstance(top_logprobs_dict, dict):
+            return _INF
+        total, count = 0.0, 0
+        for lp in logprobs_buffer:
+            if not lp:
                 continue
-            if not top_logprobs_dict:
-                continue
-
-            token_entropy = 0.0
-            for _tok, log_prob in top_logprobs_dict.items():
-                prob = math.exp(log_prob)
-                if prob > 0:
-                    token_entropy -= prob * math.log2(prob)
-
-            total_entropy += token_entropy
-            token_count += 1
-
-        if token_count == 0:
-            return float("inf")
-
-        return total_entropy / token_count
+            te = 0.0
+            for _, log_p in lp.items():
+                p = math.exp(log_p)
+                if p > 0:
+                    te -= p * math.log2(p)
+            total += te
+            count += 1
+        return _INF if count == 0 else total / count
 
     def _process_attempt(
         self,
@@ -1268,14 +887,6 @@ class AIMO3Solver:
         continuation_context: str | None = None,
         temperature: float | None = None,
     ) -> AttemptResult:
-        """Run a single solver attempt with streaming completions and tool execution.
-
-        If *continuation_context* is provided (non-empty string), it is injected
-        as an additional user message after the problem statement, giving the model
-        a summary of a previous incomplete attempt so it can continue rather than
-        restart from scratch.
-        """
-
         if stop_event.is_set() or time.time() > deadline:
             return AttemptResult(
                 attempt=attempt_index + 1,
@@ -1284,88 +895,61 @@ class AIMO3Solver:
                 tag=attempt_tag,
             )
 
-        sandbox = None
-        local_tool = None
-        python_calls = 0
-        python_errors = 0
-        last_error: str | None = None
-        timeout_count = 0
-        total_tokens = 0
-        final_answer = None
-        logprobs_buffer: list = []
-        text_tail: deque = deque(maxlen=int(self.cfg.capture_attempt_text_chars))
-        transcript_python_calls: list[str] = []
-        transcript_python_outputs: list[str] = []
-        verification_marker_found = False
-        deadline_exceeded = False
-
-        # Phase 3: Enhanced verification tracking
-        tool_output_verified = False
-        verification_confidence = 0.0
-        verification_error_type: str | None = None
-        verification_warnings: list[str] | None = None
-        extracted_numerical_value: float | int | None = None
+        sandbox, python_calls, python_errors = None, 0, 0
+        last_error, timeout_count, total_tokens = None, 0, 0
+        final_answer, logprobs_buf = None, []
+        text_tail, transcript_calls, transcript_outs = [], [], []
+        verification_found, deadline_exceeded = False, False
+        tool_verified = False
 
         attempt_seed = (self.cfg.seed + attempt_index) ** 2
-        attempt_temperature = (
-            float(self.cfg.temperature) if temperature is None else float(temperature)
-        )
-        Conversation = self._h["Conversation"]
-        Role = self.Role
+        temp = self.cfg.temperature if temperature is None else temperature
 
         try:
             sandbox = self.sandbox_pool.get(timeout=self.cfg.sandbox_timeout)
 
-            # Build tool prompt - add Z3 info if enabled
-            tool_prompt = self.cfg.tool_prompt
-            if bool(getattr(self.cfg, "z3_tool_enabled", False)):
-                z3_info = (
-                    "\n\nZ3 SMT SOLVER AVAILABLE: You can use 'from z3 import *' for constraint "
-                    "solving. Best for Diophantine equations, combinatorial problems, and proving "
-                    "propositions. Example: x = Int('x'); solve(x**2 == 2)"
+            tool_p = (
+                self.cfg.tool_prompt
+                + (
+                    "\n\nZ3 SMT SOLVER AVAILABLE: You can use 'from z3 import *' for constraint solving."
+                    " Best for Diophantine equations, combinatorial problems. Example: x = Int('x'); solve(x**2 == 2)"
                 )
-                tool_prompt = tool_prompt + z3_info
+                if self.cfg.z3_tool_enabled
+                else self.cfg.tool_prompt
+            )
 
             local_tool = AIMO3Tool(
                 local_jupyter_timeout=self.cfg.jupyter_timeout,
-                tool_prompt=tool_prompt,
+                tool_prompt=tool_p,
                 sandbox=sandbox,
-                z3_enabled=bool(getattr(self.cfg, "z3_tool_enabled", False)),
+                z3_enabled=self.cfg.z3_tool_enabled,
             )
 
-            # Get tool configs - returns list if Z3 enabled, single config otherwise
             messages = self.template.apply_chat_template(
                 developer_prompt, problem, local_tool.tool_config
             )
 
-            # Inject continuation context from a previous incomplete wave.
             if continuation_context:
-                Message = self._h["Message"]
-                continuation_msg = Message.from_role_and_content(
-                    Role.USER,
-                    (
-                        "A previous attempt on this problem ran out of time before finding an answer. "
-                        "Here is the end of its reasoning — use it to continue, not restart:\n\n"
-                        + continuation_context
-                    ),
+                msg = self._h["Message"].from_role_and_content(
+                    self.Role.USER,
+                    "A previous attempt on this problem ran out of time before finding an answer. "
+                    "Here is the end of its reasoning — use it to continue, not restart:\n\n"
+                    + continuation_context,
                 )
-                messages.append(continuation_msg)
+                messages.append(msg)
 
-            conversation = Conversation.from_messages(messages)
+            conversation = self._h["Conversation"].from_messages(messages)
 
-            for _turn in range(self.cfg.turns):
-                if stop_event.is_set():
-                    break
-                if time.time() > deadline:
+            for _ in range(self.cfg.turns):
+                if stop_event.is_set() or time.time() > deadline:
                     deadline_exceeded = True
                     break
 
                 prompt_ids = self.encoding.render_conversation_for_completion(
-                    conversation, Role.ASSISTANT
+                    conversation, self.Role.ASSISTANT
                 )
-                max_tokens = self.cfg.context_tokens - len(prompt_ids)
-
-                if max_tokens < self.cfg.buffer_tokens:
+                max_tok = self.cfg.context_tokens - len(prompt_ids)
+                if max_tok < self.cfg.buffer_tokens:
                     break
 
                 extra = {
@@ -1378,14 +962,14 @@ class AIMO3Solver:
 
                 stream = self.client.completions.create(
                     model=self.cfg.served_model_name,
-                    temperature=attempt_temperature,
+                    temperature=temp,
                     top_p=self.cfg.top_p,
                     logprobs=(
                         self.cfg.top_logprobs
                         if self.cfg.entropy_weighting_enabled
                         else None
                     ),
-                    max_tokens=max_tokens,
+                    max_tokens=max_tok,
                     prompt=prompt_ids,
                     seed=attempt_seed,
                     stream=True,
@@ -1393,139 +977,97 @@ class AIMO3Solver:
                 )
 
                 try:
-                    token_buffer: list = []
-                    text_chunks: list[str] = []
-
+                    token_buf, text_buf = [], []
                     for chunk in stream:
-                        if stop_event.is_set():
-                            break
-                        if time.time() > deadline:
+                        if stop_event.is_set() or time.time() > deadline:
                             deadline_exceeded = True
                             break
-
                         choice = chunk.choices[0]
-                        new_tokens = choice.token_ids
-                        new_text = choice.text
-
-                        if new_tokens:
-                            token_buffer.extend(new_tokens)
-                            total_tokens += len(new_tokens)
-                            text_chunks.append(new_text)
-                            text_tail.append(new_text)
-
-                            if self.cfg.entropy_weighting_enabled:
-                                chunk_lp = choice.logprobs
-                                if chunk_lp is not None and chunk_lp.top_logprobs:
-                                    logprobs_buffer.extend(chunk_lp.top_logprobs)
+                        if choice.token_ids:
+                            token_buf.extend(choice.token_ids)
+                            total_tokens += len(choice.token_ids)
+                            text_buf.append(choice.text)
+                            text_tail.append(choice.text)
+                            if self.cfg.entropy_weighting_enabled and choice.logprobs:
+                                logprobs_buf.extend(choice.logprobs.top_logprobs or [])
 
                         if (
-                            "}" in (new_text or "")
+                            "}" in (choice.text or "")
                             and total_tokens
                             >= self.cfg.min_tokens_before_stream_extraction
                         ):
-                            search_text = "".join(
-                                text_chunks[-self.cfg.search_tokens :]
+                            ans = self._extractor.extract_boxed_int(
+                                "".join(text_buf[-self.cfg.search_tokens :])
                             )
-                            answer = self._extractor.extract_boxed_int(search_text)
-                            if answer is not None:
-                                final_answer = answer
+                            if ans is not None:
+                                final_answer = ans
                                 break
-
                 finally:
                     stream.close()
 
-                if final_answer is not None:
+                if final_answer is not None or not token_buf:
                     break
 
-                if not token_buffer:
-                    break
-
-                new_messages = self.encoding.parse_messages_from_completion_tokens(
-                    token_buffer, Role.ASSISTANT
+                new_msgs = self.encoding.parse_messages_from_completion_tokens(
+                    token_buf, self.Role.ASSISTANT
                 )
-                if not new_messages:
+                if not new_msgs:
                     break
 
-                conversation.messages = conversation.messages + list(new_messages)
-                last_message = new_messages[-1]
+                conversation.messages = conversation.messages + list(new_msgs)
+                last_msg = new_msgs[-1]
 
-                if last_message.channel == "final":
-                    answer_text = last_message.content[0].text
-                    final_answer = self._extractor.extract_boxed_int(answer_text)
-                    if final_answer is None:
-                        final_answer = self._extractor.extract_int_fallback(answer_text)
+                if last_msg.channel == "final":
+                    final_answer = self._extractor.extract_boxed_int(
+                        last_msg.content[0].text
+                    ) or self._extractor.extract_int_fallback(last_msg.content[0].text)
                     break
 
-                if last_message.recipient in ["python", "z3"]:
+                if last_msg.recipient in ("python", "z3"):
                     python_calls += 1
-                    with contextlib.suppress(Exception):
-                        transcript_python_calls.append(
-                            str(last_message.content[0].text or "")
-                        )
-                    # Phase 3: Pass expected answer for enhanced verification
-                    tool_responses = local_tool.process_sync_plus(
-                        last_message,
-                        expected_answer=(
-                            final_answer if final_answer is not None else None
-                        ),
+                    transcript_calls.append(str(last_msg.content[0].text or ""))
+                    tool_resp = local_tool.process_sync_plus(
+                        last_msg, expected_answer=final_answer
                     )
-                    response_text = tool_responses[0].content[0].text
-                    with contextlib.suppress(Exception):
-                        transcript_python_outputs.append(str(response_text or ""))
+                    resp_text = str(tool_resp[0].content[0].text or "")
+                    transcript_outs.append(resp_text)
 
                     if (
-                        response_text.startswith("[ERROR]")
-                        or "Traceback" in response_text
-                        or "Error:" in response_text
+                        resp_text.startswith("[ERROR]")
+                        or "Traceback" in resp_text
+                        or "Error:" in resp_text
                     ):
                         python_errors += 1
-                        if "timed out" in response_text.lower():
+                        if "timed out" in resp_text.lower():
                             timeout_count += 1
-                        # Capture the error message (truncate if too long).
-                        last_error = response_text[:500]
+                        last_error = resp_text[:500]
 
-                    if "VERIFY_OK" in response_text:
-                        verification_marker_found = True
+                    if "VERIFY_OK" in resp_text:
+                        verification_found = True
+                    if "[VERIFICATION NOTICE]" in resp_text:
+                        tool_verified = True
 
-                    # Phase 3: Capture enhanced verification results
-                    if "[VERIFICATION" in response_text:
-                        # Parse verification results from the response
-                        if "[VERIFICATION WARNING]" in response_text:
-                            # Tool output had issues
-                            pass  # Already counted as error above
-                        elif "[VERIFICATION NOTICE]" in response_text:
-                            # Tool output had warnings but passed
-                            tool_output_verified = True
-                            verification_confidence = (
-                                0.8  # Good confidence with warnings
-                            )
+                    conversation.messages = conversation.messages + list(tool_resp)
 
-                    conversation.messages = conversation.messages + list(tool_responses)
-
-        except Exception:  # noqa: BLE001
-            pass  # Infrastructure failure (e.g. vLLM stream error), not a Python tool error
-
+        except Exception:
+            pass
         finally:
-            if sandbox is not None:
-                if bool(self.cfg.sandbox_reset_between_attempts):
+            if sandbox:
+                if self.cfg.sandbox_reset_between_attempts:
                     with contextlib.suppress(Exception):
                         sandbox.reset()
                 with contextlib.suppress(Exception):
                     self.sandbox_pool.put(sandbox)
 
-        # Last-resort extraction: the model used the tool and generated many
-        # tokens but never emitted a clean "final" channel message.  Scan the
-        # accumulated tail text for a \boxed{} or fallback integer.
         if final_answer is None and text_tail:
-            full_tail = "".join(text_tail)
-            final_answer = self._extractor.extract_boxed_int(full_tail)
-            if final_answer is None:
-                final_answer = self._extractor.extract_int_fallback(full_tail)
+            full = "".join(text_tail)
+            final_answer = self._extractor.extract_boxed_int(
+                full
+            ) or self._extractor.extract_int_fallback(full)
 
-        mean_entropy = self._compute_mean_entropy(logprobs_buffer)
-        output_text = "".join(text_tail)
+        mean_ent = self._compute_mean_entropy(logprobs_buf)
 
-        result = AttemptResult(
+        return AttemptResult(
             attempt=attempt_index + 1,
             answer=final_answer,
             stats=AttemptStats(
@@ -1533,94 +1075,30 @@ class AIMO3Solver:
                 python_calls=python_calls,
                 python_errors=python_errors,
                 timeout_count=timeout_count,
-                mean_entropy=mean_entropy,
+                mean_entropy=mean_ent,
                 verification_marker_found=(
                     True
-                    if verification_marker_found
+                    if verification_found
                     else (False if self.cfg.require_verification_marker else None)
                 ),
                 deadline_exceeded=deadline_exceeded,
                 last_error=last_error,
             ),
-            output_text=output_text,
+            output_text="".join(text_tail),
             tag=attempt_tag,
         )
 
-        if bool(getattr(self.cfg, "trace_attempts_enabled", False)) and bool(
-            getattr(self.cfg, "trace_enabled", False)
-        ):
-            max_chars = int(getattr(self.cfg, "trace_attempts_max_chars", 0) or 0)
-
-            def _cap_list(
-                items: list[str], per_item_chars: int = 4000, max_items: int = 20
-            ) -> list[str]:
-                per_item_chars = max(0, int(per_item_chars))
-                max_items = max(0, int(max_items))
-                if max_items and len(items) > max_items:
-                    items = items[-max_items:]
-                if per_item_chars > 0:
-                    return [self._truncate(s, per_item_chars) for s in items]
-                return items
-
-            payload = {
-                "event": "attempt_end",
-                "problem_id": problem_id,
-                "attempt": int(result.attempt),
-                "tag": result.tag,
-                "answer": (
-                    int(result.answer) if isinstance(result.answer, int) else None
-                ),
-                "token_count": int(result.stats.token_count),
-                "python_calls": int(result.stats.python_calls),
-                "python_errors": int(result.stats.python_errors),
-                "timeout_count": int(getattr(result.stats, "timeout_count", 0) or 0),
-                "deadline_exceeded": bool(
-                    getattr(result.stats, "deadline_exceeded", False)
-                ),
-                "last_error": result.stats.last_error,
-                "assistant_text": (
-                    self._truncate(output_text, max_chars)
-                    if max_chars > 0
-                    else output_text
-                ),
-                "python_calls_text": _cap_list(transcript_python_calls),
-                "python_outputs_text": _cap_list(transcript_python_outputs),
-            }
-            if not payload.get("assistant_text"):
-                payload.pop("assistant_text", None)
-            if not payload.get("python_calls_text"):
-                payload.pop("python_calls_text", None)
-            if not payload.get("python_outputs_text"):
-                payload.pop("python_outputs_text", None)
-            if not payload.get("last_error"):
-                payload.pop("last_error", None)
-
-            with contextlib.suppress(Exception):
-                self._trace.record(payload)
-
-        return result
-
     def solve_problem(self, problem: str) -> int:
-        """Solve a single problem with multiple parallel attempts and answer ranking."""
-
         print(f"\nProblem: {problem}\n")
 
         user_input = f"{problem} {self.cfg.preference_prompt}"
-        problem_features, adaptive_cfg = self._adapt_problem_hyperparameters(problem)
-        attempts_for_problem = max(
-            1, int(adaptive_cfg.get("attempts", self.cfg.attempts))
-        )
-        temperature_for_problem = float(
-            adaptive_cfg.get("temperature", self.cfg.temperature)
-        )
-        early_stop_for_problem = max(
-            1, int(adaptive_cfg.get("early_stop", self.cfg.early_stop))
-        )
-        preferred_strategy = (
-            str(adaptive_cfg.get("preferred_strategy") or "").strip() or None
-        )
+        problem_feats, adaptive_cfg = self._adapt_problem_hyperparameters(problem)
 
-        # Compute budget using adaptive tracker.
+        attempts_for_prob = max(1, adaptive_cfg.get("attempts", self.cfg.attempts))
+        temp_for_prob = adaptive_cfg.get("temperature", self.cfg.temperature)
+        early_stop_prob = max(1, adaptive_cfg.get("early_stop", self.cfg.early_stop))
+        pref_strat = adaptive_cfg.get("preferred_strategy")
+
         budget = self._budget_tracker.compute_budget()
         deadline = time.time() + budget
         problem_start = time.time()
@@ -1628,7 +1106,6 @@ class AIMO3Solver:
 
         print(f"Budget: {budget:.2f}s | {self._budget_tracker.status_summary()}\n")
 
-        # Record trace start.
         self._trace.record(
             {
                 "event": "solve_start",
@@ -1638,269 +1115,174 @@ class AIMO3Solver:
             }
         )
 
-        # Optional: snapshot sandbox environment.
-        env_snapshot = None
-        if self.cfg.trace_env_enabled:
-            with contextlib.suppress(Exception):
-                env_snapshot = self._sandbox_env_snapshot()
+        env_snap = self._sandbox_env_snapshot() if self.cfg.trace_env_enabled else None
 
         if adaptive_cfg:
             print(
-                "[Meta] "
-                f"attempts={attempts_for_problem}, "
-                f"temperature={temperature_for_problem:.2f}, "
-                f"early_stop={early_stop_for_problem}, "
-                f"preferred={preferred_strategy or 'none'}"
+                f"[Meta] attempts={attempts_for_prob}, temperature={temp_for_prob:.2f}, "
+                f"early_stop={early_stop_prob}, preferred={pref_strat or 'none'}"
             )
 
-        # Build task list: (developer_prompt, attempt_index, tag).
+        used_strats = [] if self.cfg.meta_learning_track_strategies else None
         tasks = []
-        used_strategies: list[str] | None = (
-            []
-            if bool(getattr(self.cfg, "meta_learning_track_strategies", True))
-            else None
-        )
-        for i in range(attempts_for_problem):
-            dev_prompt, tag, strategy_name = self._build_attempt_prompt(
-                i,
-                problem,
-                used_strategies=used_strategies,
-                preferred_strategy=(preferred_strategy if i == 0 else None),
+        for i in range(attempts_for_prob):
+            dev_p, tag, strat_n = self._build_attempt_prompt(
+                i, problem, used_strats, pref_strat if i == 0 else None
             )
-            tasks.append((dev_prompt, i, tag))
-            if (
-                used_strategies is not None
-                and strategy_name
-                and strategy_name not in used_strategies
-            ):
-                used_strategies.append(strategy_name)
+            tasks.append((dev_p, i, tag))
+            if used_strats and strat_n and strat_n not in used_strats:
+                used_strats.append(strat_n)
 
-        detailed_results: list[AttemptResult] = []
-        stop_event = threading.Event()
-        executor = ThreadPoolExecutor(max_workers=self.cfg.workers)
+        results, stop_evt = [], threading.Event()
 
-        try:
-            futures = []
-            for dev_prompt, attempt_idx, tag in tasks:
-                f = executor.submit(
+        with ThreadPoolExecutor(max_workers=self.cfg.workers) as ex:
+            futures = [
+                ex.submit(
                     self._process_attempt,
                     user_input,
-                    dev_prompt,
-                    attempt_idx,
+                    dev_p,
+                    idx,
                     tag,
-                    stop_event,
+                    stop_evt,
                     deadline,
                     problem_id=problem_id,
-                    temperature=temperature_for_problem,
+                    temperature=temp_for_prob,
                 )
-                futures.append(f)
+                for dev_p, idx, tag in tasks
+            ]
 
-            for future in as_completed(futures):
+            for f in as_completed(futures):
                 try:
-                    result = future.result()
-                    detailed_results.append(result)
-
-                    time_spent = time.time() - problem_start
+                    results.append(f.result())
                     if self._should_early_stop(
-                        detailed_results,
-                        time_spent,
-                        early_stop_target=early_stop_for_problem,
+                        results, time.time() - problem_start, early_stop_prob
                     ):
-                        stop_event.set()
-                        for f in futures:
-                            f.cancel()
+                        stop_evt.set()
+                        for ff in futures:
+                            ff.cancel()
                         break
+                except Exception as e:
+                    print(f"Future failed: {e}")
 
-                except Exception as exc:  # noqa: BLE001
-                    print(f"Future failed: {exc}")
-                    continue
-
-        finally:
-            stop_event.set()
-            executor.shutdown(wait=True, cancel_futures=True)
-
-        # --- Adaptive retry: if every attempt returned None, request an
-        #     extension from the flex pool and run a second wave. -----------
-        has_any_answer = any(r.answer is not None for r in detailed_results)
-        if not has_any_answer:
+        if not any(r.answer is not None for r in results):
             time_spent = time.time() - problem_start
-            extension = self._budget_tracker.request_no_answer_extension(
-                time_spent_s=time_spent,
-                current_budget_s=budget,
+            ext = self._budget_tracker.request_no_answer_extension(
+                time_spent_s=time_spent, current_budget_s=budget
             )
-            if extension > 0:
-                new_deadline = time.time() + extension
-
-                # Pick the most-progressed wave-1 attempt to use as continuation.
+            if ext > 0:
+                new_dead = time.time() + ext
                 best_w1 = max(
-                    detailed_results,
-                    key=lambda r: (
-                        r.stats.python_calls,
-                        r.stats.token_count,
-                    ),
+                    results,
+                    key=lambda r: (r.stats.python_calls, r.stats.token_count),
                     default=None,
                 )
-                cont_ctx = (
-                    best_w1.output_text if best_w1 is not None else None
-                ) or None
+                cont = best_w1.output_text if best_w1 else None
 
                 print(
-                    f"[Adaptive] No answer found — granted {extension:.0f}s "
-                    f"extension (flex pool). Running second wave "
-                    f"{'with' if cont_ctx else 'without'} continuation context...\n"
+                    f"[Adaptive] No answer found — granted {ext:.0f}s extension. Running second wave "
+                    f"{'with' if cont else 'without'} continuation context...\n"
                 )
 
-                stop_event_2 = threading.Event()
-                executor_2 = ThreadPoolExecutor(max_workers=self.cfg.workers)
-                # Use fresh attempt indices so seeds differ from the first wave.
-                wave2_start = attempts_for_problem
-                try:
-                    futures_2 = []
-                    for i in range(attempts_for_problem):
-                        attempt_idx = wave2_start + i
-                        dev_prompt, tag, strategy_name = self._build_attempt_prompt(
-                            attempt_idx,
-                            problem,
-                            used_strategies=used_strategies,
-                        )
-                        if (
-                            used_strategies is not None
-                            and strategy_name
-                            and strategy_name not in used_strategies
-                        ):
-                            used_strategies.append(strategy_name)
-                        f2 = executor_2.submit(
+                stop_2, results_2 = threading.Event(), []
+                with ThreadPoolExecutor(max_workers=self.cfg.workers) as ex2:
+                    f2 = [
+                        ex2.submit(
                             self._process_attempt,
                             user_input,
-                            dev_prompt,
-                            attempt_idx,
-                            tag,
-                            stop_event_2,
-                            new_deadline,
+                            *self._build_attempt_prompt(
+                                attempts_for_prob + i, problem, used_strats
+                            ),
+                            stop_2,
+                            new_dead,
                             problem_id=problem_id,
-                            continuation_context=cont_ctx,
-                            temperature=temperature_for_problem,
+                            continuation_context=cont,
+                            temperature=temp_for_prob,
                         )
-                        futures_2.append(f2)
+                        for i in range(attempts_for_prob)
+                    ]
 
-                    for future in as_completed(futures_2):
-                        try:
-                            result = future.result()
-                            detailed_results.append(result)
-
-                            time_spent_2 = time.time() - problem_start
-                            if self._should_early_stop(
-                                detailed_results,
-                                time_spent_2,
-                                early_stop_target=early_stop_for_problem,
-                            ):
-                                stop_event_2.set()
-                                for f2 in futures_2:
-                                    f2.cancel()
-                                break
-                        except Exception:  # noqa: BLE001
-                            continue
-                finally:
-                    stop_event_2.set()
-                    executor_2.shutdown(wait=True, cancel_futures=True)
+                    for ff in as_completed(f2):
+                        with contextlib.suppress(Exception):
+                            results_2.append(ff.result())
+                results.extend(results_2)
 
         time_used = time.time() - problem_start
+        self._display_candidates(results)
 
-        # Display candidates.
-        self._display_candidates(detailed_results)
-
-        # Select answer via ranking.
         ranked = rank_candidates(
-            detailed_results,
-            filter_to_verified_if_any=bool(self.cfg.filter_to_verified_if_any),
-            magnitude_aware=bool(self.cfg.magnitude_aware_ranking_enabled),
-            ranking_strategy=str(getattr(self.cfg, "ranking_strategy", "")),
+            results,
+            filter_to_verified_if_any=self.cfg.filter_to_verified_if_any,
+            magnitude_aware=self.cfg.magnitude_aware_ranking_enabled,
+            ranking_strategy=self.cfg.ranking_strategy,
         )
 
-        # --- Answer-conditional verification phase ---
-        # Use the UNFILTERED ranking so that all strong candidates (including
-        # those without tool-verification) get a fair shot at being checked.
-        ranked_for_verify = rank_candidates(
-            detailed_results,
+        ranked_for_v = rank_candidates(
+            results,
             filter_to_verified_if_any=False,
-            magnitude_aware=bool(self.cfg.magnitude_aware_ranking_enabled),
-            ranking_strategy=str(getattr(self.cfg, "ranking_strategy", "")),
+            magnitude_aware=self.cfg.magnitude_aware_ranking_enabled,
+            ranking_strategy=self.cfg.ranking_strategy,
         )
-        time_remaining_for_verify = self._budget_tracker.time_remaining_s - time_used
-        if self._should_run_verification(ranked_for_verify, time_remaining_for_verify):
-            verify_deadline = time.time() + min(
-                self.cfg.verify_timeout_s, time_remaining_for_verify * 0.8
+
+        if self._should_run_verification(
+            ranked_for_v, self._budget_tracker.time_remaining_s - time_used
+        ):
+            v_dead = time.time() + min(
+                self.cfg.verify_timeout_s,
+                (self._budget_tracker.time_remaining_s - time_used) * 0.8,
             )
             print("[Verify] Weak consensus — running verification phase...")
-            ranked = self._verify_candidates(
-                problem, ranked_for_verify, verify_deadline, problem_id
-            )
-            # If verifier produced no decisive signals at all, disable it for
-            # the rest of the run (optional) to avoid wasting budget.
-            had_decisive_signal = any(
-                (
-                    int(d.get("verify_correct", 0) or 0)
-                    + int(d.get("verify_incorrect", 0) or 0)
+            ranked = self._verify_candidates(problem, ranked_for_v, v_dead, problem_id)
+
+            if (
+                not any(
+                    d.get("verify_correct", 0) + d.get("verify_incorrect", 0) > 0
+                    for _, d in ranked
                 )
-                > 0
-                for _a, d in ranked
-            )
-            if not had_decisive_signal and bool(
-                getattr(self.cfg, "verify_disable_globally_if_all_unknown", True)
+                and self.cfg.verify_disable_globally_if_all_unknown
             ):
                 self._verify_runtime_disabled = True
                 print(
-                    "[Verify] No decisive verification signal (all UNKNOWN). "
-                    "Disabling verification for remaining problems."
+                    "[Verify] No decisive verification signal. Disabling for remaining problems."
                 )
-            # Update time_used to include verification.
             time_used = time.time() - problem_start
 
         if ranked:
-            final_answer = ranked[0][0]
+            final_ans = ranked[0][0]
             data = ranked[0][1]
-            verify_info = ""
-            if "verify_correct" in data:
-                verify_info = (
-                    f", verify_ok={data['verify_correct']}"
-                    f", verify_fail={data['verify_incorrect']}"
-                )
+            vinfo = (
+                f", verify_ok={data['verify_correct']}, verify_fail={data['verify_incorrect']}"
+                if "verify_correct" in data
+                else ""
+            )
             print(
-                f"\nFinal Answer: {final_answer} "
-                f"(votes={data['votes']}, verified={data['verified']}"
-                f"{verify_info})\n"
+                f"\nFinal Answer: {final_ans} (votes={data['votes']}, verified={data['verified']}{vinfo})\n"
             )
         else:
-            final_answer = 0
+            final_ans = 0
             print("\nFinal Answer: 0 (no valid candidates)\n")
 
         self._update_meta_learning_from_problem_outcome(
-            problem_features=problem_features,
+            problem_features=problem_feats,
             adaptive_cfg_used=adaptive_cfg,
-            detailed_results=detailed_results,
+            detailed_results=results,
             ranked=ranked,
             time_used_s=time_used,
         )
 
-        # Pass the allocated budget so leftover time can be added to carryover pool
         try:
             self._budget_tracker.record_solve(time_used, allocated_budget_s=budget)
         except TypeError:
-            # Fallback for compatibility: older trackers may not accept allocated_budget_s
             self._budget_tracker.record_solve(time_used)
         self.problems_remaining = self._budget_tracker.problems_remaining
 
-        # Record trace end.
         self._trace.record(
             {
                 "event": "solve_end",
                 "problem_id": problem_id,
-                "answer": final_answer,
+                "answer": final_ans,
                 "time_s": time_used,
-                "attempts_total": len(detailed_results),
-                "attempts_with_answer": sum(
-                    1 for r in detailed_results if r.answer is not None
-                ),
+                "attempts_total": len(results),
+                "attempts_with_answer": sum(1 for r in results if r.answer is not None),
                 "ranking": (
                     [
                         {
@@ -1915,8 +1297,8 @@ class AIMO3Solver:
                     if ranked
                     else []
                 ),
-                "env": env_snapshot,
+                "env": env_snap,
             }
         )
 
-        return int(final_answer) if final_answer is not None else 0
+        return final_ans if final_ans is not None else 0
