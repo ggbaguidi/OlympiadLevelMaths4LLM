@@ -1098,7 +1098,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                         and not resp_text.startswith("[ERROR]")
                     ):
                         python_errors += 1
-                        if last_error is None:
+                        if last_error is None and self.cfg.require_verification_marker:
                             last_error = "Tool output verification marked invalid."
 
                     conversation.messages = conversation.messages + list(tool_resp)
