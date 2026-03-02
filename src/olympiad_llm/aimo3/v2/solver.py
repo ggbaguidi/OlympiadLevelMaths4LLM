@@ -1097,7 +1097,8 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                         "[VERIFICATION NOTICE] TOOL_OUTPUT_INVALID" in resp_text
                         and not resp_text.startswith("[ERROR]")
                     ):
-                        python_errors += 1
+                        if self.cfg.require_verification_marker:
+                            python_errors += 1
                         if last_error is None and self.cfg.require_verification_marker:
                             last_error = "Tool output verification marked invalid."
 
