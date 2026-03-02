@@ -467,13 +467,26 @@ class AdaptiveHyperparameters:
         self.default_config = default_config
         self.problem_type_configs: Dict[str, Dict[str, Any]] = {}
 
+    @staticmethod
+    def _infer_problem_type(problem_features: ProblemFeatures) -> str:
+        features = problem_features.to_vector()
+        domain_scores = features[:5]
+        if domain_scores.size == 0:
+            return "general"
+
+        max_score = float(np.max(domain_scores))
+        sum_score = float(np.sum(domain_scores))
+        # If domain signals are weak/ambiguous, default to generic settings.
+        if max_score < 0.2 or sum_score < 0.35:
+            return "general"
+
+        domain_idx = int(np.argmax(domain_scores))
+        domains = ["modular", "combinatorics", "number_theory", "algebra", "geometry"]
+        return domains[domain_idx] if 0 <= domain_idx < len(domains) else "general"
+
     def get_config(self, problem_features: ProblemFeatures) -> Dict[str, Any]:
         """Get hyperparameters adapted to problem type."""
-        # Determine problem type
-        features = problem_features.to_vector()
-        domain_idx = np.argmax(features[:5])  # First 5 are domain indicators
-        domains = ["modular", "combinatorics", "number_theory", "algebra", "geometry"]
-        problem_type = domains[domain_idx] if domain_idx < 5 else "general"
+        problem_type = self._infer_problem_type(problem_features)
 
         if problem_type not in self.problem_type_configs:
             return self._default_for_type(problem_type)
@@ -530,10 +543,7 @@ class AdaptiveHyperparameters:
         time_spent: float,
     ) -> None:
         """Update hyperparameters based on outcome (gradient-free optimization)."""
-        features = problem_features.to_vector()
-        domain_idx = np.argmax(features[:5])
-        domains = ["modular", "combinatorics", "number_theory", "algebra", "geometry"]
-        problem_type = domains[domain_idx] if domain_idx < 5 else "general"
+        problem_type = self._infer_problem_type(problem_features)
 
         # Simple heuristic: if succeeded quickly, reinforce config
         if success and time_spent < 120:

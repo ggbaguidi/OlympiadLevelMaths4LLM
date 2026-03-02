@@ -46,3 +46,5 @@ class AttemptResult:
     stats: AttemptStats = AttemptStats()
     output_text: str | None = None
     tag: str | None = None
+    python_calls_text: tuple[str, ...] = ()
+    python_outputs_text: tuple[str, ...] = ()

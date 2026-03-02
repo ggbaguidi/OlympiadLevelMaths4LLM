@@ -227,6 +227,47 @@ class AIMO3Tool:
             msg = msg.with_channel(channel)
         return msg
 
+    def _augment_output_with_verification(
+        self, output: str, expected_answer: int | None
+    ) -> str:
+        if not self._enable_verification or self._verifier is None:
+            return output
+
+        try:
+            verdict = self._verifier.verify_output(output, expected_answer=expected_answer)
+        except Exception:  # noqa: BLE001
+            return output
+
+        notices: list[str] = [
+            (
+                "[VERIFICATION NOTICE] TOOL_OUTPUT_VALID"
+                if verdict.is_valid
+                else "[VERIFICATION NOTICE] TOOL_OUTPUT_INVALID"
+            )
+        ]
+        if verdict.error_type:
+            notices.append(f"[VERIFICATION NOTICE] ERROR_TYPE={verdict.error_type}")
+        if verdict.warnings:
+            notices.append(
+                "[VERIFICATION NOTICE] WARNINGS=" + "; ".join(verdict.warnings[:3])
+            )
+
+        if expected_answer is not None and verdict.numerical_value is not None:
+            try:
+                if abs(float(verdict.numerical_value) - float(expected_answer)) < 1e-9:
+                    notices.append("VERIFY_OK")
+                else:
+                    notices.append("VERIFY_FAIL")
+            except Exception:  # noqa: BLE001
+                pass
+
+        suffix = "\n".join(notices)
+        if not suffix:
+            return output
+        if output and not output.endswith("\n"):
+            return output + "\n" + suffix
+        return output + suffix
+
     def process_sync_plus(
         self,
         message,
@@ -251,6 +292,7 @@ class AIMO3Tool:
 
         with self._execution_lock:
             output = self._jupyter_session.execute(final_script, timeout=timeout_s)
+        output = self._augment_output_with_verification(output, expected_answer)
 
         return [
             self._make_response(

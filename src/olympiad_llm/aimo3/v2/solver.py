@@ -1,4 +1,4 @@
-# pylint: disable=broad-exception-caught,missing-function-docstring,line-too-long,missing-module-docstring,import-outside-toplevel,invalid-name,too-many-instance-attributes,missing-class-docstring,too-many-branches,too-many-statements
+# pylint: disable=broad-exception-caught,missing-function-docstring,line-too-long,missing-module-docstring,import-outside-toplevel,invalid-name,too-many-instance-attributes,missing-class-docstring
 """AIMO-3 multi-attempt solver (optimized)."""
 from __future__ import annotations
 import contextlib
@@ -351,6 +351,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
             "candidate": candidate_answer,
             "verdict": "UNKNOWN",
             "alt_answer": None,
+            "error": None,
         }
         if time.time() > deadline:
             return result
@@ -381,7 +382,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                     break
 
                 prompt_ids = self.encoding.render_conversation_for_completion(
-                    conversation, self.Role
+                    conversation, self.Role.ASSISTANT
                 )
                 max_tokens = min(
                     self.cfg.verify_max_tokens,
@@ -421,7 +422,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                     break
 
                 new_msgs = self.encoding.parse_messages_from_completion_tokens(
-                    token_buffer, self.Role
+                    token_buffer, self.Role.ASSISTANT
                 )
                 if not new_msgs:
                     break
@@ -468,8 +469,8 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                     f"  [Verify UNKNOWN] Candidate {candidate_answer} — full output:\n{full_text}..."
                 )
 
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            result["error"] = f"{type(exc).__name__}: {exc}"
         finally:
             if sandbox:
                 with contextlib.suppress(Exception):
@@ -533,16 +534,12 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
 
         augmented = [
             (
-                (
-                    ans,
-                    {
-                        **data,
-                        "verify_correct": scores[ans]["correct"],
-                        "verify_incorrect": scores[ans]["incorrect"],
-                    },
-                )
-                if ans in scores
-                else {**data, "verify_correct": 0, "verify_incorrect": 0}
+                ans,
+                {
+                    **data,
+                    "verify_correct": scores[ans]["correct"],
+                    "verify_incorrect": scores[ans]["incorrect"],
+                },
             )
             for ans, data in ranked
         ]
@@ -801,12 +798,14 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
             return
 
         top_ans, top_data = ranked[0]
-        verify_correct, verified_votes = top_data.get(
-            "verify_correct", 0
-        ), top_data.get("verified", 0)
-        if not (
-            verified_votes > 0 or verify_correct > top_data.get("verify_incorrect", 0)
-        ):
+        verify_correct = int(top_data.get("verify_correct", 0) or 0)
+        verify_incorrect = int(top_data.get("verify_incorrect", 0) or 0)
+        verified_votes = int(top_data.get("verified", 0) or 0)
+        top_votes = int(top_data.get("votes", 0) or 0)
+        verification_decisive = verify_correct > verify_incorrect and verify_correct > 0
+        strong_internal_support = verified_votes >= 2 and top_votes >= 3
+        allow_learning = verification_decisive or strong_internal_support
+        if not allow_learning:
             return
         if not any(
             isinstance(r.answer, int) and r.answer == top_ans for r in detailed_results
@@ -854,7 +853,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 self._adaptive_hparams.update_from_outcome(
                     problem_features=problem_features,
                     config_used=adaptive_cfg_used,
-                    success=True,
+                    success=allow_learning,
                     time_spent=time_used_s,
                 )
 
@@ -874,6 +873,54 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
             total += te
             count += 1
         return _INF if count == 0 else total / count
+
+    def _record_attempt_trace(self, problem_id: str, result: AttemptResult) -> None:
+        if not self.cfg.trace_attempts_enabled:
+            return
+
+        remaining = max(0, int(self.cfg.trace_attempts_max_chars))
+
+        def _cap(items: tuple[str, ...] | list[str]) -> list[str]:
+            nonlocal remaining
+            out: list[str] = []
+            for raw in items:
+                if remaining <= 0:
+                    break
+                s = str(raw or "")
+                if len(s) > remaining:
+                    keep = max(0, remaining - 3)
+                    out.append(("..." + s[-keep:]) if keep > 0 else "")
+                    remaining = 0
+                    break
+                out.append(s)
+                remaining -= len(s)
+            return out
+
+        calls = _cap(list(result.python_calls_text or ()))
+        outs = _cap(list(result.python_outputs_text or ()))
+        text_payload = ""
+        if remaining > 0:
+            text_payload = self._truncate(result.output_text, remaining)
+
+        self._trace.record(
+            {
+                "event": "attempt_end",
+                "problem_id": problem_id,
+                "attempt": int(result.attempt),
+                "tag": result.tag,
+                "answer": result.answer,
+                "token_count": int(result.stats.token_count),
+                "python_calls": int(result.stats.python_calls),
+                "python_errors": int(result.stats.python_errors),
+                "timeout_count": int(result.stats.timeout_count),
+                "deadline_exceeded": bool(result.stats.deadline_exceeded),
+                "tool_verified": bool(result.stats.tool_verified),
+                "last_error": result.stats.last_error,
+                "python_calls_text": calls,
+                "python_outputs_text": outs,
+                "output_text": text_payload,
+            }
+        )
 
     def _process_attempt(
         self,
@@ -1044,13 +1091,21 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
 
                     if "VERIFY_OK" in resp_text:
                         verification_found = True
-                    if "[VERIFICATION NOTICE]" in resp_text:
+                    if "[VERIFICATION NOTICE] TOOL_OUTPUT_VALID" in resp_text:
                         tool_verified = True
+                    if (
+                        "[VERIFICATION NOTICE] TOOL_OUTPUT_INVALID" in resp_text
+                        and not resp_text.startswith("[ERROR]")
+                    ):
+                        python_errors += 1
+                        if last_error is None:
+                            last_error = "Tool output verification marked invalid."
 
                     conversation.messages = conversation.messages + list(tool_resp)
 
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            if last_error is None:
+                last_error = f"[INTERNAL_ERROR] {type(exc).__name__}: {exc}"[:500]
         finally:
             if sandbox:
                 if self.cfg.sandbox_reset_between_attempts:
@@ -1078,7 +1133,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 mean_entropy=mean_ent,
                 verification_marker_found=(
                     True
-                    if verification_found
+                    if (verification_found or tool_verified)
                     else (False if self.cfg.require_verification_marker else None)
                 ),
                 deadline_exceeded=deadline_exceeded,
@@ -1086,6 +1141,8 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
             ),
             output_text="".join(text_tail),
             tag=attempt_tag,
+            python_calls_text=tuple(transcript_calls),
+            python_outputs_text=tuple(transcript_outs),
         )
 
     def solve_problem(self, problem: str) -> int:
@@ -1153,7 +1210,9 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
 
             for f in as_completed(futures):
                 try:
-                    results.append(f.result())
+                    r = f.result()
+                    results.append(r)
+                    self._record_attempt_trace(problem_id, r)
                     if self._should_early_stop(
                         results, time.time() - problem_start, early_stop_prob
                     ):
@@ -1185,25 +1244,35 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
 
                 stop_2, results_2 = threading.Event(), []
                 with ThreadPoolExecutor(max_workers=self.cfg.workers) as ex2:
-                    f2 = [
-                        ex2.submit(
-                            self._process_attempt,
-                            user_input,
-                            *self._build_attempt_prompt(
-                                attempts_for_prob + i, problem, used_strats
-                            ),
-                            stop_2,
-                            new_dead,
-                            problem_id=problem_id,
-                            continuation_context=cont,
-                            temperature=temp_for_prob,
+                    f2 = []
+                    for i in range(attempts_for_prob):
+                        dev_p2, tag2, strat_n2 = self._build_attempt_prompt(
+                            attempts_for_prob + i, problem, used_strats
                         )
-                        for i in range(attempts_for_prob)
-                    ]
+                        if used_strats and strat_n2 and strat_n2 not in used_strats:
+                            used_strats.append(strat_n2)
+                        f2.append(
+                            ex2.submit(
+                                self._process_attempt,
+                                user_input,
+                                dev_p2,
+                                attempts_for_prob + i,
+                                tag2,
+                                stop_2,
+                                new_dead,
+                                problem_id=problem_id,
+                                continuation_context=cont,
+                                temperature=temp_for_prob,
+                            )
+                        )
 
                     for ff in as_completed(f2):
-                        with contextlib.suppress(Exception):
-                            results_2.append(ff.result())
+                        try:
+                            rr = ff.result()
+                            results_2.append(rr)
+                            self._record_attempt_trace(problem_id, rr)
+                        except Exception as e:  # noqa: BLE001
+                            print(f"Second-wave future failed: {e}")
                 results.extend(results_2)
 
         time_used = time.time() - problem_start

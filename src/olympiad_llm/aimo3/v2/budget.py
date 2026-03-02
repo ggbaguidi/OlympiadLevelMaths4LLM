@@ -62,6 +62,8 @@ class TimeBudgetTracker:
 
     # Carryover pool: accumulates leftover time from problems solved under budget
     carryover_pool_s: float = field(default=0.0, init=False)
+    # If False, carryover is fully disabled (no accumulation, no use).
+    carryover_enabled: bool = field(default=True, init=False)
     # Whether to distribute carryover across remaining problems (True) or
     # apply to the next single problem only (False)
     cumulative_distribute: bool = field(default=True)
@@ -106,10 +108,11 @@ class TimeBudgetTracker:
 
         carry_env = os.getenv("AIMO3_CARRYOVER_ENABLED")
         if carry_env is not None:
-            # treat any non-empty value other than '0'/'false' as enabled
-            self.carryover_pool_s = 0.0
             if carry_env.lower() in ("0", "false", "no"):
-                self.cumulative_distribute = False
+                self.carryover_enabled = False
+                self.carryover_pool_s = 0.0
+            else:
+                self.carryover_enabled = True
 
         dist_env = os.getenv("AIMO3_CUMULATIVE_DISTRIBUTE")
         if dist_env is not None:
@@ -139,7 +142,7 @@ class TimeBudgetTracker:
         # 3. Divide evenly among remaining problems (excluding any carryover
         # amount which we'll treat separately when using cumulative mode).
         # Subtract current carryover from available so it won't be double-counted.
-        carry = max(0.0, self.carryover_pool_s)
+        carry = max(0.0, self.carryover_pool_s) if self.carryover_enabled else 0.0
         available_excl_carry = max(0.0, available - carry)
         equal_share = available_excl_carry / self.problems_remaining
 
@@ -156,7 +159,7 @@ class TimeBudgetTracker:
         elif strat == "cumulative":
             # Distribute carryover across remaining problems (or apply all to
             # next problem if distribution disabled).
-            if carry <= 0.0:
+            if not self.carryover_enabled or carry <= 0.0:
                 additional = 0.0
             elif self.cumulative_distribute:
                 additional = carry / self.problems_remaining
@@ -235,7 +238,7 @@ class TimeBudgetTracker:
         # accumulate leftover into carryover pool
         if allocated_budget_s is not None:
             leftover = max(0.0, allocated_budget_s - time_used_s)
-            if leftover > 0.0:
+            if self.carryover_enabled and leftover > 0.0:
                 self.carryover_pool_s += leftover
 
     def status_summary(self) -> str:
