@@ -494,46 +494,34 @@ class AdaptiveHyperparameters:
         return self.problem_type_configs[problem_type]
 
     def _default_for_type(self, problem_type: str) -> Dict[str, Any]:
-        """Get sensible defaults based on problem type."""
-        defaults = {
-            "modular": {
-                "attempts": 8,
-                "temperature": 0.8,
-                "early_stop": 3,
-                "preferred_strategy": "modular_arithmetic",
-            },
-            "combinatorics": {
-                "attempts": 10,
-                "temperature": 0.9,
-                "early_stop": 4,
-                "preferred_strategy": "generate_and_test",
-            },
-            "number_theory": {
-                "attempts": 8,
-                "temperature": 0.85,
-                "early_stop": 3,
-                "preferred_strategy": "reduce_to_known",
-            },
-            "algebra": {
-                "attempts": 6,
-                "temperature": 1,
-                "early_stop": 3,
-                "preferred_strategy": "algebraic_manipulation",
-            },
-            "geometry": {
-                "attempts": 8,
-                "temperature": 0.8,
-                "early_stop": 3,
-                "preferred_strategy": "work_backwards",
-            },
-            "general": {
-                "attempts": 8,
-                "temperature": 0.95,
-                "early_stop": 3,
-                "preferred_strategy": None,
-            },
+        """Get baseline defaults while preserving explicit user config.
+
+        Important: type-aware defaults must not silently override the base solver
+        configuration loaded from environment/notebook settings. Otherwise
+        enabling meta-learning would unexpectedly reset knobs such as attempts,
+        temperature, and early_stop back to hard-coded values.
+
+        We therefore keep the configured numeric knobs intact and only inject a
+        type-specific preferred strategy until learned overrides are available.
+        """
+        base = {
+            "attempts": int(getattr(self.default_config, "attempts", 8)),
+            "temperature": float(getattr(self.default_config, "temperature", 0.95)),
+            "early_stop": int(getattr(self.default_config, "early_stop", 3)),
+            "preferred_strategy": None,
         }
-        return defaults.get(problem_type, defaults["general"])
+        strategy_defaults = {
+            "modular": "modular_arithmetic",
+            "combinatorics": "generate_and_test",
+            "number_theory": "reduce_to_known",
+            "algebra": "algebraic_manipulation",
+            "geometry": "work_backwards",
+            "general": None,
+        }
+        return {
+            **base,
+            "preferred_strategy": strategy_defaults.get(problem_type),
+        }
 
     def update_from_outcome(
         self,
