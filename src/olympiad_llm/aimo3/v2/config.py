@@ -34,6 +34,10 @@ class AIMO3Config:
     preference_prompt: str = (
         "You have access to `math`, `numpy` and `sympy` to solve the problem."
     )
+    answer_only_prompt: str = (
+        "You are an IMO-level mathematician. Think silently. Do NOT explain. "
+        "Return only the final verified integer answer in \\boxed{number}."
+    )
     # If enabled, append a rotating strategy-card block to each attempt's
     # developer prompt. Disable to run only with `system_prompt`.
     wickelgren_strategies_enabled: bool = True
@@ -144,6 +148,7 @@ class AIMO3Config:
     batch_size: int = 256
     early_stop: int = 3
     early_stop_min_verified: int = 0
+    answer_only_attempts: int = 0
 
     # Easy-exit: aggressive early stop for problems solved quickly with verified support.
     easy_exit_enabled: bool = True
@@ -275,6 +280,9 @@ class AIMO3Config:
         preference_prompt = os.getenv(
             "AIMO3_PREFERENCE_PROMPT", AIMO3Config.preference_prompt
         )
+        answer_only_prompt = os.getenv(
+            "AIMO3_ANSWER_ONLY_PROMPT", AIMO3Config.answer_only_prompt
+        )
         tool_prompt = os.getenv("AIMO3_TOOL_PROMPT", AIMO3Config.tool_prompt)
         system_prompt = os.getenv("AIMO3_SYSTEM_PROMPT", AIMO3Config.system_prompt)
 
@@ -398,6 +406,9 @@ class AIMO3Config:
         early_stop = _env_int("AIMO3_EARLY_STOP", AIMO3Config.early_stop)
         early_stop_min_verified = _env_int(
             "AIMO3_EARLY_STOP_MIN_VERIFIED", AIMO3Config.early_stop_min_verified
+        )
+        answer_only_attempts = _env_int(
+            "AIMO3_ANSWER_ONLY_ATTEMPTS", AIMO3Config.answer_only_attempts
         )
 
         turns = _env_int("AIMO3_TURNS", AIMO3Config.turns)
@@ -552,6 +563,7 @@ class AIMO3Config:
             system_prompt=system_prompt,
             tool_prompt=tool_prompt,
             preference_prompt=preference_prompt,
+            answer_only_prompt=answer_only_prompt,
             model_path=model_path,
             served_model_name=served_model_name,
             preload_model_weights=preload_model_weights,
@@ -595,6 +607,7 @@ class AIMO3Config:
             workers=workers,
             early_stop=early_stop,
             early_stop_min_verified=early_stop_min_verified,
+            answer_only_attempts=max(0, answer_only_attempts),
             easy_exit_enabled=easy_exit_enabled,
             easy_exit_time_threshold_s=easy_exit_time_threshold_s,
             easy_exit_min_votes=easy_exit_min_votes,
