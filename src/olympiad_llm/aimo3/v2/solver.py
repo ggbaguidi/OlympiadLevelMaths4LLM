@@ -736,6 +736,9 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
         used_strategies: list | None = None,
         preferred_strategy: str | None = None,
     ) -> tuple:
+        if attempt_index < max(0, getattr(self.cfg, "answer_only_attempts", 0)):
+            return self.cfg.answer_only_prompt, "answer-only", None
+
         dev_prompt = self.cfg.system_prompt
         strat_name, tag = None, None
 
@@ -921,6 +924,61 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 "output_text": text_payload,
             }
         )
+
+    def _run_attempt_batch(
+        self,
+        *,
+        user_input: str,
+        task_specs: list[tuple[str, int, str | None]],
+        results: list[AttemptResult],
+        deadline: float,
+        problem_start: float,
+        early_stop_target: int,
+        problem_id: str | None = None,
+        continuation_context: str | None = None,
+        temperature: float | None = None,
+    ) -> bool:
+        if not task_specs:
+            return False
+
+        stop_evt = threading.Event()
+        with ThreadPoolExecutor(
+            max_workers=max(1, min(self.cfg.workers, len(task_specs)))
+        ) as ex:
+            futures = [
+                ex.submit(
+                    self._process_attempt,
+                    user_input,
+                    dev_p,
+                    idx,
+                    tag,
+                    stop_evt,
+                    deadline,
+                    problem_id=problem_id,
+                    continuation_context=continuation_context,
+                    temperature=temperature,
+                )
+                for dev_p, idx, tag in task_specs
+            ]
+
+            for f in as_completed(futures):
+                try:
+                    r = f.result()
+                    results.append(r)
+                    self._record_attempt_trace(problem_id or "", r)
+                    if self._should_early_stop(
+                        results,
+                        time.time() - problem_start,
+                        early_stop_target,
+                    ):
+                        stop_evt.set()
+                        for ff in futures:
+                            ff.cancel()
+                        return True
+                except Exception as e:
+                    print(f"Future failed: {e}")
+
+        return False
 
     def _process_attempt(
         self,
@@ -1182,47 +1240,50 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
             )
 
         used_strats = [] if self.cfg.meta_learning_track_strategies else None
-        tasks = []
-        for i in range(attempts_for_prob):
-            dev_p, tag, strat_n = self._build_attempt_prompt(
-                i, problem, used_strats, pref_strat if i == 0 else None
-            )
-            tasks.append((dev_p, i, tag))
-            if used_strats and strat_n and strat_n not in used_strats:
-                used_strats.append(strat_n)
+        results: list[AttemptResult] = []
+        answer_only_count = min(
+            max(0, self.cfg.answer_only_attempts),
+            attempts_for_prob,
+        )
 
-        results, stop_evt = [], threading.Event()
-
-        with ThreadPoolExecutor(max_workers=self.cfg.workers) as ex:
-            futures = [
-                ex.submit(
-                    self._process_attempt,
-                    user_input,
-                    dev_p,
-                    idx,
-                    tag,
-                    stop_evt,
-                    deadline,
-                    problem_id=problem_id,
-                    temperature=temp_for_prob,
+        def _build_task_specs(start_idx: int, end_idx: int) -> list[tuple[str, int, str | None]]:
+            specs: list[tuple[str, int, str | None]] = []
+            for i in range(start_idx, end_idx):
+                dev_p, tag, strat_n = self._build_attempt_prompt(
+                    i,
+                    problem,
+                    used_strats,
+                    pref_strat if i == 0 else None,
                 )
-                for dev_p, idx, tag in tasks
-            ]
+                specs.append((dev_p, i, tag))
+                if used_strats and strat_n and strat_n not in used_strats:
+                    used_strats.append(strat_n)
+            return specs
 
-            for f in as_completed(futures):
-                try:
-                    r = f.result()
-                    results.append(r)
-                    self._record_attempt_trace(problem_id, r)
-                    if self._should_early_stop(
-                        results, time.time() - problem_start, early_stop_prob
-                    ):
-                        stop_evt.set()
-                        for ff in futures:
-                            ff.cancel()
-                        break
-                except Exception as e:
-                    print(f"Future failed: {e}")
+        stopped_early = False
+        if answer_only_count > 0:
+            stopped_early = self._run_attempt_batch(
+                user_input=user_input,
+                task_specs=_build_task_specs(0, answer_only_count),
+                results=results,
+                deadline=deadline,
+                problem_start=problem_start,
+                early_stop_target=early_stop_prob,
+                problem_id=problem_id,
+                temperature=temp_for_prob,
+            )
+
+        if not stopped_early and answer_only_count < attempts_for_prob:
+            stopped_early = self._run_attempt_batch(
+                user_input=user_input,
+                task_specs=_build_task_specs(answer_only_count, attempts_for_prob),
+                results=results,
+                deadline=deadline,
+                problem_start=problem_start,
+                early_stop_target=early_stop_prob,
+                problem_id=problem_id,
+                temperature=temp_for_prob,
+            )
 
         if not any(r.answer is not None for r in results):
             time_spent = time.time() - problem_start
@@ -1243,38 +1304,21 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                     f"{'with' if cont else 'without'} continuation context...\n"
                 )
 
-                stop_2, results_2 = threading.Event(), []
-                with ThreadPoolExecutor(max_workers=self.cfg.workers) as ex2:
-                    f2 = []
-                    for i in range(attempts_for_prob):
-                        dev_p2, tag2, strat_n2 = self._build_attempt_prompt(
-                            attempts_for_prob + i, problem, used_strats
-                        )
-                        if used_strats and strat_n2 and strat_n2 not in used_strats:
-                            used_strats.append(strat_n2)
-                        f2.append(
-                            ex2.submit(
-                                self._process_attempt,
-                                user_input,
-                                dev_p2,
-                                attempts_for_prob + i,
-                                tag2,
-                                stop_2,
-                                new_dead,
-                                problem_id=problem_id,
-                                continuation_context=cont,
-                                temperature=temp_for_prob,
-                            )
-                        )
-
-                    for ff in as_completed(f2):
-                        try:
-                            rr = ff.result()
-                            results_2.append(rr)
-                            self._record_attempt_trace(problem_id, rr)
-                        except Exception as e:  # noqa: BLE001
-                            print(f"Second-wave future failed: {e}")
-                results.extend(results_2)
+                second_wave_specs = _build_task_specs(
+                    attempts_for_prob,
+                    attempts_for_prob * 2,
+                )
+                self._run_attempt_batch(
+                    user_input=user_input,
+                    task_specs=second_wave_specs,
+                    results=results,
+                    deadline=new_dead,
+                    problem_start=problem_start,
+                    early_stop_target=early_stop_prob,
+                    problem_id=problem_id,
+                    continuation_context=cont,
+                    temperature=temp_for_prob,
+                )
 
         time_used = time.time() - problem_start
         self._display_candidates(results)
