@@ -192,6 +192,42 @@ class AIMO3Solver:
     cfg: AIMO3Config
     port: int = 8000
 
+    def _startup_runtime(self, base_url: str, OpenAI) -> None:
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            kernels_future = ex.submit(self._initialize_kernels)
+            try:
+                probe_client = OpenAI(
+                    base_url=base_url,
+                    api_key="sk-local",
+                    timeout=self.cfg.server_probe_timeout,
+                )
+
+                if self.cfg.reuse_existing_server and self._probe_server_ready(
+                    probe_client,
+                    self.cfg.server_probe_attempts,
+                ):
+                    self.client = OpenAI(
+                        base_url=base_url,
+                        api_key="sk-local",
+                        timeout=self.cfg.session_timeout,
+                    )
+                    self.server = None
+                else:
+                    self.server = VLLMServer(cfg=self.cfg, port=self.port)
+                    self.server.start()
+                    self.client = OpenAI(
+                        base_url=base_url,
+                        api_key="sk-local",
+                        timeout=self.cfg.session_timeout,
+                    )
+                    self.server.wait_ready(self.client)
+
+                kernels_future.result()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    self.close()
+                raise
+
     @classmethod
     def _extract_verdict_label(cls, text: str | None) -> str | None:
         if not text:
@@ -353,6 +389,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
             "alt_answer": None,
             "error": None,
         }
+        _ = problem_id
         if time.time() > deadline:
             return result
 
@@ -615,28 +652,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
 
         base_url = f"http://0.0.0.0:{self.port}/v1"
         OpenAI = _require_openai()
-
-        if self.cfg.reuse_existing_server and self._probe_server_ready(
-            OpenAI(
-                base_url=base_url,
-                api_key="sk-local",
-                timeout=self.cfg.server_probe_timeout,
-            ),
-            self.cfg.server_probe_attempts,
-        ):
-            self.client = OpenAI(
-                base_url=base_url, api_key="sk-local", timeout=self.cfg.session_timeout
-            )
-            self.server = None
-        else:
-            self.server = VLLMServer(cfg=self.cfg, port=self.port)
-            self.server.start()
-            self.client = OpenAI(
-                base_url=base_url, api_key="sk-local", timeout=self.cfg.session_timeout
-            )
-            self.server.wait_ready(self.client)
-
-        self._initialize_kernels()
+        self._startup_runtime(base_url, OpenAI)
         self.problems_remaining = self.cfg.problems_total
 
         self._budget_tracker = TimeBudgetTracker(
@@ -1009,6 +1025,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
 
         attempt_seed = (self.cfg.seed + attempt_index) ** 2
         temp = self.cfg.temperature if temperature is None else temperature
+        _ = problem_id
 
         try:
             sandbox = self.sandbox_pool.get(timeout=self.cfg.sandbox_timeout)

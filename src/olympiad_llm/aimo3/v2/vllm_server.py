@@ -10,11 +10,16 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from .config import AIMO3Config
+
+
+_WARMED_MODEL_PATHS: set[str] = set()
+_WARMED_MODEL_PATHS_LOCK = threading.Lock()
 
 
 @dataclass
@@ -76,6 +81,11 @@ class VLLMServer:
         if not model_path or not os.path.isdir(model_path):
             return
 
+        model_key = os.path.realpath(model_path)
+        with _WARMED_MODEL_PATHS_LOCK:
+            if model_key in _WARMED_MODEL_PATHS:
+                return
+
         # Enumerate shard files.
         files: list[str] = []
         for root, _dirs, names in os.walk(model_path):
@@ -106,6 +116,8 @@ class VLLMServer:
         with ThreadPoolExecutor(max_workers=workers) as ex:
             list(ex.map(_read_file, files))
         _ = time.time() - start
+        with _WARMED_MODEL_PATHS_LOCK:
+            _WARMED_MODEL_PATHS.add(model_key)
 
     def start(self) -> None:
         if not self.cfg.model_path:
@@ -183,6 +195,7 @@ class VLLMServer:
             else float(self.cfg.server_timeout)
         )
         start = time.time()
+        sleep_s = 0.25
         while time.time() - start < timeout_s:
             rc = self.process.poll()
             if rc is not None:
@@ -207,7 +220,8 @@ class VLLMServer:
                 client.models.list()
                 return
             except Exception:  # noqa: BLE001
-                time.sleep(1)
+                time.sleep(sleep_s)
+                sleep_s = min(1.0, sleep_s * 1.5)
 
         # Timeout: include recent log tail to make diagnosis faster in notebooks.
         tail = "(no logs)"
