@@ -17,26 +17,30 @@ class AIMO3Config:
 
     # Prompts
     system_prompt: str = (
-        "You are a world-class International Mathematical Olympiad (IMO) competitor. "
-        "The final answer must be a non-negative integer between 0 and 99999. "
-        "You must place the final integer answer inside \\boxed{}."
+        "Solve for the correct integer answer. "
+        "Find the fastest exact method first. "
+        "Prefer formulas, invariants, modular arithmetic, and efficient counting. "
+        "Use Python early for small cases, pattern checks, and the final exact computation. "
+        "Avoid long proofs and large brute force. "
+        "Return only \\boxed{n} with 0 <= n <= 99999."
     )
     tool_prompt: str = (
-        "Use this tool to execute Python code. The environment is a stateful Jupyter notebook. "
-        "You must use print() to output results."
+        "Use this stateful Python notebook to find and verify an exact answer. "
+        "Start with small cases or symbolic simplification, then code the best exact algorithm. "
+        "Check complexity before loops, keep code short, print only decisive results, and always use print()."
     )
     # Z3-specific tool prompt (used when z3_tool_enabled is True)
     z3_tool_prompt: str = (
-        "Use Z3 SMT solver for constraint solving. Available as 'from z3 import *'. "
-        "Best for: Diophantine equations, combinatorial problems, proving propositions. "
-        "Examples: x = Int('x'); solve(x + y == 10, x > 0)"
+        "Use Z3 for exact constraint solving. Available as 'from z3 import *'. "
+        "Best for Diophantine equations, combinatorics, and logical constraints. "
+        "Keep models small and print only decisive results."
     )
     preference_prompt: str = (
-        "You have access to `math`, `numpy` and `sympy` to solve the problem."
+        "Find the fastest exact method. Use Python for small cases and final verification."
     )
     answer_only_prompt: str = (
-        "You are an IMO-level mathematician. Think silently. Do NOT explain. "
-        "Return only the final verified integer answer in \\boxed{number}."
+        "Find the integer with the fastest exact method. Think silently. Do not explain. "
+        "Return only \\boxed{number}."
     )
     # If enabled, append a rotating strategy-card block to each attempt's
     # developer prompt. Disable to run only with `system_prompt`.

@@ -404,9 +404,8 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
             )
 
             messages = self.template.apply_chat_template(
-                "You are a world-class mathematical verifier. Your ONLY job is to check whether "
-                "the proposed answer is correct. Use Python to compute — do NOT just reason about it. "
-                "Be concise. The final answer must be a non-negative integer between 0 and 99999.",
+                "Check only whether the proposed integer is correct. "
+                "Use Python to compute, not verbal intuition. Be brief.",
                 strategy_template.format(answer=candidate_answer, problem=problem),
                 local_tool.tool_config,
             )
@@ -1054,8 +1053,8 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
             if continuation_context:
                 msg = self._h["Message"].from_role_and_content(
                     self.Role.USER,
-                    "A previous attempt on this problem ran out of time before finding an answer. "
-                    "Here is the end of its reasoning — use it to continue, not restart:\n\n"
+                    "Continue from this partial work; do not restart from scratch. "
+                    "Keep only useful progress and discard bad leads quickly:\n\n"
                     + continuation_context,
                 )
                 messages.append(msg)

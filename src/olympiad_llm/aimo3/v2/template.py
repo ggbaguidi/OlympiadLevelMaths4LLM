@@ -13,55 +13,44 @@ from .require import _require_harmony
 # (Python sandbox) so it can compute.
 
 VERIFY_SUBSTITUTION = (
-    "A proposed answer to the following problem is {answer}.\n\n"
+    "Proposed answer: {answer}\n"
     "Problem: {problem}\n\n"
-    "Your task: VERIFY this answer by substituting it back into the problem conditions. "
-    "Use Python to compute every step explicitly — do NOT skip computation. "
-    "After your analysis, you MUST print your conclusion as a Python print statement:\n"
+    "Check it by direct substitution in Python. Compute explicitly; do not skip steps.\n"
+    "At the end print exactly one of:\n"
     '  print("VERDICT: CORRECT")\n'
     '  print("VERDICT: INCORRECT")\n'
-    "If incorrect, also print the correct answer inside \\boxed{{}}.\n"
-    "IMPORTANT: You MUST call print() with the VERDICT line — this is required."
+    "If incorrect, also print the correct answer as \\boxed{{n}}."
 )
 
 VERIFY_SMALL_CASES = (
-    "A proposed answer to the following problem is {answer}.\n\n"
+    "Proposed answer: {answer}\n"
     "Problem: {problem}\n\n"
-    "Your task: CHECK this answer by computing small cases and boundary cases in Python. "
-    "Build the answer from scratch using brute-force enumeration or exhaustive search on "
-    "small instances, then compare with the proposed answer. "
-    "After your analysis, you MUST print your conclusion as a Python print statement:\n"
+    "Check it with small cases and boundary cases in Python. "
+    "Rebuild the answer from scratch on tiny instances, then compare.\n"
+    "At the end print exactly one of:\n"
     '  print("VERDICT: CORRECT")\n'
     '  print("VERDICT: INCORRECT")\n'
-    "If incorrect, also print the correct answer inside \\boxed{{}}.\n"
-    "IMPORTANT: You MUST call print() with the VERDICT line — this is required."
+    "If incorrect, also print the correct answer as \\boxed{{n}}."
 )
 
 VERIFY_ALTERNATIVE = (
-    "A proposed answer to the following problem is {answer}.\n\n"
+    "Proposed answer: {answer}\n"
     "Problem: {problem}\n\n"
-    "Your task: SOLVE this problem from scratch using a COMPLETELY DIFFERENT method "
-    "than you would normally use. Use Python to compute. "
-    "Compare your independent result with the proposed answer. "
-    "After your analysis, you MUST print your conclusion as a Python print statement:\n"
+    "Solve it again with a different exact method. Use Python to compute and compare.\n"
+    "At the end print exactly one of:\n"
     '  print("VERDICT: CORRECT")\n'
     '  print("VERDICT: INCORRECT")\n'
-    "If incorrect, also print the correct answer inside \\boxed{{}}.\n"
-    "IMPORTANT: You MUST call print() with the VERDICT line — this is required."
+    "If incorrect, also print the correct answer as \\boxed{{n}}."
 )
 
 VERIFY_COUNTEREXAMPLE = (
-    "A proposed answer to the following problem is {answer}.\n\n"
+    "Proposed answer: {answer}\n"
     "Problem: {problem}\n\n"
-    "Your task: TRY TO FIND A COUNTEREXAMPLE that shows the proposed answer is wrong. "
-    "Use Python to test specific cases, edge cases, or construct a contradiction. "
-    "If you find a counterexample, the answer is incorrect. "
-    "If you cannot find a counterexample after thorough testing, the answer is likely correct. "
-    "After your analysis, you MUST print your conclusion as a Python print statement:\n"
+    "Try to find a counterexample in Python. Test sharp cases, edge cases, or contradictions.\n"
+    "At the end print exactly one of:\n"
     '  print("VERDICT: CORRECT")\n'
     '  print("VERDICT: INCORRECT")\n'
-    "If incorrect, also print the correct answer inside \\boxed{{}}.\n"
-    "IMPORTANT: You MUST call print() with the VERDICT line — this is required."
+    "If incorrect, also print the correct answer as \\boxed{{n}}."
 )
 
 # Ordered list — we rotate through them for each candidate's verification attempts.

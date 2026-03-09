@@ -14,25 +14,15 @@ _TIMEOUT_DIRECTIVE_RE = re.compile(
     re.IGNORECASE,
 )
 
-Z3_TOOL_PROMPT = """Use this tool to execute Z3 SMT solver code for constraint solving and theorem proving.
-The environment has 'from z3 import *' already imported.
+Z3_TOOL_PROMPT = """Use this tool to run Z3 code for exact constraint solving.
+The environment already has 'from z3 import *'.
 
-When to use Z3:
-- Integer/real constraints and Diophantine equations
-- Combinatorial problems (scheduling, assignment)
-- Proving mathematical propositions
-- Finding solutions to systems of constraints
+Use Z3 for:
+- Diophantine equations and exact integer constraints
+- Combinatorial search with hard constraints
+- Logical consistency or impossibility checks
 
-Z3 API examples:
-- Integers: x = Int('x'), y = Int('y')
-- Reals: x = Real('x'), y = Real('y')  
-- Booleans: p = Bool('p')
-- Solve: solve(x + y == 10, x > 0)
-- Optimize: opt = Optimize(); opt.add(x + y == 10); opt.maximize(x)
-- Check sat: s = Solver(); s.add(x**2 == 2); s.check()
-- Get model: s.model()[x]
-
-Always use print() to output results. The final answer must be a non-negative integer between 0 and 99999."""
+Keep the model small, print only decisive results, and always use print()."""
 
 
 class AIMO3Tool:
@@ -200,10 +190,8 @@ class AIMO3Tool:
         if self._z3_enabled:
             combined_description = (
                 f"{self._tool_prompt}\n\n"
-                f"Z3 SMT SOLVER: You can also use Z3 for constraint solving. "
-                f"Best for Diophantine equations, combinatorial problems, and proving propositions.\n\n"
-                f"To use Z3, prefix your code with '# z3' on the first line. "
-                f"Examples: x = Int('x'); solve(x**2 == 2)"
+                f"Z3 is also available for exact constraints and combinatorial search. "
+                f"To use it, put '# z3' on the first line."
             )
             return ToolNamespaceConfig(
                 name="python", description=combined_description, tools=[]

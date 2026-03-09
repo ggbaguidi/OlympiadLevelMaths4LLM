@@ -140,8 +140,8 @@ def _format_retrieved_block(
 
     lines = [
         "[META_RETRIEVED_MATH_KNOWLEDGE]",
-        "This block is retrieved reference context, not part of the user problem statement.",
-        "Use it only as optional support; prioritize the given problem constraints.",
+        "Reference only; not part of the problem.",
+        "Use only if helpful.",
     ]
     for rank, (c, score) in enumerate(rows, start=1):
         ctype = (c.concept_type or "concept").upper()
