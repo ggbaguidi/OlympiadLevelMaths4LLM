@@ -215,6 +215,7 @@ def test_solve_problem_stops_before_full_wave_when_answer_only_consensus_hits() 
         answer_only_attempts=2,
         early_stop=1,
         early_stop_min_verified=0,
+        early_stop_require_computed_support=False,
         verify_phase_enabled=False,
         display_candidates=False,
         trace_enabled=False,
@@ -270,6 +271,79 @@ def test_solve_problem_stops_before_full_wave_when_answer_only_consensus_hits() 
     assert final_answer == 42
     assert call_indices
     assert all(idx < solver.cfg.answer_only_attempts for idx in call_indices)
+
+
+def test_solve_problem_requires_computed_support_before_early_stop_by_default() -> None:
+    solver = object.__new__(AIMO3Solver)
+    solver.cfg = AIMO3Config(
+        attempts=3,
+        workers=1,
+        answer_only_attempts=2,
+        early_stop=1,
+        early_stop_min_verified=0,
+        verify_phase_enabled=False,
+        display_candidates=False,
+        trace_enabled=False,
+        wickelgren_strategies_enabled=False,
+        meta_learning_enabled=False,
+    )
+    solver._budget_tracker = _DummyBudget()
+    solver._trace = TraceRecorder(enabled=False, path="tmp_ignore.jsonl")
+    solver.problems_remaining = 50
+
+    call_indices: list[int] = []
+
+    def _adapt(self, problem: str) -> tuple[None, dict]:
+        _ = problem
+        return None, {}
+
+    def _build(self, attempt_index: int, problem_text: str | None = None, used_strategies=None, preferred_strategy=None):
+        _ = problem_text
+        _ = used_strategies
+        _ = preferred_strategy
+        if attempt_index < self.cfg.answer_only_attempts:
+            return "answer-only", "answer-only", None
+        return "full", f"tag-{attempt_index}", "strat"
+
+    def _process(self, problem: str, developer_prompt: str, attempt_index: int, attempt_tag: str | None, stop_event, deadline: float, **kwargs) -> AttemptResult:
+        _ = problem
+        _ = developer_prompt
+        _ = attempt_tag
+        _ = stop_event
+        _ = deadline
+        _ = kwargs
+        call_indices.append(attempt_index)
+        if attempt_index < self.cfg.answer_only_attempts:
+            return AttemptResult(
+                attempt=attempt_index + 1,
+                answer=42,
+                stats=AttemptStats(),
+            )
+        return AttemptResult(
+            attempt=attempt_index + 1,
+            answer=42,
+            stats=AttemptStats(python_calls=1, python_errors=0),
+        )
+
+    solver._adapt_problem_hyperparameters = MethodType(_adapt, solver)
+    solver._build_attempt_prompt = MethodType(_build, solver)
+    solver._process_attempt = MethodType(_process, solver)
+    solver._display_candidates = MethodType(lambda self, attempts: None, solver)
+    solver._should_run_verification = MethodType(lambda self, ranked, time_remaining_s: False, solver)
+    solver._update_meta_learning_from_problem_outcome = MethodType(
+        lambda self, **kwargs: None, solver
+    )
+
+    final_answer = solver.solve_problem("dummy problem")
+
+    assert final_answer == 42
+    assert call_indices == [0, 1, 2]
+
+
+def test_config_from_env_reads_early_stop_require_computed_support(monkeypatch) -> None:
+    monkeypatch.setenv("AIMO3_EARLY_STOP_REQUIRE_COMPUTED_SUPPORT", "0")
+    cfg = AIMO3Config.from_env()
+    assert cfg.early_stop_require_computed_support is False
 
 
 def test_startup_runtime_overlaps_kernel_init_with_server_wait() -> None:

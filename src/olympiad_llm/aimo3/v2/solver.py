@@ -344,6 +344,17 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
 
         _, top_d = ranked[0]
         votes, verified = top_d["votes"], top_d["verified"]
+        top_answer = ranked[0][0]
+
+        if self.cfg.early_stop_require_computed_support and not any(
+            isinstance(r.answer, int)
+            and r.answer == top_answer
+            and r.stats.python_calls > 0
+            and r.stats.python_errors == 0
+            and not r.stats.deadline_exceeded
+            for r in detailed
+        ):
+            return False
 
         if (
             self.cfg.easy_exit_enabled

@@ -152,6 +152,10 @@ class AIMO3Config:
     batch_size: int = 256
     early_stop: int = 3
     early_stop_min_verified: int = 0
+    # If True, consensus cannot trigger early stop until the current top answer
+    # has support from at least one Python-backed attempt with no tool errors.
+    # This prevents answer-only agreement from locking a final answer too early.
+    early_stop_require_computed_support: bool = True
     answer_only_attempts: int = 0
 
     # Easy-exit: aggressive early stop for problems solved quickly with verified support.
@@ -411,6 +415,9 @@ class AIMO3Config:
         early_stop_min_verified = _env_int(
             "AIMO3_EARLY_STOP_MIN_VERIFIED", AIMO3Config.early_stop_min_verified
         )
+        early_stop_require_computed_support = os.getenv(
+            "AIMO3_EARLY_STOP_REQUIRE_COMPUTED_SUPPORT", "1"
+        ).strip().lower() not in {"0", "false", "no"}
         answer_only_attempts = _env_int(
             "AIMO3_ANSWER_ONLY_ATTEMPTS", AIMO3Config.answer_only_attempts
         )
@@ -611,6 +618,7 @@ class AIMO3Config:
             workers=workers,
             early_stop=early_stop,
             early_stop_min_verified=early_stop_min_verified,
+            early_stop_require_computed_support=early_stop_require_computed_support,
             answer_only_attempts=max(0, answer_only_attempts),
             easy_exit_enabled=easy_exit_enabled,
             easy_exit_time_threshold_s=easy_exit_time_threshold_s,
