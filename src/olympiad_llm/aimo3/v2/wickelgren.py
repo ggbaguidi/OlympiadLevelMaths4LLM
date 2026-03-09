@@ -444,73 +444,65 @@ GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
     StrategyCard(
         name="brute_force_first",
         instructions=[
-            "Start by writing Python code for small cases (for example n = 1, 2, 3, ...).",
-            "Print intermediate values clearly and look for a pattern.",
-            "State a conjecture from the pattern, then test it on additional cases.",
-            "End with a final answer in \\boxed{n}, where n is in [0, 99999].",
+            "Code tiny cases first.",
+            "Print key values and look for a pattern.",
+            "Make a conjecture, then test more cases.",
         ],
     ),
     StrategyCard(
         name="closed_form_hunt",
         instructions=[
-            "Compute the first 5 to 10 values using Python.",
-            "Check whether values match known sequences (factorial, Catalan, Fibonacci, powers, binomials).",
-            "Validate any closed form against every computed case before concluding.",
-            "End with a final answer in \\boxed{n}, where n is in [0, 99999].",
+            "Compute a few exact values.",
+            "Check standard sequences or formulas.",
+            "Verify the form on all sampled cases.",
         ],
     ),
     StrategyCard(
         name="modular_arithmetic",
         instructions=[
-            "Compute the core expression first, then reduce modulo the target.",
-            "For large exponents, use pow(base, exp, mod) in Python.",
-            "Check common tools: Fermat, CRT, and valuation-based exponent lifting.",
-            "End with a final answer in \\boxed{n}, where n is in [0, 99999].",
+            "Compute exactly, then reduce mod the target.",
+            "Use pow(a, b, m) for large exponents.",
+            "Try Fermat, CRT, or valuations.",
         ],
     ),
     StrategyCard(
         name="case_analysis",
         instructions=[
-            "Split into a small number of cases (parity, sign, or divisibility).",
-            "Solve each case independently and verify with Python.",
-            "Merge case results carefully and handle edge cases explicitly.",
-            "End with a final answer in \\boxed{n}, where n is in [0, 99999].",
+            "Split by parity, sign, or divisibility.",
+            "Solve each case and check with Python.",
+            "Recombine carefully and cover edge cases.",
         ],
     ),
     StrategyCard(
         name="work_backwards",
         instructions=[
-            "Start from the expected answer structure and infer required constraints.",
-            "Work backward from those constraints to necessary conditions.",
-            "Use Python checks to validate that backward reasoning produces valid instances.",
-            "End with a final answer in \\boxed{n}, where n is in [0, 99999].",
+            "Guess the answer structure first.",
+            "Work backward to necessary constraints.",
+            "Check candidates with Python.",
         ],
     ),
     StrategyCard(
         name="reduce_to_known",
         instructions=[
-            "Try reducing the task to known objects (gcd/lcm, binomial, divisor sum, Euler phi).",
-            "Use sympy helpers such as factorint, divisors, totient, binomial, factorial.",
-            "Validate the reduction on small examples before relying on it.",
-            "End with a final answer in \\boxed{n}, where n is in [0, 99999].",
+            "Rewrite it in known objects or formulas.",
+            "Use sympy helpers when helpful.",
+            "Test the reduction on small examples.",
         ],
     ),
     StrategyCard(
         name="generate_and_test",
         instructions=[
-            "Generate all valid objects for small sizes (permutations, subsets, sequences).",
-            "Filter and count according to the stated constraints.",
-            "For larger n, infer a recurrence or closed form from the small-size data.",
-            "End with a final answer in \\boxed{n}, where n is in [0, 99999].",
+            "Enumerate small valid objects.",
+            "Filter or count by the constraints.",
+            "Infer a rule from the small data.",
         ],
     ),
     StrategyCard(
         name="algebraic_manipulation",
         instructions=[
-            "Use sympy for expansion, factoring, simplification, and symbolic solving.",
-            "Prefer computer algebra over manual symbolic manipulation.",
-            "Numerically verify symbolic identities on concrete samples.",
-            "End with a final answer in \\boxed{n}, where n is in [0, 99999].",
+            "Use sympy to expand, factor, or solve.",
+            "Prefer exact algebra over long manual steps.",
+            "Check identities on small samples.",
         ],
     ),
 ]
@@ -590,12 +582,12 @@ def select_strategy(
 def render_strategy_card(card: StrategyCard) -> str:
     lines = [
         "[META_STRATEGY_CARD]",
-        "This block is solver guidance, not part of the user problem statement.",
-        "Use it as a method checklist only.",
+        "Method hints only; not part of the problem.",
         f"Card: {card.name}",
     ]
     for idx, item in enumerate(card.instructions, start=1):
         lines.append(f"{idx}. {item}")
+    lines.append("Final answer: \\boxed{n}, with 0 <= n <= 99999.")
     lines.append("[/META_STRATEGY_CARD]")
     return "\n".join(lines)
 
