@@ -8,6 +8,7 @@ from olympiad_llm.aimo3.v2.attempts import AttemptResult, AttemptStats
 from olympiad_llm.aimo3.v2.budget import TimeBudgetTracker
 from olympiad_llm.aimo3.v2.config import AIMO3Config
 from olympiad_llm.aimo3.v2.meta_learning import AdaptiveHyperparameters, ProblemFeatures
+from olympiad_llm.aimo3.v2.reasoning_framework import render_reasoning_framework
 from olympiad_llm.aimo3.v2.solver import AIMO3Solver
 from olympiad_llm.aimo3.v2.tools import AIMO3Tool
 from olympiad_llm.aimo3.v2.trace import TraceRecorder
@@ -192,6 +193,7 @@ def test_build_attempt_prompt_uses_answer_only_first_wave() -> None:
         system_prompt="full-prompt",
         answer_only_prompt="answer-only-prompt",
         answer_only_attempts=4,
+        reasoning_framework_enabled=True,
         wickelgren_strategies_enabled=False,
         meta_learning_enabled=False,
     )
@@ -202,9 +204,40 @@ def test_build_attempt_prompt_uses_answer_only_first_wave() -> None:
     assert first_prompt == "answer-only-prompt"
     assert first_tag == "answer-only"
     assert first_strategy is None
-    assert later_prompt == "full-prompt"
+    assert "full-prompt" in later_prompt
+    assert "[META_REASONING_FRAMEWORK]" in later_prompt
     assert later_tag is None
     assert later_strategy is None
+
+
+def test_build_attempt_prompt_includes_reasoning_framework_on_full_attempts() -> None:
+    solver = object.__new__(AIMO3Solver)
+    solver.cfg = AIMO3Config(
+        system_prompt="full-prompt",
+        answer_only_prompt="answer-only-prompt",
+        answer_only_attempts=1,
+        reasoning_framework_enabled=True,
+        wickelgren_strategies_enabled=False,
+        meta_learning_enabled=False,
+    )
+
+    full_prompt, tag, strategy = solver._build_attempt_prompt(
+        1, problem_text="Find the remainder when 10^k divides N"
+    )
+
+    assert "full-prompt" in full_prompt
+    assert "[META_REASONING_FRAMEWORK]" in full_prompt
+    assert "Divisibility focus" in full_prompt
+    assert tag is None
+    assert strategy is None
+
+
+def test_render_reasoning_framework_adds_counting_focus() -> None:
+    prompt = render_reasoning_framework(
+        "A tournament has many rounds; count the number of possible orderings."
+    )
+    assert "Counting focus" in prompt
+    assert "exact combinatorial structure" in prompt
 
 
 def test_solve_problem_stops_before_full_wave_when_answer_only_consensus_hits() -> None:
@@ -408,6 +441,12 @@ def test_config_from_env_reads_answer_only_attempts(monkeypatch) -> None:
     cfg = AIMO3Config.from_env()
     assert cfg.answer_only_attempts == 3
     assert cfg.answer_only_prompt == "box-only"
+
+
+def test_config_from_env_reads_reasoning_framework_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("AIMO3_REASONING_FRAMEWORK_ENABLED", "0")
+    cfg = AIMO3Config.from_env()
+    assert cfg.reasoning_framework_enabled is False
 
 
 def test_tool_output_verification_notice_integration() -> None:

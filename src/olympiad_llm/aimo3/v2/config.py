@@ -18,15 +18,18 @@ class AIMO3Config:
     # Prompts
     system_prompt: str = (
         "Solve for the correct integer answer. "
-        "Find the fastest exact method first. "
-        "Prefer formulas, invariants, modular arithmetic, and efficient counting. "
-        "Use Python early for small cases, pattern checks, and the final exact computation. "
-        "Avoid long proofs and large brute force. "
+        "Find the fastest exact method first. Do not guess from a pattern or partial argument. "
+        "Prefer formulas, invariants, modular arithmetic, recurrences, and efficient counting. "
+        "For counting, ordering, and divisibility problems, derive the exact expression and prime valuations exactly. "
+        "Use Python early for exact integer arithmetic, small cases, and the final exact computation. "
+        "Avoid floats, asymptotics, long proofs, and large brute force. "
         "Return only \\boxed{n} with 0 <= n <= 99999."
     )
     tool_prompt: str = (
-        "Use this stateful Python notebook to find and verify an exact answer. "
-        "Start with small cases or symbolic simplification, then code the best exact algorithm. "
+        "Use this stateful Python notebook to derive and verify an exact answer. "
+        "Work with exact integer or rational arithmetic; avoid floats unless they are provably safe. "
+        "For counting or divisibility, compute recurrences, products, factorizations, and p-adic valuations exactly. "
+        "Start with tiny cases or symbolic simplification, then code the exact algorithm. "
         "Check complexity before loops, keep code short, print only decisive results, and always use print()."
     )
     # Z3-specific tool prompt (used when z3_tool_enabled is True)
@@ -36,12 +39,13 @@ class AIMO3Config:
         "Keep models small and print only decisive results."
     )
     preference_prompt: str = (
-        "Find the fastest exact method. Use Python for small cases and final verification."
+        "Find an exact method first. For counting or divisibility, derive the exact formula or valuation and verify with Python. Never guess from patterns."
     )
     answer_only_prompt: str = (
-        "Find the integer with the fastest exact method. Think silently. Do not explain. "
+        "Find the integer with an exact method. Do not guess from a pattern or partial argument. Think silently. Do not explain. "
         "Return only \\boxed{number}."
     )
+    reasoning_framework_enabled: bool = True
     # If enabled, append a rotating strategy-card block to each attempt's
     # developer prompt. Disable to run only with `system_prompt`.
     wickelgren_strategies_enabled: bool = True
@@ -293,6 +297,9 @@ class AIMO3Config:
         )
         tool_prompt = os.getenv("AIMO3_TOOL_PROMPT", AIMO3Config.tool_prompt)
         system_prompt = os.getenv("AIMO3_SYSTEM_PROMPT", AIMO3Config.system_prompt)
+        reasoning_framework_enabled = os.getenv(
+            "AIMO3_REASONING_FRAMEWORK_ENABLED", "1"
+        ).strip().lower() not in {"0", "false", "no"}
 
         model_path = os.path.expanduser(os.getenv("AIMO3_MODEL_PATH", ""))
         served_model_name = os.getenv("AIMO3_SERVED_MODEL_NAME", "gpt-oss")
@@ -575,6 +582,7 @@ class AIMO3Config:
             tool_prompt=tool_prompt,
             preference_prompt=preference_prompt,
             answer_only_prompt=answer_only_prompt,
+            reasoning_framework_enabled=reasoning_framework_enabled,
             model_path=model_path,
             served_model_name=served_model_name,
             preload_model_weights=preload_model_weights,

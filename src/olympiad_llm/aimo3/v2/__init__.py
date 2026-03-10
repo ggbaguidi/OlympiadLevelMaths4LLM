@@ -13,5 +13,6 @@ If you want a ready-to-run entrypoint, see `olympiad_llm.aimo3.runner`.
 
 from .config import AIMO3Config
 from .errors import OptionalDependencyError
+from .reasoning_framework import render_reasoning_framework
 
-__all__ = ["AIMO3Config", "OptionalDependencyError"]
+__all__ = ["AIMO3Config", "OptionalDependencyError", "render_reasoning_framework"]

@@ -222,7 +222,9 @@ class AIMO3Tool:
             return output
 
         try:
-            verdict = self._verifier.verify_output(output, expected_answer=expected_answer)
+            verdict = self._verifier.verify_output(
+                output, expected_answer=expected_answer
+            )
         except Exception:  # noqa: BLE001
             return output
 

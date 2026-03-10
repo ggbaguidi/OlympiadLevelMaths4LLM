@@ -24,6 +24,7 @@ from .vllm_server import VLLMServer
 from .require import _require_harmony, _require_openai
 from .template import AIMO3Template, VERIFY_STRATEGIES
 from .tools import AIMO3Tool
+from .reasoning_framework import augment_prompt_with_reasoning_framework
 from .wickelgren import (
     GENERIC_STRATEGY_CARDS,
     augment_developer_prompt_with_meta,
@@ -768,6 +769,12 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
         dev_prompt = self.cfg.system_prompt
         strat_name, tag = None, None
 
+        if self.cfg.reasoning_framework_enabled:
+            dev_prompt = augment_prompt_with_reasoning_framework(
+                dev_prompt,
+                problem_text=problem_text,
+            )
+
         if self.cfg.wickelgren_strategies_enabled:
             dev_prompt, meta = augment_developer_prompt_with_meta(
                 dev_prompt,
@@ -1273,7 +1280,9 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
             attempts_for_prob,
         )
 
-        def _build_task_specs(start_idx: int, end_idx: int) -> list[tuple[str, int, str | None]]:
+        def _build_task_specs(
+            start_idx: int, end_idx: int
+        ) -> list[tuple[str, int, str | None]]:
             specs: list[tuple[str, int, str | None]] = []
             for i in range(start_idx, end_idx):
                 dev_p, tag, strat_n = self._build_attempt_prompt(
