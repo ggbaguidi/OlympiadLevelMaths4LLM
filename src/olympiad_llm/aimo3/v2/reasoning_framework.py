@@ -1,3 +1,4 @@
+# pylint: disable=broad-exception-caught,missing-function-docstring,line-too-long,missing-module-docstring,import-outside-toplevel,invalid-name,too-many-instance-attributes
 """Compact reasoning framework for olympiad-style math problems.
 
 Inspired by David Kelley's emphasis on clarity, structure, evidence, and
