@@ -509,3 +509,54 @@ def test_vllm_start_sets_expandable_segments_when_unset(monkeypatch, tmp_path) -
     server.start()
 
     assert popen_kwargs["env"]["PYTORCH_ALLOC_CONF"] == "expandable_segments:True"
+
+
+def test_vllm_hint_from_logs_explains_cache_block_failure() -> None:
+    logs = """
+    INFO non-default args: {'max_model_len': 32768, 'max_num_seqs': 256}
+    ERROR No available memory for the cache blocks. Try increasing `gpu_memory_utilization` when initializing the engine.
+    RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}
+    """
+
+    hint = VLLMServer._hint_from_logs(logs)
+
+    assert hint is not None
+    assert "KV-cache blocks" in hint
+    assert "AIMO3_BATCH_SIZE" in hint
+    assert "32 or even 16" in hint
+    assert "AIMO3_CONTEXT_TOKENS" in hint
+
+
+def test_vllm_start_omits_prefix_caching_when_disabled(monkeypatch, tmp_path) -> None:
+    cfg = AIMO3Config(
+        model_path=str(tmp_path),
+        require_cuda=False,
+        vllm_enable_prefix_caching=False,
+    )
+    server = VLLMServer(cfg=cfg, log_path=str(tmp_path / "vllm.log"))
+
+    popen_args: tuple = ()
+
+    class _FakePopen:
+        def __init__(self, *args, **kwargs) -> None:
+            nonlocal popen_args
+            popen_args = args
+            _ = kwargs
+
+        def poll(self):
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self, timeout=None) -> int:
+            _ = timeout
+            return 0
+
+    monkeypatch.setattr("subprocess.Popen", _FakePopen)
+
+    server.start()
+
+    assert popen_args
+    cmd = popen_args[0]
+    assert "--enable-prefix-caching" not in cmd

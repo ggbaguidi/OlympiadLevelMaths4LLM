@@ -172,13 +172,15 @@ class VLLMServer:
             "--stream-interval",
             str(self.cfg.stream_interval),
             "--async-scheduling",
-            "--enable-prefix-caching",
             "--disable-log-stats",
             "--no-enable-log-requests",
         ]
 
         if bool(getattr(self.cfg, "vllm_trust_remote_code", False)):
             cmd.append("--trust-remote-code")
+
+        if bool(getattr(self.cfg, "vllm_enable_prefix_caching", True)):
+            cmd.append("--enable-prefix-caching")
 
         if bool(getattr(self.cfg, "vllm_enable_chunked_prefill", False)):
             cmd.append("--enable-chunked-prefill")

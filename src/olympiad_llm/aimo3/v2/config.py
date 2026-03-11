@@ -104,6 +104,7 @@ class AIMO3Config:
     kv_cache_dtype: str = "fp8_e4m3"
     dtype: str = "auto"
     vllm_trust_remote_code: bool = True
+    vllm_enable_prefix_caching: bool = True
     vllm_enable_chunked_prefill: bool = True
     vllm_enable_auto_tool_choice: bool = False
     vllm_tool_call_parser: str = ""
@@ -313,6 +314,9 @@ class AIMO3Config:
         served_model_name = os.getenv("AIMO3_SERVED_MODEL_NAME", "gpt-oss")
         vllm_trust_remote_code = os.getenv(
             "AIMO3_VLLM_TRUST_REMOTE_CODE", "1"
+        ).strip().lower() not in {"0", "false", "no"}
+        vllm_enable_prefix_caching = os.getenv(
+            "AIMO3_VLLM_ENABLE_PREFIX_CACHING", "1"
         ).strip().lower() not in {"0", "false", "no"}
         vllm_enable_chunked_prefill = os.getenv(
             "AIMO3_VLLM_ENABLE_CHUNKED_PREFILL", "1"
@@ -630,6 +634,7 @@ class AIMO3Config:
             model_path=model_path,
             served_model_name=served_model_name,
             vllm_trust_remote_code=vllm_trust_remote_code,
+            vllm_enable_prefix_caching=vllm_enable_prefix_caching,
             vllm_enable_chunked_prefill=vllm_enable_chunked_prefill,
             vllm_enable_auto_tool_choice=vllm_enable_auto_tool_choice,
             vllm_tool_call_parser=vllm_tool_call_parser,
