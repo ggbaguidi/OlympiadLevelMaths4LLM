@@ -103,6 +103,14 @@ class AIMO3Config:
     model_path: str = ""  # set via env AIMO3_MODEL_PATH in Kaggle
     kv_cache_dtype: str = "fp8_e4m3"
     dtype: str = "auto"
+    vllm_trust_remote_code: bool = True
+    vllm_enable_chunked_prefill: bool = True
+    vllm_enable_auto_tool_choice: bool = False
+    vllm_tool_call_parser: str = ""
+    vllm_reasoning_parser: str = ""
+    vllm_reasoning_parser_plugin: str = ""
+    vllm_attention_backend: str = ""
+    vllm_max_cudagraph_capture_size: int = 0
 
     # Optional: warm OS page cache by reading model shards before starting vLLM.
     # This reduces cold-start stalls and first-token latency in notebook runtimes.
@@ -137,7 +145,7 @@ class AIMO3Config:
 
     # Decoding + orchestration
     stream_interval: int = 200
-    context_tokens: int = 65536
+    context_tokens: int = 32768
     search_tokens: int = 1024
     buffer_tokens: int = 512
     # If enabled, request top-k logprobs from vLLM and compute a mean-token entropy
@@ -153,7 +161,7 @@ class AIMO3Config:
     # one verified candidate exists. Disable to avoid hard elimination.
     filter_to_verified_if_any: bool = False
     top_logprobs: int = 5
-    batch_size: int = 256
+    batch_size: int = 32
     early_stop: int = 3
     early_stop_min_verified: int = 0
     # If True, consensus cannot trigger early stop until the current top answer
@@ -208,7 +216,7 @@ class AIMO3Config:
     turns: int = 128
     seed: int = 3
 
-    gpu_memory_utilization: float = 0.96
+    gpu_memory_utilization: float = 0.90
     temperature: float = 0.95
     min_p: float = 0.05
     top_p: float = 1.0  # Nucleus sampling (1.0 = disabled)
@@ -303,6 +311,42 @@ class AIMO3Config:
 
         model_path = os.path.expanduser(os.getenv("AIMO3_MODEL_PATH", ""))
         served_model_name = os.getenv("AIMO3_SERVED_MODEL_NAME", "gpt-oss")
+        vllm_trust_remote_code = os.getenv(
+            "AIMO3_VLLM_TRUST_REMOTE_CODE", "1"
+        ).strip().lower() not in {"0", "false", "no"}
+        vllm_enable_chunked_prefill = os.getenv(
+            "AIMO3_VLLM_ENABLE_CHUNKED_PREFILL", "1"
+        ).strip().lower() not in {"0", "false", "no"}
+        vllm_enable_auto_tool_choice = os.getenv(
+            "AIMO3_VLLM_ENABLE_AUTO_TOOL_CHOICE", "0"
+        ).strip().lower() not in {"0", "false", "no"}
+        vllm_tool_call_parser = (
+            os.getenv("AIMO3_VLLM_TOOL_CALL_PARSER", AIMO3Config.vllm_tool_call_parser)
+            or ""
+        ).strip()
+        vllm_reasoning_parser = (
+            os.getenv("AIMO3_VLLM_REASONING_PARSER", AIMO3Config.vllm_reasoning_parser)
+            or ""
+        ).strip()
+        vllm_reasoning_parser_plugin = os.path.expanduser(
+            (
+                os.getenv(
+                    "AIMO3_VLLM_REASONING_PARSER_PLUGIN",
+                    AIMO3Config.vllm_reasoning_parser_plugin,
+                )
+                or ""
+            ).strip()
+        )
+        vllm_attention_backend = (
+            os.getenv(
+                "AIMO3_VLLM_ATTENTION_BACKEND", AIMO3Config.vllm_attention_backend
+            )
+            or ""
+        ).strip()
+        vllm_max_cudagraph_capture_size = _env_int(
+            "AIMO3_VLLM_MAX_CUDAGRAPH_CAPTURE_SIZE",
+            AIMO3Config.vllm_max_cudagraph_capture_size,
+        )
 
         reuse = os.getenv("AIMO3_REUSE_EXISTING_SERVER", "1").strip().lower() not in {
             "0",
@@ -585,6 +629,14 @@ class AIMO3Config:
             reasoning_framework_enabled=reasoning_framework_enabled,
             model_path=model_path,
             served_model_name=served_model_name,
+            vllm_trust_remote_code=vllm_trust_remote_code,
+            vllm_enable_chunked_prefill=vllm_enable_chunked_prefill,
+            vllm_enable_auto_tool_choice=vllm_enable_auto_tool_choice,
+            vllm_tool_call_parser=vllm_tool_call_parser,
+            vllm_reasoning_parser=vllm_reasoning_parser,
+            vllm_reasoning_parser_plugin=vllm_reasoning_parser_plugin,
+            vllm_attention_backend=vllm_attention_backend,
+            vllm_max_cudagraph_capture_size=vllm_max_cudagraph_capture_size,
             preload_model_weights=preload_model_weights,
             preload_model_workers=preload_model_workers,
             reuse_existing_server=reuse,

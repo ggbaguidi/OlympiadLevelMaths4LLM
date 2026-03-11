@@ -13,6 +13,7 @@ from olympiad_llm.aimo3.v2.solver import AIMO3Solver
 from olympiad_llm.aimo3.v2.tools import AIMO3Tool
 from olympiad_llm.aimo3.v2.trace import TraceRecorder
 from olympiad_llm.aimo3.v2.verification import ToolOutputVerifier
+from olympiad_llm.aimo3.v2.vllm_server import VLLMServer
 
 
 class _DummyBudget:
@@ -458,3 +459,53 @@ def test_tool_output_verification_notice_integration() -> None:
     out = tool._augment_output_with_verification("answer: 42", expected_answer=42)
     assert "[VERIFICATION NOTICE] TOOL_OUTPUT_VALID" in out
     assert "VERIFY_OK" in out
+
+
+def test_vllm_hint_from_logs_explains_load_time_cuda_oom() -> None:
+    logs = """
+    INFO non-default args: {'gpu_memory_utilization': 0.96, 'max_model_len': 128000, 'max_num_seqs': 128}
+    INFO Using max model len 128000
+    ERROR Failed to load model - not enough GPU memory.
+    torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1.01 GiB. GPU 0 has a total capacity of 79.18 GiB of which 982.31 MiB is free.
+    """
+
+    hint = VLLMServer._hint_from_logs(logs)
+
+    assert hint is not None
+    assert "weight post-processing / layout conversion" in hint
+    assert "AIMO3_GPU_MEMORY_UTILIZATION" in hint
+    assert "65536 or 32768" in hint
+    assert "AIMO3_BATCH_SIZE" in hint
+    assert "AIMO3_VLLM_MAX_CUDAGRAPH_CAPTURE_SIZE" in hint
+
+
+def test_vllm_start_sets_expandable_segments_when_unset(monkeypatch, tmp_path) -> None:
+    cfg = AIMO3Config(
+        model_path=str(tmp_path),
+        require_cuda=False,
+    )
+    server = VLLMServer(cfg=cfg, log_path=str(tmp_path / "vllm.log"))
+
+    popen_kwargs: dict = {}
+
+    class _FakePopen:
+        def __init__(self, *args, **kwargs) -> None:
+            _ = args
+            popen_kwargs.update(kwargs)
+
+        def poll(self):
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self, timeout=None) -> int:
+            _ = timeout
+            return 0
+
+    monkeypatch.delenv("PYTORCH_ALLOC_CONF", raising=False)
+    monkeypatch.setattr("subprocess.Popen", _FakePopen)
+
+    server.start()
+
+    assert popen_kwargs["env"]["PYTORCH_ALLOC_CONF"] == "expandable_segments:True"
