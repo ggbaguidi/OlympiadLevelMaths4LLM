@@ -492,6 +492,92 @@ class VLLMServer:
                 + "\n".join(suggestion_lines)
             )
 
+        def _cache_blocks_hint() -> str:
+            gpu_util = None
+            max_model_len = None
+            max_num_seqs = None
+
+            util_match = re.search(
+                r"['\"]gpu_memory_utilization['\"]\s*:\s*(\d+(?:\.\d+)?)",
+                logs,
+                re.IGNORECASE,
+            )
+            if util_match:
+                gpu_util = float(util_match.group(1))
+
+            max_model_len_match = re.search(
+                r"['\"]max_model_len['\"]\s*:\s*(\d+)",
+                logs,
+                re.IGNORECASE,
+            ) or re.search(r"Using max model len\s+(\d+)", logs, re.IGNORECASE)
+            if max_model_len_match:
+                max_model_len = int(max_model_len_match.group(1))
+
+            max_num_seqs_match = re.search(
+                r"['\"]max_num_seqs['\"]\s*:\s*(\d+)",
+                logs,
+                re.IGNORECASE,
+            )
+            if max_num_seqs_match:
+                max_num_seqs = int(max_num_seqs_match.group(1))
+
+            current_cfg_lines: list[str] = []
+            if gpu_util is not None:
+                current_cfg_lines.append(
+                    f"- Observed gpu_memory_utilization={gpu_util:.2f}"
+                )
+            if max_model_len is not None:
+                current_cfg_lines.append(
+                    f"- Observed max_model_len={max_model_len}"
+                )
+            if max_num_seqs is not None:
+                current_cfg_lines.append(f"- Observed max_num_seqs={max_num_seqs}")
+
+            suggestion_lines = []
+            if max_num_seqs is not None and max_num_seqs > 32:
+                suggestion_lines.append(
+                    "- Reduce AIMO3_BATCH_SIZE / max-num-seqs first (for large 120B checkpoints, try 32 or even 16)"
+                )
+            else:
+                suggestion_lines.append(
+                    "- Reduce AIMO3_BATCH_SIZE / max-num-seqs first if you are parallelizing many requests"
+                )
+
+            if max_model_len is not None and max_model_len > 32768:
+                suggestion_lines.append(
+                    "- Reduce AIMO3_CONTEXT_TOKENS (try 32768 or 16384)"
+                )
+            else:
+                suggestion_lines.append(
+                    "- Reduce AIMO3_CONTEXT_TOKENS if you do not truly need the current context window"
+                )
+
+            suggestion_lines.append(
+                "- Only if the GPU still has plenty of free VRAM after a clean restart, consider raising AIMO3_GPU_MEMORY_UTILIZATION slightly"
+            )
+            suggestion_lines.append(
+                "- Keep AIMO3_VLLM_MAX_CUDAGRAPH_CAPTURE_SIZE=0 to avoid extra startup reserve"
+            )
+            suggestion_lines.append(
+                "- Restart the notebook/session to clear any leftover vLLM processes holding VRAM"
+            )
+
+            current_cfg_block = ""
+            if current_cfg_lines:
+                current_cfg_block = (
+                    "Current startup settings seen in the log:\n"
+                    + "\n".join(current_cfg_lines)
+                    + "\n\n"
+                )
+
+            return (
+                "Startup failed because vLLM could load the model weights but could not reserve enough KV-cache blocks for the requested serving configuration.\n"
+                f"{current_cfg_block}"
+                "This usually means max_num_seqs and/or max_model_len are still too large for the checkpoint size on this GPU.\n\n"
+                "Fixes (try in this order):\n"
+                + "\n".join(suggestion_lines)
+            )
+
         # Common: GPU memory already consumed (often by another vLLM that was started earlier).
         if "Free memory on device" in logs and "desired GPU memory utilization" in logs:
             # Example:
@@ -524,6 +610,10 @@ class VLLMServer:
                 "- Restart the notebook kernel/session to clear any leaked vLLM processes\n"
                 "- Keep AIMO3_REUSE_EXISTING_SERVER=1 and avoid re-creating the solver multiple times"
             )
+
+        # Common: model loads, but KV-cache block reservation still fails.
+        if "cache blocks" in logs.lower() or "No available memory for the cache blocks" in logs:
+            return _cache_blocks_hint()
 
         # Common: load-time OOM while swizzling / processing quantized weights.
         if (
