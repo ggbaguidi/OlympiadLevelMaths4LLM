@@ -9,6 +9,7 @@ from olympiad_llm.aimo3.v2.budget import TimeBudgetTracker
 from olympiad_llm.aimo3.v2.config import AIMO3Config
 from olympiad_llm.aimo3.v2.meta_learning import AdaptiveHyperparameters, ProblemFeatures
 from olympiad_llm.aimo3.v2.reasoning_framework import render_reasoning_framework
+from olympiad_llm.aimo3.v2.llamacpp_server import LlamaCppServer
 from olympiad_llm.aimo3.v2.solver import AIMO3Solver
 from olympiad_llm.aimo3.v2.tools import AIMO3Tool
 from olympiad_llm.aimo3.v2.trace import TraceRecorder
@@ -560,3 +561,126 @@ def test_vllm_start_omits_prefix_caching_when_disabled(monkeypatch, tmp_path) ->
     assert popen_args
     cmd = popen_args[0]
     assert "--enable-prefix-caching" not in cmd
+
+
+def test_config_from_env_reads_llama_cpp_backend(monkeypatch) -> None:
+    monkeypatch.setenv("AIMO3_INFERENCE_BACKEND", "llama_cpp")
+    monkeypatch.setenv("AIMO3_LLAMA_CPP_N_GPU_LAYERS", "42")
+
+    cfg = AIMO3Config.from_env()
+
+    assert cfg.inference_backend == "llama_cpp"
+    assert cfg.llama_cpp_n_gpu_layers == 42
+
+
+def test_llama_cpp_start_builds_expected_command(monkeypatch, tmp_path) -> None:
+    cfg = AIMO3Config(
+        model_path=str(tmp_path / "model.gguf"),
+        served_model_name="gguf-model",
+        inference_backend="llama_cpp",
+        llama_cpp_n_gpu_layers=17,
+        context_tokens=8192,
+        batch_size=64,
+    )
+    cfg_path = tmp_path / "model.gguf"
+    cfg_path.write_text("stub", encoding="utf-8")
+    server = LlamaCppServer(cfg=cfg, log_path=str(tmp_path / "llama.log"))
+
+    popen_args: tuple = ()
+
+    class _FakePopen:
+        def __init__(self, *args, **kwargs) -> None:
+            nonlocal popen_args
+            popen_args = args
+            _ = kwargs
+
+        def poll(self):
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self, timeout=None) -> int:
+            _ = timeout
+            return 0
+
+    monkeypatch.setattr(
+        "olympiad_llm.aimo3.v2.require.importlib.import_module",
+        lambda name: object() if name == "llama_cpp.server" else None,
+    )
+    monkeypatch.setattr("subprocess.Popen", _FakePopen)
+
+    server.start()
+
+    assert popen_args
+    cmd = popen_args[0]
+    assert "llama_cpp.server" in cmd
+    assert "--model" in cmd
+    assert str(cfg_path) in cmd
+    assert "--model_alias" in cmd
+    assert "gguf-model" in cmd
+    assert "--n_ctx" in cmd
+    assert "8192" in cmd
+    assert "--n_gpu_layers" in cmd
+    assert "17" in cmd
+    assert "--n_batch" in cmd
+    assert "64" in cmd
+
+
+def test_startup_runtime_uses_llama_cpp_server_when_requested() -> None:
+    solver = object.__new__(AIMO3Solver)
+    solver.cfg = AIMO3Config(
+        inference_backend="llama_cpp",
+        reuse_existing_server=False,
+        server_probe_attempts=1,
+        server_probe_timeout=0.01,
+        session_timeout=1.0,
+        meta_learning_enabled=False,
+    )
+    solver.port = 8000
+    solver.server = None
+    solver.client = None
+
+    init_started = threading.Event()
+    wait_ready_called = threading.Event()
+
+    def _init(self) -> None:
+        init_started.set()
+        assert wait_ready_called.wait(1.0)
+
+    solver._initialize_kernels = MethodType(_init, solver)
+    solver._probe_server_ready = MethodType(
+        lambda self, client, attempts, sleep_s=0.5: False, solver
+    )
+
+    events: list[str] = []
+
+    class _FakeServer:
+        def __init__(self, cfg, port) -> None:
+            _ = cfg
+            _ = port
+
+        def start(self) -> None:
+            events.append("start")
+
+        def wait_ready(self, client) -> None:
+            _ = client
+            assert init_started.wait(1.0)
+            events.append("wait_ready")
+            wait_ready_called.set()
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    import olympiad_llm.aimo3.v2.solver as solver_module
+
+    original_server_cls = solver_module.LlamaCppServer
+    solver_module.LlamaCppServer = _FakeServer
+    try:
+        solver._startup_runtime("http://0.0.0.0:8000/v1", _FakeOpenAI)
+    finally:
+        solver_module.LlamaCppServer = original_server_cls
+
+    assert events == ["start", "wait_ready"]
+    assert isinstance(solver.client, _FakeOpenAI)

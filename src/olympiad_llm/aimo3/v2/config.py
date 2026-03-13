@@ -101,6 +101,10 @@ class AIMO3Config:
     # Model/server
     served_model_name: str = "gpt-oss"
     model_path: str = ""  # set via env AIMO3_MODEL_PATH in Kaggle
+    # Inference backend: "vllm" (default) or "llama_cpp" for GGUF models.
+    inference_backend: str = "vllm"
+    # llama.cpp GPU layer offload (-1 = all layers that fit, 0 = CPU only).
+    llama_cpp_n_gpu_layers: int = -1
     kv_cache_dtype: str = "fp8_e4m3"
     dtype: str = "auto"
     vllm_trust_remote_code: bool = True
@@ -112,6 +116,13 @@ class AIMO3Config:
     vllm_reasoning_parser_plugin: str = ""
     vllm_attention_backend: str = ""
     vllm_max_cudagraph_capture_size: int = 0
+    # Optional engine selector for vLLM internals: "" (auto), "0" (force v0), "1" (force v1).
+    # Useful as a workaround for CPU-offload regressions in specific vLLM versions.
+    vllm_use_v1: str = ""
+    # Optional hybrid serving knobs for checkpoints that do not fully fit in GPU VRAM.
+    # When > 0, vLLM can keep part of the model/KV state in host memory.
+    vllm_cpu_offload_gb: float = 0.0
+    vllm_swap_space_gb: float = 0.0
 
     # Optional: warm OS page cache by reading model shards before starting vLLM.
     # This reduces cold-start stalls and first-token latency in notebook runtimes.
@@ -312,6 +323,14 @@ class AIMO3Config:
 
         model_path = os.path.expanduser(os.getenv("AIMO3_MODEL_PATH", ""))
         served_model_name = os.getenv("AIMO3_SERVED_MODEL_NAME", "gpt-oss")
+        inference_backend = (
+            os.getenv("AIMO3_INFERENCE_BACKEND", AIMO3Config.inference_backend) or ""
+        ).strip().lower()
+        if inference_backend not in {"vllm", "llama_cpp"}:
+            inference_backend = AIMO3Config.inference_backend
+        llama_cpp_n_gpu_layers = _env_int(
+            "AIMO3_LLAMA_CPP_N_GPU_LAYERS", AIMO3Config.llama_cpp_n_gpu_layers
+        )
         vllm_trust_remote_code = os.getenv(
             "AIMO3_VLLM_TRUST_REMOTE_CODE", "1"
         ).strip().lower() not in {"0", "false", "no"}
@@ -350,6 +369,17 @@ class AIMO3Config:
         vllm_max_cudagraph_capture_size = _env_int(
             "AIMO3_VLLM_MAX_CUDAGRAPH_CAPTURE_SIZE",
             AIMO3Config.vllm_max_cudagraph_capture_size,
+        )
+        vllm_use_v1 = (
+            os.getenv("AIMO3_VLLM_USE_V1", AIMO3Config.vllm_use_v1) or ""
+        ).strip()
+        if vllm_use_v1 not in {"", "0", "1"}:
+            vllm_use_v1 = ""
+        vllm_cpu_offload_gb = _env_float(
+            "AIMO3_VLLM_CPU_OFFLOAD_GB", AIMO3Config.vllm_cpu_offload_gb
+        )
+        vllm_swap_space_gb = _env_float(
+            "AIMO3_VLLM_SWAP_SPACE_GB", AIMO3Config.vllm_swap_space_gb
         )
 
         reuse = os.getenv("AIMO3_REUSE_EXISTING_SERVER", "1").strip().lower() not in {
@@ -633,6 +663,8 @@ class AIMO3Config:
             reasoning_framework_enabled=reasoning_framework_enabled,
             model_path=model_path,
             served_model_name=served_model_name,
+            inference_backend=inference_backend,
+            llama_cpp_n_gpu_layers=llama_cpp_n_gpu_layers,
             vllm_trust_remote_code=vllm_trust_remote_code,
             vllm_enable_prefix_caching=vllm_enable_prefix_caching,
             vllm_enable_chunked_prefill=vllm_enable_chunked_prefill,
@@ -642,6 +674,9 @@ class AIMO3Config:
             vllm_reasoning_parser_plugin=vllm_reasoning_parser_plugin,
             vllm_attention_backend=vllm_attention_backend,
             vllm_max_cudagraph_capture_size=vllm_max_cudagraph_capture_size,
+            vllm_use_v1=vllm_use_v1,
+            vllm_cpu_offload_gb=max(0.0, float(vllm_cpu_offload_gb)),
+            vllm_swap_space_gb=max(0.0, float(vllm_swap_space_gb)),
             preload_model_weights=preload_model_weights,
             preload_model_workers=preload_model_workers,
             reuse_existing_server=reuse,

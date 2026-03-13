@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import importlib
 
 from .errors import OptionalDependencyError
 
@@ -56,3 +57,12 @@ def _require_harmony():
         "TextContent": TextContent,
         "Conversation": Conversation,
     }
+
+
+def _require_llama_cpp_server() -> None:
+    try:
+        importlib.import_module("llama_cpp.server")
+    except Exception as e:  # noqa: BLE001
+        raise OptionalDependencyError(
+            "llama.cpp backend requires 'llama-cpp-python[server]'. Install extras: pip install .[llama-cpp]"
+        ) from e

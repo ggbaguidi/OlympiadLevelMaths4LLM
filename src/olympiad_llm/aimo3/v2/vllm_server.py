@@ -171,10 +171,12 @@ class VLLMServer:
             str(self.cfg.context_tokens),
             "--stream-interval",
             str(self.cfg.stream_interval),
-            "--async-scheduling",
             "--disable-log-stats",
             "--no-enable-log-requests",
         ]
+
+        cpu_offload_gb = float(getattr(self.cfg, "vllm_cpu_offload_gb", 0.0) or 0.0)
+        cpu_offload_enabled = cpu_offload_gb > 0.0
 
         if bool(getattr(self.cfg, "vllm_trust_remote_code", False)):
             cmd.append("--trust-remote-code")
@@ -182,8 +184,17 @@ class VLLMServer:
         if bool(getattr(self.cfg, "vllm_enable_prefix_caching", True)):
             cmd.append("--enable-prefix-caching")
 
-        if bool(getattr(self.cfg, "vllm_enable_chunked_prefill", False)):
+        # vLLM CPU offload can fail during engine init when chunked prefill/async
+        # scheduling trigger input-batch re-init paths. Keep a conservative mode
+        # automatically when offload is enabled.
+        if (
+            bool(getattr(self.cfg, "vllm_enable_chunked_prefill", False))
+            and not cpu_offload_enabled
+        ):
             cmd.append("--enable-chunked-prefill")
+
+        if not cpu_offload_enabled:
+            cmd.append("--async-scheduling")
 
         if bool(getattr(self.cfg, "vllm_enable_auto_tool_choice", False)):
             cmd.append("--enable-auto-tool-choice")
@@ -217,9 +228,28 @@ class VLLMServer:
                 ]
             )
 
+        if cpu_offload_gb > 0.0:
+            cmd.extend(["--cpu-offload-gb", str(cpu_offload_gb)])
+            # Conservative default for offload startup stability.
+            cmd.append("--enforce-eager")
+
+        swap_space_gb = float(getattr(self.cfg, "vllm_swap_space_gb", 0.0) or 0.0)
+        if swap_space_gb > 0.0:
+            cmd.extend(["--swap-space", str(swap_space_gb)])
+
         self._log_file = open(self.log_path, "w", encoding="utf-8")
         child_env = os.environ.copy()
         child_env.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+
+        # Engine selection workaround:
+        # Some vLLM builds hit CPU-offload assertion paths in v1 for specific models.
+        # Allow explicit override via config; otherwise prefer v0 when offload is enabled.
+        vllm_use_v1 = str(getattr(self.cfg, "vllm_use_v1", "") or "").strip()
+        if vllm_use_v1 in {"0", "1"}:
+            child_env["VLLM_USE_V1"] = vllm_use_v1
+        elif cpu_offload_enabled:
+            child_env.setdefault("VLLM_USE_V1", "0")
+
         self.process = subprocess.Popen(
             cmd,
             stdout=self._log_file,
@@ -616,6 +646,16 @@ class VLLMServer:
         # Common: model loads, but KV-cache block reservation still fails.
         if "cache blocks" in logs.lower() or "No available memory for the cache blocks" in logs:
             return _cache_blocks_hint()
+
+        if "Cannot re-initialize the input batch when CPU weight offloading is enabled" in logs:
+            return (
+                "Startup failed due to a known vLLM CPU-offload initialization edge case (input batch re-init path).\n"
+                "Fixes:\n"
+                "- Disable chunked prefill when CPU offload is enabled (AIMO3_VLLM_ENABLE_CHUNKED_PREFILL=0)\n"
+                "- Disable async scheduling when CPU offload is enabled\n"
+                "- Keep max_num_seqs small (AIMO3_BATCH_SIZE=1)\n"
+                "- If still failing, reduce AIMO3_VLLM_CPU_OFFLOAD_GB or switch to a smaller/compatible checkpoint"
+            )
 
         # Common: load-time OOM while swizzling / processing quantized weights.
         if (

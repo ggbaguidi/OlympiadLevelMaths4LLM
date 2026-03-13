@@ -21,18 +21,43 @@ UNINSTALL_PACKAGES_COMMAND = ["uninstall", "--yes"]
 # Note: scikit-learn was removed from conflicts because sentence-transformers requires it
 CONFLICTING_LIBRARIES = ["tensorflow", "matplotlib", "keras"]
 
-REQUIRED_LIBRARIES = [
+BASE_REQUIRED_LIBRARIES = [
     "torch",
     "numpy",
-    "unsloth",
-    "trl",
-    "vllm",
-    "openai_harmony",
+    "openai",
+    "openai-harmony",
+    "jupyter_client",
+    "ipykernel",
+    "pandas",
+    "polars",
+    "transformers",
+    "python-dotenv",
+    "sympy",
+    "typer",
+    "rich",
     "mpmath",
     "ortools",
     "sentence-transformers",
     "scikit-learn",  # Required by sentence-transformers
     "z3-solver",
+]
+
+VLLM_REQUIRED_LIBRARIES = [
+    "unsloth",
+    "trl",
+    "vllm",
+]
+
+LLAMA_CPP_REQUIRED_LIBRARIES = [
+    "llama-cpp-python",
+    # Keep server deps explicit for offline installs where extras metadata may
+    # not resolve from local wheels.
+    "fastapi",
+    "uvicorn",
+    "sse-starlette",
+    "starlette",
+    "pydantic",
+    "pydantic-settings",
 ]
 
 
@@ -52,6 +77,38 @@ def uninstall_conflicts() -> Any:
     )
 
 
+def resolve_required_libraries() -> list[str]:
+    packages = list(BASE_REQUIRED_LIBRARIES)
+
+    backend = (os.getenv("AIMO3_INFERENCE_BACKEND", "vllm") or "vllm").strip().lower()
+    offline_stack = (os.getenv("AIMO3_OFFLINE_STACK", "") or "").strip().lower()
+
+    # Install backend-specific runtime dependencies.
+    if backend == "vllm":
+        packages.extend(VLLM_REQUIRED_LIBRARIES)
+    if backend == "llama_cpp":
+        packages.extend(LLAMA_CPP_REQUIRED_LIBRARIES)
+
+    # Optional explicit stack selector used by the offline preparation notebook.
+    if offline_stack == "full":
+        packages.extend(VLLM_REQUIRED_LIBRARIES)
+
+    extra_raw = (os.getenv("AIMO3_EXTRA_REQUIRED_LIBRARIES", "") or "").strip()
+    if extra_raw:
+        for pkg in extra_raw.split(","):
+            name = pkg.strip()
+            if name and name not in packages:
+                packages.append(name)
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for pkg in packages:
+        if pkg not in seen:
+            deduped.append(pkg)
+            seen.add(pkg)
+    return deduped
+
+
 def install_offline_required() -> Any:
     wheels = _packages_path()
     if not wheels:
@@ -65,7 +122,7 @@ def install_offline_required() -> Any:
             "install",
             "--no-index",
             "--find-links=" + wheels,
-            *REQUIRED_LIBRARIES,
+            *resolve_required_libraries(),
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -142,11 +199,26 @@ def environ_setup_parallel(
 
 def wait_all(setup_result: dict[str, Any], timeout: float | None = None) -> None:
     """Wait for all parallel setup tasks to complete."""
+    uninstall_rc = None
+    install_rc = None
+
     if "uninstall_process" in setup_result:
-        setup_result["uninstall_process"].wait(timeout=timeout)
+        uninstall_rc = setup_result["uninstall_process"].wait(timeout=timeout)
     if "install_process" in setup_result:
-        setup_result["install_process"].wait(timeout=timeout)
+        install_rc = setup_result["install_process"].wait(timeout=timeout)
     if "model_warmup_future" in setup_result:
         setup_result["model_warmup_future"].result(timeout=timeout)
     if "_model_warmup_executor" in setup_result:
         setup_result["_model_warmup_executor"].shutdown(wait=False)
+
+    if uninstall_rc not in (None, 0):
+        raise RuntimeError(
+            f"Conflicting package uninstall step failed with exit code {uninstall_rc}."
+        )
+
+    if install_rc not in (None, 0):
+        wheels = _packages_path() or "<unset>"
+        raise RuntimeError(
+            "Offline dependency installation failed "
+            f"(exit code {install_rc}). Check your wheels dataset at {wheels} and ensure required packages are present, especially openai-harmony/openai_harmony."
+        )

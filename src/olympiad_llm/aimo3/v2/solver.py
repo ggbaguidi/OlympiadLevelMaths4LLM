@@ -17,6 +17,7 @@ from typing import Any
 from .budget import TimeBudgetTracker
 from .answer_extraction import AnswerExtractor
 from .attempts import AttemptResult, AttemptStats
+from .llamacpp_server import LlamaCppServer
 from .config import AIMO3Config
 from .sandbox import AIMO3Sandbox
 from .trace import TraceRecorder, stable_problem_id
@@ -193,6 +194,13 @@ class AIMO3Solver:
     cfg: AIMO3Config
     port: int = 8000
 
+    def _backend_name(self) -> str:
+        backend = str(getattr(self.cfg, "inference_backend", "vllm") or "vllm")
+        return backend.strip().lower() or "vllm"
+
+    def _server_class(self):
+        return LlamaCppServer if self._backend_name() == "llama_cpp" else VLLMServer
+
     def _startup_runtime(self, base_url: str, OpenAI) -> None:
         with ThreadPoolExecutor(max_workers=1) as ex:
             kernels_future = ex.submit(self._initialize_kernels)
@@ -214,7 +222,7 @@ class AIMO3Solver:
                     )
                     self.server = None
                 else:
-                    self.server = VLLMServer(cfg=self.cfg, port=self.port)
+                    self.server = self._server_class()(cfg=self.cfg, port=self.port)
                     self.server.start()
                     self.client = OpenAI(
                         base_url=base_url,
@@ -244,6 +252,23 @@ class AIMO3Solver:
     def _truncate(text: str | None, max_chars: int) -> str:
         s = text or ""
         return s if len(s) <= max_chars else "..." + s[-(max_chars - 3) :]
+
+    def _prepare_completion_prompt(
+        self, prompt_ids: list[int], extra: dict[str, Any]
+    ) -> tuple[str | list[int], bool]:
+        backend = self._backend_name()
+        if backend == "llama_cpp":
+            if int(extra.get("top_k", -1) or -1) < 0:
+                extra["top_k"] = 40
+            return self.encoding.decode(prompt_ids), False
+        return prompt_ids, True
+
+    def _completion_tokens_from_text(self, text: str) -> list[int]:
+        with contextlib.suppress(Exception):
+            return self.encoding.encode(text, allowed_special="all")
+        with contextlib.suppress(Exception):
+            return self.encoding.encode(text, disallowed_special=())
+        return []
 
     def _attempt_to_row(self, r: AttemptResult) -> dict:
         ent = None
@@ -439,46 +464,95 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 if max_tokens < self.cfg.buffer_tokens:
                     break
 
-                stream = self.client.completions.create(
-                    model=self.cfg.served_model_name,
-                    temperature=self.cfg.verify_temperature,
-                    top_p=self.cfg.top_p,
-                    max_tokens=max_tokens,
-                    prompt=prompt_ids,
-                    seed=attempt_seed,
-                    stream=True,
-                    extra_body={
-                        "min_p": self.cfg.min_p,
-                        "stop_token_ids": self.stop_token_ids,
-                        "return_token_ids": True,
-                    },
+                extra = {
+                    "min_p": self.cfg.min_p,
+                    "top_k": self.cfg.top_k,
+                    "stop_token_ids": self.stop_token_ids,
+                    "return_token_ids": True,
+                }
+                prompt_arg, use_stream = self._prepare_completion_prompt(
+                    prompt_ids, extra
                 )
 
+                token_buffer: list[int] = []
+                text_buffer: list[str] = []
+                stream = None
                 try:
-                    token_buffer = []
-                    for chunk in stream:
-                        if time.time() > deadline:
-                            break
-                        choice = chunk.choices[0]
-                        if choice.token_ids:
-                            token_buffer.extend(choice.token_ids)
-                            text_parts.append(choice.text)
+                    if use_stream:
+                        stream = self.client.completions.create(
+                            model=self.cfg.served_model_name,
+                            temperature=self.cfg.verify_temperature,
+                            top_p=self.cfg.top_p,
+                            max_tokens=max_tokens,
+                            prompt=prompt_arg,
+                            seed=attempt_seed,
+                            stream=True,
+                            extra_body=extra,
+                        )
+
+                        for chunk in stream:
+                            if time.time() > deadline:
+                                break
+                            choice = chunk.choices[0]
+                            new_tokens = getattr(choice, "token_ids", None)
+                            new_text = str(getattr(choice, "text", "") or "")
+                            if new_tokens is None and new_text:
+                                new_tokens = self._completion_tokens_from_text(new_text)
+                            if new_tokens:
+                                token_buffer.extend(new_tokens)
+                            if new_text:
+                                text_buffer.append(new_text)
+                                text_parts.append(new_text)
+                    else:
+                        resp = self.client.completions.create(
+                            model=self.cfg.served_model_name,
+                            temperature=self.cfg.verify_temperature,
+                            top_p=self.cfg.top_p,
+                            max_tokens=max_tokens,
+                            prompt=prompt_arg,
+                            seed=attempt_seed,
+                            stream=False,
+                            extra_body=extra,
+                        )
+                        new_text = str(getattr(resp.choices[0], "text", "") or "")
+                        if new_text:
+                            token_buffer.extend(self._completion_tokens_from_text(new_text))
+                            text_buffer.append(new_text)
+                            text_parts.append(new_text)
                 finally:
-                    stream.close()
+                    if stream is not None:
+                        stream.close()
 
                 if not token_buffer:
                     break
 
-                new_msgs = self.encoding.parse_messages_from_completion_tokens(
-                    token_buffer, self.Role.ASSISTANT
-                )
+                new_msgs = None
+                if self._backend_name() == "llama_cpp":
+                    with contextlib.suppress(Exception):
+                        new_msgs = self.encoding.parse_messages_from_completion_tokens(
+                            token_buffer, self.Role.ASSISTANT, strict=False
+                        )
+                    if not new_msgs:
+                        TextContent = self._h["TextContent"]
+                        Author = self._h["Author"]
+                        Message = self._h["Message"]
+                        assistant_text = "".join(text_buffer).strip()
+                        content = (
+                            [TextContent(text=assistant_text)] if assistant_text else []
+                        )
+                        author = Author(role=self.Role.ASSISTANT, name="assistant")
+                        new_msgs = [Message(author=author, content=content)]
+                else:
+                    new_msgs = self.encoding.parse_messages_from_completion_tokens(
+                        token_buffer, self.Role.ASSISTANT
+                    )
                 if not new_msgs:
                     break
 
                 conversation.messages = conversation.messages + list(new_msgs)
                 last_msg = new_msgs[-1]
 
-                if last_msg.recipient == "python":
+                if getattr(last_msg, "recipient", None) == "python":
                     transcript.append(str(last_msg.content[0].text or ""))
                     tool_resp = local_tool.process_sync_plus(last_msg)
                     transcript.append(str(tool_resp[0].content[0].text or ""))
@@ -1099,70 +1173,130 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 if self.cfg.top_k > 0:
                     extra["top_k"] = self.cfg.top_k
 
-                stream = self.client.completions.create(
-                    model=self.cfg.served_model_name,
-                    temperature=temp,
-                    top_p=self.cfg.top_p,
-                    logprobs=(
-                        self.cfg.top_logprobs
-                        if self.cfg.entropy_weighting_enabled
-                        else None
-                    ),
-                    max_tokens=max_tok,
-                    prompt=prompt_ids,
-                    seed=attempt_seed,
-                    stream=True,
-                    extra_body=extra,
+                prompt_arg, use_stream = self._prepare_completion_prompt(
+                    prompt_ids, extra
                 )
 
+                token_buf: list[int] = []
+                text_buf: list[str] = []
+                stream = None
                 try:
-                    token_buf, text_buf = [], []
-                    for chunk in stream:
-                        if stop_event.is_set() or time.time() > deadline:
-                            deadline_exceeded = True
-                            break
-                        choice = chunk.choices[0]
-                        if choice.token_ids:
-                            token_buf.extend(choice.token_ids)
-                            total_tokens += len(choice.token_ids)
-                            text_buf.append(choice.text)
-                            text_tail.append(choice.text)
-                            if self.cfg.entropy_weighting_enabled and choice.logprobs:
-                                logprobs_buf.extend(choice.logprobs.top_logprobs or [])
+                    if use_stream:
+                        stream = self.client.completions.create(
+                            model=self.cfg.served_model_name,
+                            temperature=temp,
+                            top_p=self.cfg.top_p,
+                            logprobs=(
+                                self.cfg.top_logprobs
+                                if self.cfg.entropy_weighting_enabled
+                                else None
+                            ),
+                            max_tokens=max_tok,
+                            prompt=prompt_arg,
+                            seed=attempt_seed,
+                            stream=True,
+                            extra_body=extra,
+                        )
 
-                        if (
-                            "}" in (choice.text or "")
-                            and total_tokens
-                            >= self.cfg.min_tokens_before_stream_extraction
-                        ):
-                            ans = self._extractor.extract_boxed_int(
-                                "".join(text_buf[-self.cfg.search_tokens :])
-                            )
-                            if ans is not None:
-                                final_answer = ans
+                        for chunk in stream:
+                            if stop_event.is_set() or time.time() > deadline:
+                                deadline_exceeded = True
                                 break
+                            choice = chunk.choices[0]
+                            new_text = str(getattr(choice, "text", "") or "")
+                            new_tokens = getattr(choice, "token_ids", None)
+                            if new_tokens is None and new_text:
+                                new_tokens = self._completion_tokens_from_text(new_text)
+                            if new_tokens:
+                                token_buf.extend(new_tokens)
+                                total_tokens += len(new_tokens)
+                            if new_text:
+                                text_buf.append(new_text)
+                                text_tail.append(new_text)
+                                if self.cfg.entropy_weighting_enabled and choice.logprobs:
+                                    logprobs_buf.extend(choice.logprobs.top_logprobs or [])
+
+                            if (
+                                "}" in new_text
+                                and total_tokens
+                                >= self.cfg.min_tokens_before_stream_extraction
+                            ):
+                                ans = self._extractor.extract_boxed_int(
+                                    "".join(text_buf[-self.cfg.search_tokens :])
+                                )
+                                if ans is not None:
+                                    final_answer = ans
+                                    break
+                    else:
+                        resp = self.client.completions.create(
+                            model=self.cfg.served_model_name,
+                            temperature=temp,
+                            top_p=self.cfg.top_p,
+                            max_tokens=max_tok,
+                            prompt=prompt_arg,
+                            seed=attempt_seed,
+                            stream=False,
+                            extra_body=extra,
+                        )
+                        new_text = str(getattr(resp.choices[0], "text", "") or "")
+                        if new_text:
+                            text_buf.append(new_text)
+                            text_tail.append(new_text)
+                            new_tokens = self._completion_tokens_from_text(new_text)
+                            if new_tokens:
+                                token_buf.extend(new_tokens)
+                                total_tokens += len(new_tokens)
+
+                            if (
+                                "}" in new_text
+                                and total_tokens
+                                >= self.cfg.min_tokens_before_stream_extraction
+                            ):
+                                ans = self._extractor.extract_boxed_int(
+                                    new_text[-self.cfg.search_tokens :]
+                                )
+                                if ans is not None:
+                                    final_answer = ans
                 finally:
-                    stream.close()
+                    if stream is not None:
+                        stream.close()
 
                 if final_answer is not None or not token_buf:
                     break
 
-                new_msgs = self.encoding.parse_messages_from_completion_tokens(
-                    token_buf, self.Role.ASSISTANT
-                )
+                new_msgs = None
+                if self._backend_name() == "llama_cpp":
+                    with contextlib.suppress(Exception):
+                        new_msgs = self.encoding.parse_messages_from_completion_tokens(
+                            token_buf, self.Role.ASSISTANT, strict=False
+                        )
+                    if not new_msgs:
+                        TextContent = self._h["TextContent"]
+                        Author = self._h["Author"]
+                        Message = self._h["Message"]
+                        assistant_text = "".join(text_buf).strip()
+                        content = (
+                            [TextContent(text=assistant_text)] if assistant_text else []
+                        )
+                        author = Author(role=self.Role.ASSISTANT, name="assistant")
+                        new_msgs = [Message(author=author, content=content)]
+                else:
+                    new_msgs = self.encoding.parse_messages_from_completion_tokens(
+                        token_buf, self.Role.ASSISTANT
+                    )
                 if not new_msgs:
                     break
 
                 conversation.messages = conversation.messages + list(new_msgs)
                 last_msg = new_msgs[-1]
 
-                if last_msg.channel == "final":
+                if getattr(last_msg, "channel", None) == "final":
                     final_answer = self._extractor.extract_boxed_int(
                         last_msg.content[0].text
                     ) or self._extractor.extract_int_fallback(last_msg.content[0].text)
                     break
 
-                if last_msg.recipient in ("python", "z3"):
+                if getattr(last_msg, "recipient", None) in ("python", "z3"):
                     python_calls += 1
                     transcript_calls.append(str(last_msg.content[0].text or ""))
                     tool_resp = local_tool.process_sync_plus(
