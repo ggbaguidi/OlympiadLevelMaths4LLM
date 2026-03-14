@@ -7,6 +7,7 @@ import os
 import queue
 import random
 import re
+import subprocess
 import tempfile
 import time
 import uuid
@@ -106,7 +107,26 @@ class AIMO3Sandbox:
                     f"aimo3-kernel-{os.getpid()}-{uuid.uuid4().hex}.json",
                 )
                 km = KernelManager(connection_file=connection_file)
-                km.start_kernel(extra_arguments=["--Application.log_level=CRITICAL"])
+
+                # In managed notebook runtimes (Kaggle/Colab), a transient kernel-start
+                # race can emit scary child-process tracebacks (e.g. Address already in use)
+                # even when our retry logic recovers immediately.
+                #
+                # Keep notebook stderr clean by default; allow opting out for debugging.
+                silence_child_stderr = (
+                    os.getenv("AIMO3_SANDBOX_SILENCE_KERNEL_STDERR", "1")
+                    .strip()
+                    .lower()
+                    not in {"0", "false", "no"}
+                )
+                start_kwargs: dict[str, object] = {
+                    "extra_arguments": ["--Application.log_level=CRITICAL"]
+                }
+                if silence_child_stderr:
+                    start_kwargs["stderr"] = subprocess.DEVNULL
+                    start_kwargs["stdout"] = subprocess.DEVNULL
+
+                km.start_kernel(**start_kwargs)
                 client = km.blocking_client()
                 client.start_channels()
                 client.wait_for_ready(timeout=self._default_timeout)
