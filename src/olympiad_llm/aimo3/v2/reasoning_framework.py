@@ -47,6 +47,20 @@ MATH_REASONING_STEPS: tuple[ReasoningStep, ...] = (
         ),
     ),
     ReasoningStep(
+        name="derive_python_algorithm",
+        instruction=(
+            "Translate the exact method into a concrete Python algorithm before committing to an answer: "
+            "define inputs/outputs, derive formulas, state loop bounds, and ensure runtime is feasible."
+        ),
+    ),
+    ReasoningStep(
+        name="implement_and_run_exact_python",
+        instruction=(
+            "Implement the algorithm with exact arithmetic in Python (integers/rationals; avoid unsafe floats), "
+            "run it, and use the computed value as the primary candidate answer."
+        ),
+    ),
+    ReasoningStep(
         name="test_small_cases",
         instruction=(
             "Use tiny cases only to falsify or refine a conjecture, never as final proof. "
