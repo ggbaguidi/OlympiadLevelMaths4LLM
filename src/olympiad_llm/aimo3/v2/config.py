@@ -66,6 +66,13 @@ class AIMO3Config:
     retriever_include_definitions: bool = True
     retriever_warmup_on_init: bool = True
 
+    # Compact skill/failure memory hints (T2-style adaptation).
+    agent_memory_enabled: bool = False
+    agent_memory_path: str = ""
+    agent_memory_skill_top_k: int = 2
+    agent_memory_failure_top_k: int = 2
+    agent_memory_min_score: float = 0.15
+
     # Notebook display / logging
     # If True, show a table of attempts (candidate answers + stats + snippet) after solving.
     display_candidates: bool = True
@@ -399,6 +406,23 @@ class AIMO3Config:
             "AIMO3_RETRIEVER_WARMUP_ON_INIT", "1"
         ).strip().lower() not in {"0", "false", "no"}
 
+        agent_memory_enabled = os.getenv(
+            "AIMO3_AGENT_MEMORY_ENABLED", "0"
+        ).strip().lower() not in {"0", "false", "no"}
+        agent_memory_path = os.path.expanduser(
+            os.getenv("AIMO3_AGENT_MEMORY_PATH", AIMO3Config.agent_memory_path)
+        )
+        agent_memory_skill_top_k = _env_int(
+            "AIMO3_AGENT_MEMORY_SKILL_TOP_K", AIMO3Config.agent_memory_skill_top_k
+        )
+        agent_memory_failure_top_k = _env_int(
+            "AIMO3_AGENT_MEMORY_FAILURE_TOP_K",
+            AIMO3Config.agent_memory_failure_top_k,
+        )
+        agent_memory_min_score = _env_float(
+            "AIMO3_AGENT_MEMORY_MIN_SCORE", AIMO3Config.agent_memory_min_score
+        )
+
         trace_enabled = os.getenv("AIMO3_TRACE", "0").strip().lower() not in {
             "0",
             "false",
@@ -635,6 +659,11 @@ class AIMO3Config:
             retriever_include_examples=retriever_include_examples,
             retriever_include_definitions=retriever_include_definitions,
             retriever_warmup_on_init=retriever_warmup_on_init,
+            agent_memory_enabled=agent_memory_enabled,
+            agent_memory_path=agent_memory_path,
+            agent_memory_skill_top_k=agent_memory_skill_top_k,
+            agent_memory_failure_top_k=agent_memory_failure_top_k,
+            agent_memory_min_score=agent_memory_min_score,
             display_candidates=disp,
             trace_enabled=trace_enabled,
             entropy_weighting_enabled=entropy_weighting_enabled,

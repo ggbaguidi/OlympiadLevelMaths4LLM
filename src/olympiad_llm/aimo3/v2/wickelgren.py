@@ -597,6 +597,10 @@ def augment_developer_prompt_with_meta(
     *,
     attempt_index: int,
     problem_text: str | None = None,
+    agent_memory_retriever: Any | None = None,
+    agent_memory_skill_top_k: int = 2,
+    agent_memory_failure_top_k: int = 2,
+    agent_memory_min_score: float = 0.15,
     retriever: Any | None = None,
     retriever_top_k: int = 5,
     retriever_min_score: float = 0.08,
@@ -621,6 +625,23 @@ def augment_developer_prompt_with_meta(
     )
     strategy_block = render_strategy_card(card)
 
+    memory_block = ""
+    memory_meta: dict[str, Any] = {}
+    if agent_memory_retriever is not None and (problem_text or "").strip():
+        with_errors = False
+        try:
+            memory_block, memory_meta = agent_memory_retriever.retrieve_for_problem(
+                problem=str(problem_text or ""),
+                skill_top_k=max(0, int(agent_memory_skill_top_k)),
+                failure_top_k=max(0, int(agent_memory_failure_top_k)),
+                min_score=float(agent_memory_min_score),
+            )
+        except Exception:  # noqa: BLE001
+            with_errors = True
+        if with_errors:
+            memory_block = ""
+            memory_meta = {}
+
     retrieved_block = ""
     retrieval_meta: dict[str, Any] = {}
     if retriever is not None and (problem_text or "").strip():
@@ -639,7 +660,7 @@ def augment_developer_prompt_with_meta(
             retrieved_block = ""
             retrieval_meta = {}
 
-    blocks = [b for b in [strategy_block, retrieved_block] if b]
+    blocks = [b for b in [memory_block, strategy_block, retrieved_block] if b]
     extra = "\n\n".join(blocks)
     out = extra if not base_prompt else base_prompt.rstrip() + "\n\n" + extra
     meta = {
@@ -647,6 +668,12 @@ def augment_developer_prompt_with_meta(
         "strategy_selection_method": strategy_meta.get("method", "rotation"),
         "strategy_exploration": strategy_meta.get("exploration", False),
         "strategy_cluster": strategy_meta.get("cluster", "unknown"),
+        "agent_memory_used": bool(memory_block),
+        "agent_memory_backend": str(memory_meta.get("backend", "")),
+        "agent_memory_results": int(memory_meta.get("results_count", 0) or 0),
+        "agent_memory_skill_results": int(memory_meta.get("skill_results_count", 0) or 0),
+        "agent_memory_failure_results": int(memory_meta.get("failure_results_count", 0) or 0),
+        "agent_memory_avg_score": float(memory_meta.get("avg_score", 0.0) or 0.0),
         "retriever_used": bool(retrieved_block),
         "retriever_backend": str(retrieval_meta.get("backend", "")),
         "retriever_results": int(retrieval_meta.get("results_count", 0) or 0),

@@ -11,6 +11,7 @@ from olympiad_llm.aimo3.v2.reasoning_framework import render_reasoning_framework
 from olympiad_llm.aimo3.v2.llamacpp_server import LlamaCppServer
 from olympiad_llm.aimo3.v2.solver import AIMO3Solver
 from olympiad_llm.aimo3.v2.tools import AIMO3Tool
+from olympiad_llm.aimo3.v2.wickelgren import augment_developer_prompt_with_meta
 from olympiad_llm.aimo3.v2.trace import TraceRecorder
 from olympiad_llm.aimo3.v2.verification import ToolOutputVerifier
 from olympiad_llm.aimo3.v2.vllm_server import VLLMServer
@@ -203,6 +204,39 @@ def test_build_attempt_prompt_includes_reasoning_framework_on_full_attempts() ->
     assert "Divisibility focus" in full_prompt
     assert tag is None
     assert strategy is None
+
+
+def test_augment_developer_prompt_includes_agent_memory_when_enabled() -> None:
+    class _MemoryStub:
+        def retrieve_for_problem(self, **kwargs):
+            _ = kwargs
+            return (
+                "[META_AGENT_MEMORY]\n[SKILL_MEMORY]\n1. [0.900] Exact modular arithmetic: reduce exactly.\n[/SKILL_MEMORY]\n[FAILURE_WATCHOUTS]\n1. [0.800] False consensus: do not trust agreement alone.\n[/FAILURE_WATCHOUTS]\n[/META_AGENT_MEMORY]",
+                {
+                    "backend": "builtin",
+                    "results_count": 2,
+                    "skill_results_count": 1,
+                    "failure_results_count": 1,
+                    "avg_score": 0.85,
+                },
+            )
+
+    prompt, meta = augment_developer_prompt_with_meta(
+        "full-prompt",
+        attempt_index=1,
+        problem_text="Find the remainder modulo 7.",
+        agent_memory_retriever=_MemoryStub(),
+        agent_memory_skill_top_k=1,
+        agent_memory_failure_top_k=1,
+        agent_memory_min_score=0.1,
+        meta_learning_enabled=False,
+    )
+
+    assert "[META_AGENT_MEMORY]" in prompt
+    assert "Exact modular arithmetic" in prompt
+    assert "False consensus" in prompt
+    assert meta["agent_memory_used"] is True
+    assert meta["agent_memory_results"] == 2
 
 
 def test_render_reasoning_framework_adds_counting_focus() -> None:
@@ -410,6 +444,18 @@ def test_config_from_env_reads_reasoning_framework_enabled(monkeypatch) -> None:
     monkeypatch.setenv("AIMO3_REASONING_FRAMEWORK_ENABLED", "0")
     cfg = AIMO3Config.from_env()
     assert cfg.reasoning_framework_enabled is False
+
+
+def test_config_from_env_reads_agent_memory_knobs(monkeypatch) -> None:
+    monkeypatch.setenv("AIMO3_AGENT_MEMORY_ENABLED", "1")
+    monkeypatch.setenv("AIMO3_AGENT_MEMORY_SKILL_TOP_K", "3")
+    monkeypatch.setenv("AIMO3_AGENT_MEMORY_FAILURE_TOP_K", "1")
+    monkeypatch.setenv("AIMO3_AGENT_MEMORY_MIN_SCORE", "0.25")
+    cfg = AIMO3Config.from_env()
+    assert cfg.agent_memory_enabled is True
+    assert cfg.agent_memory_skill_top_k == 3
+    assert cfg.agent_memory_failure_top_k == 1
+    assert cfg.agent_memory_min_score == 0.25
 
 
 def test_tool_output_verification_notice_integration() -> None:

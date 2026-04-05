@@ -24,6 +24,7 @@ from .vllm_server import VLLMServer
 from .require import _require_harmony, _require_openai
 from .template import AIMO3Template
 from .tools import AIMO3Tool
+from .agent_memory import init_agent_memory_from_cfg
 from .reasoning_framework import augment_prompt_with_reasoning_framework
 from .wickelgren import (
     GENERIC_STRATEGY_CARDS,
@@ -393,6 +394,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
 
         self.template = AIMO3Template()
         self._wickelgren_retriever = init_math_retriever_from_cfg(self.cfg)
+        self._agent_memory_retriever = init_agent_memory_from_cfg(self.cfg)
         enc = self._h["load_harmony_encoding"](
             self._h["HarmonyEncodingName"].HARMONY_GPT_OSS
         )
@@ -513,12 +515,22 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 problem_text=problem_text,
             )
 
-        if self.cfg.wickelgren_strategies_enabled:
+        use_meta_prompt = bool(
+            self.cfg.wickelgren_strategies_enabled
+            or getattr(self, "_wickelgren_retriever", None) is not None
+            or getattr(self, "_agent_memory_retriever", None) is not None
+        )
+
+        if use_meta_prompt:
             dev_prompt, meta = augment_developer_prompt_with_meta(
                 dev_prompt,
                 attempt_index=attempt_index,
                 problem_text=problem_text,
-                retriever=self._wickelgren_retriever,
+                agent_memory_retriever=getattr(self, "_agent_memory_retriever", None),
+                agent_memory_skill_top_k=self.cfg.agent_memory_skill_top_k,
+                agent_memory_failure_top_k=self.cfg.agent_memory_failure_top_k,
+                agent_memory_min_score=self.cfg.agent_memory_min_score,
+                retriever=getattr(self, "_wickelgren_retriever", None),
                 retriever_top_k=self.cfg.retriever_top_k,
                 retriever_min_score=self.cfg.retriever_min_score,
                 retriever_include_examples=self.cfg.retriever_include_examples,
