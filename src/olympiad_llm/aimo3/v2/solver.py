@@ -173,6 +173,7 @@ def rank_candidates(
 class AIMO3Solver:
     cfg: AIMO3Config
     port: int = 8000
+    sandbox_pool: queue.Queue | None = None
 
     def _backend_name(self) -> str:
         backend = str(getattr(self.cfg, "inference_backend", "vllm") or "vllm")
@@ -338,6 +339,14 @@ class AIMO3Solver:
             or bool(str(getattr(st, "last_error", "") or "").strip())
         )
 
+    @staticmethod
+    def _attempt_has_timeout_signal(result: AttemptResult) -> bool:
+        st = result.stats
+        if int(getattr(st, "timeout_count", 0) or 0) > 0:
+            return True
+        err = str(getattr(st, "last_error", "") or "").lower()
+        return "timed out" in err or "timeout" in err
+
     def _should_run_sequential_repair(
         self,
         results: list[AttemptResult],
@@ -353,7 +362,16 @@ class AIMO3Solver:
         if len(results) < min_attempts:
             return False
 
-        fail_count = sum(1 for r in results if self._attempt_has_failure_signal(r))
+        timeout_only = bool(
+            getattr(self.cfg, "sequential_repair_only_on_timeout", False)
+        )
+        signal_fn = (
+            self._attempt_has_timeout_signal
+            if timeout_only
+            else self._attempt_has_failure_signal
+        )
+
+        fail_count = sum(1 for r in results if signal_fn(r))
         error_rate = fail_count / max(1, len(results))
         threshold = float(getattr(self.cfg, "sequential_repair_min_error_rate", 0.5) or 0.5)
         return error_rate >= threshold
@@ -573,6 +591,8 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
         return False
 
     def __post_init__(self) -> None:
+        self.sandbox_pool = queue.Queue()
+
         os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
         os.environ.setdefault("TRANSFORMERS_NO_FLAX", "1")
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -660,19 +680,20 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 self._adaptive_hparams = AdaptiveHyperparameters(self.cfg)
 
     def close(self) -> None:
-        if hasattr(self, "sandbox_pool"):
-            while not self.sandbox_pool.empty():
+        pool = getattr(self, "sandbox_pool", None)
+        if pool is not None:
+            while not pool.empty():
                 with contextlib.suppress(Exception):
-                    self.sandbox_pool.get_nowait().close()
+                    pool.get_nowait().close()
         if getattr(self, "server", None):
             with contextlib.suppress(Exception):
                 self.server.stop()
 
     def __del__(self) -> None:
-        self.close()
+        with contextlib.suppress(Exception):
+            self.close()
 
     def _initialize_kernels(self) -> None:
-        self.sandbox_pool: queue.Queue = queue.Queue()
         pool_sz = max(1, min(self.cfg.sandbox_pool_size, self.cfg.workers))
 
         def _create():

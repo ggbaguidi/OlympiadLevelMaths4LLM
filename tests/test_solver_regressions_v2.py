@@ -507,6 +507,12 @@ def test_config_from_env_reads_sequential_repair_knobs(monkeypatch) -> None:
     assert cfg.sequential_repair_min_error_rate == 0.6
 
 
+def test_config_from_env_reads_sequential_repair_timeout_only_knob(monkeypatch) -> None:
+    monkeypatch.setenv("AIMO3_SEQUENTIAL_REPAIR_ONLY_ON_TIMEOUT", "1")
+    cfg = AIMO3Config.from_env()
+    assert cfg.sequential_repair_only_on_timeout is True
+
+
 def test_should_run_sequential_repair_requires_error_density() -> None:
     solver = object.__new__(AIMO3Solver)
     solver.cfg = AIMO3Config(
@@ -535,6 +541,50 @@ def test_should_run_sequential_repair_requires_error_density() -> None:
     assert solver._should_run_sequential_repair(noisy_results, stopped_early=False) is True
     assert solver._should_run_sequential_repair(clean_results, stopped_early=False) is False
     assert solver._should_run_sequential_repair(noisy_results, stopped_early=True) is False
+
+
+def test_should_run_sequential_repair_timeout_only_ignores_non_timeout_errors() -> None:
+    solver = object.__new__(AIMO3Solver)
+    solver.cfg = AIMO3Config(
+        sequential_repair_enabled=True,
+        sequential_repair_min_attempts=2,
+        sequential_repair_min_error_rate=0.5,
+        sequential_repair_only_on_timeout=True,
+    )
+
+    non_timeout_errors = [
+        AttemptResult(
+            attempt=1,
+            answer=None,
+            stats=AttemptStats(python_errors=1, last_error="SyntaxError"),
+        ),
+        AttemptResult(
+            attempt=2,
+            answer=None,
+            stats=AttemptStats(python_errors=1, last_error="TypeError"),
+        ),
+    ]
+    timeout_heavy = [
+        AttemptResult(
+            attempt=1,
+            answer=None,
+            stats=AttemptStats(timeout_count=1, last_error="[ERROR] Execution timed out"),
+        ),
+        AttemptResult(
+            attempt=2,
+            answer=None,
+            stats=AttemptStats(timeout_count=1, last_error="[ERROR] Execution timed out"),
+        ),
+    ]
+
+    assert (
+        solver._should_run_sequential_repair(non_timeout_errors, stopped_early=False)
+        is False
+    )
+    assert (
+        solver._should_run_sequential_repair(timeout_heavy, stopped_early=False)
+        is True
+    )
 
 
 def test_agent_memory_file_loads_and_retrieves_from_traces() -> None:

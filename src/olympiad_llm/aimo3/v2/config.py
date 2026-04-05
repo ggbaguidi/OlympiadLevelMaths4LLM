@@ -197,6 +197,9 @@ class AIMO3Config:
     sequential_repair_max_attempts: int = 2
     sequential_repair_min_attempts: int = 2
     sequential_repair_min_error_rate: float = 0.5
+    # If True, sequential repair is triggered only by timeout-heavy behavior
+    # (ignores non-timeout errors such as syntax/type/attribute issues).
+    sequential_repair_only_on_timeout: bool = False
 
     # Easy-exit: aggressive early stop for problems solved quickly with verified support.
     easy_exit_enabled: bool = True
@@ -528,6 +531,9 @@ class AIMO3Config:
             "AIMO3_SEQUENTIAL_REPAIR_MIN_ERROR_RATE",
             AIMO3Config.sequential_repair_min_error_rate,
         )
+        sequential_repair_only_on_timeout = os.getenv(
+            "AIMO3_SEQUENTIAL_REPAIR_ONLY_ON_TIMEOUT", "0"
+        ).strip().lower() not in {"0", "false", "no"}
 
         turns = _env_int("AIMO3_TURNS", AIMO3Config.turns)
         min_tokens_before_stream_extraction = _env_int(
@@ -721,6 +727,7 @@ class AIMO3Config:
             sequential_repair_max_attempts=max(0, sequential_repair_max_attempts),
             sequential_repair_min_attempts=max(1, sequential_repair_min_attempts),
             sequential_repair_min_error_rate=max(0.0, float(sequential_repair_min_error_rate)),
+            sequential_repair_only_on_timeout=sequential_repair_only_on_timeout,
             easy_exit_enabled=easy_exit_enabled,
             easy_exit_time_threshold_s=easy_exit_time_threshold_s,
             easy_exit_min_votes=easy_exit_min_votes,
