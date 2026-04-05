@@ -130,6 +130,56 @@ def _builtin_snippets() -> list[MemorySnippet]:
             domains=("number_theory",),
         ),
         MemorySnippet(
+            kind="failure",
+            title="Sympy API mismatch",
+            guidance=(
+                "Do not assume every SymPy helper exists in the top-level namespace.",
+                "If an attribute looks suspicious, import the documented function or check the actual module first.",
+            ),
+            triggers=("sympy", "attributeerror", "fib", "factor_poly", "mp"),
+            domains=("algebra", "number_theory", "geometry"),
+        ),
+        MemorySnippet(
+            kind="failure",
+            title="Polynomial objects need cleanup",
+            guidance=(
+                "Normalize rational expressions before calling Poly or factoring routines.",
+                "Separate numerator and denominator first; negative powers and 1/x terms will trigger PolynomialError.",
+            ),
+            triggers=("poly", "polynomial", "1/x", "rational", "negative exponent"),
+            domains=("algebra", "number_theory"),
+        ),
+        MemorySnippet(
+            kind="failure",
+            title="Bracket root search first",
+            guidance=(
+                "Do not call a root finder unless the interval has a verified sign change or bracket.",
+                "If the first interval fails, sample a grid and widen the search before giving up.",
+            ),
+            triggers=("root", "findroot", "sign change", "bracket", "bisection"),
+            domains=("algebra", "geometry", "number_theory"),
+        ),
+        MemorySnippet(
+            kind="failure",
+            title="Generated code must parse",
+            guidance=(
+                "Treat generated code as untrusted until it passes a syntax check.",
+                "Run an AST parse and inspect indentation and parentheses before execution.",
+            ),
+            triggers=("syntaxerror", "indentation", "parenthesis", "ast.parse", "generated code"),
+            domains=("algebra", "geometry", "combinatorics"),
+        ),
+        MemorySnippet(
+            kind="failure",
+            title="Timeouts need smaller subproblems",
+            guidance=(
+                "If a symbolic geometry or search loop times out, split the task into smaller exact checks.",
+                "Use invariants, pruning, or a shorter subproblem before escalating to heavier computation.",
+            ),
+            triggers=("timeout", "geometry", "cyclic", "incircle", "circumcircle"),
+            domains=("geometry", "algebra", "number_theory"),
+        ),
+        MemorySnippet(
             kind="skill",
             title="Counting and recurrence",
             guidance=(
