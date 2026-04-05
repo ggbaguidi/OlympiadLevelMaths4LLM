@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
 import threading
 from types import MethodType
 
 from olympiad_llm.aimo3.v2.attempts import AttemptResult, AttemptStats
 from olympiad_llm.aimo3.v2.budget import TimeBudgetTracker
+from olympiad_llm.aimo3.v2.agent_memory import AgentMemoryRetriever
 from olympiad_llm.aimo3.v2.config import AIMO3Config
 from olympiad_llm.aimo3.v2.meta_learning import AdaptiveHyperparameters, ProblemFeatures
 from olympiad_llm.aimo3.v2.reasoning_framework import render_reasoning_framework
@@ -239,6 +241,39 @@ def test_augment_developer_prompt_includes_agent_memory_when_enabled() -> None:
     assert meta["agent_memory_results"] == 2
 
 
+def test_runtime_failure_memory_block_summarizes_recent_errors() -> None:
+    solver = object.__new__(AIMO3Solver)
+    results = [
+        AttemptResult(
+            attempt=1,
+            answer=None,
+            stats=AttemptStats(
+                python_errors=1,
+                last_error="AttributeError: module 'sympy' has no attribute 'fib'",
+            ),
+        ),
+        AttemptResult(
+            attempt=2,
+            answer=None,
+            stats=AttemptStats(
+                python_errors=1,
+                last_error="ValueError: No sign change found for t=1.618",
+            ),
+        ),
+        AttemptResult(
+            attempt=3,
+            answer=None,
+            stats=AttemptStats(timeout_count=1, last_error="[ERROR] Execution timed out"),
+        ),
+    ]
+
+    block = solver._build_runtime_failure_memory_block(results, max_items=3)
+    assert "[META_RUNTIME_FAILURE_MEMORY]" in block
+    assert "SymPy API mismatch" in block
+    assert "Bracket root search first" in block
+    assert "Timeout hotspot" in block
+
+
 def test_render_reasoning_framework_adds_counting_focus() -> None:
     prompt = render_reasoning_framework(
         "A tournament has many rounds; count the number of possible orderings."
@@ -456,6 +491,69 @@ def test_config_from_env_reads_agent_memory_knobs(monkeypatch) -> None:
     assert cfg.agent_memory_skill_top_k == 3
     assert cfg.agent_memory_failure_top_k == 1
     assert cfg.agent_memory_min_score == 0.25
+
+
+def test_config_from_env_reads_sequential_repair_knobs(monkeypatch) -> None:
+    monkeypatch.setenv("AIMO3_SEQUENTIAL_REPAIR_ENABLED", "1")
+    monkeypatch.setenv("AIMO3_SEQUENTIAL_REPAIR_MAX_ATTEMPTS", "3")
+    monkeypatch.setenv("AIMO3_SEQUENTIAL_REPAIR_MIN_ATTEMPTS", "2")
+    monkeypatch.setenv("AIMO3_SEQUENTIAL_REPAIR_MIN_ERROR_RATE", "0.6")
+
+    cfg = AIMO3Config.from_env()
+
+    assert cfg.sequential_repair_enabled is True
+    assert cfg.sequential_repair_max_attempts == 3
+    assert cfg.sequential_repair_min_attempts == 2
+    assert cfg.sequential_repair_min_error_rate == 0.6
+
+
+def test_should_run_sequential_repair_requires_error_density() -> None:
+    solver = object.__new__(AIMO3Solver)
+    solver.cfg = AIMO3Config(
+        sequential_repair_enabled=True,
+        sequential_repair_min_attempts=2,
+        sequential_repair_min_error_rate=0.5,
+    )
+
+    noisy_results = [
+        AttemptResult(
+            attempt=1,
+            answer=None,
+            stats=AttemptStats(python_errors=1, last_error="SyntaxError"),
+        ),
+        AttemptResult(
+            attempt=2,
+            answer=None,
+            stats=AttemptStats(timeout_count=1, last_error="[ERROR] Execution timed out"),
+        ),
+    ]
+    clean_results = [
+        AttemptResult(attempt=1, answer=42, stats=AttemptStats()),
+        AttemptResult(attempt=2, answer=42, stats=AttemptStats()),
+    ]
+
+    assert solver._should_run_sequential_repair(noisy_results, stopped_early=False) is True
+    assert solver._should_run_sequential_repair(clean_results, stopped_early=False) is False
+    assert solver._should_run_sequential_repair(noisy_results, stopped_early=True) is False
+
+
+def test_agent_memory_file_loads_and_retrieves_from_traces() -> None:
+    memory_path = (
+        Path(__file__).resolve().parents[1] / "knowledge_base" / "agent_memory.json"
+    )
+    retriever = AgentMemoryRetriever.load(memory_path)
+
+    prompt, meta = retriever.retrieve_for_problem(
+        "Study the variable-base digit sum process and find the longest chain.",
+        skill_top_k=1,
+        failure_top_k=0,
+        min_score=0.0,
+    )
+
+    assert meta["backend"] == "file"
+    assert meta["skill_results_count"] == 1
+    assert meta["results_count"] == 1
+    assert "Variable-base digit-sum halving" in prompt
 
 
 def test_tool_output_verification_notice_integration() -> None:

@@ -189,6 +189,15 @@ class AIMO3Config:
     early_stop_require_computed_support: bool = True
     answer_only_attempts: int = 0
 
+    # Sequential repair pass (modular, error-driven adaptation).
+    # If enabled, the solver can run a few extra attempts sequentially when the
+    # first parallel waves show a high failure density. This allows immediate
+    # use of runtime failure memory between attempts.
+    sequential_repair_enabled: bool = True
+    sequential_repair_max_attempts: int = 2
+    sequential_repair_min_attempts: int = 2
+    sequential_repair_min_error_rate: float = 0.5
+
     # Easy-exit: aggressive early stop for problems solved quickly with verified support.
     easy_exit_enabled: bool = True
     easy_exit_time_threshold_s: float = 60.0
@@ -504,6 +513,21 @@ class AIMO3Config:
         answer_only_attempts = _env_int(
             "AIMO3_ANSWER_ONLY_ATTEMPTS", AIMO3Config.answer_only_attempts
         )
+        sequential_repair_enabled = os.getenv(
+            "AIMO3_SEQUENTIAL_REPAIR_ENABLED", "1"
+        ).strip().lower() not in {"0", "false", "no"}
+        sequential_repair_max_attempts = _env_int(
+            "AIMO3_SEQUENTIAL_REPAIR_MAX_ATTEMPTS",
+            AIMO3Config.sequential_repair_max_attempts,
+        )
+        sequential_repair_min_attempts = _env_int(
+            "AIMO3_SEQUENTIAL_REPAIR_MIN_ATTEMPTS",
+            AIMO3Config.sequential_repair_min_attempts,
+        )
+        sequential_repair_min_error_rate = _env_float(
+            "AIMO3_SEQUENTIAL_REPAIR_MIN_ERROR_RATE",
+            AIMO3Config.sequential_repair_min_error_rate,
+        )
 
         turns = _env_int("AIMO3_TURNS", AIMO3Config.turns)
         min_tokens_before_stream_extraction = _env_int(
@@ -693,6 +717,10 @@ class AIMO3Config:
             early_stop_min_verified=early_stop_min_verified,
             early_stop_require_computed_support=early_stop_require_computed_support,
             answer_only_attempts=max(0, answer_only_attempts),
+            sequential_repair_enabled=sequential_repair_enabled,
+            sequential_repair_max_attempts=max(0, sequential_repair_max_attempts),
+            sequential_repair_min_attempts=max(1, sequential_repair_min_attempts),
+            sequential_repair_min_error_rate=max(0.0, float(sequential_repair_min_error_rate)),
             easy_exit_enabled=easy_exit_enabled,
             easy_exit_time_threshold_s=easy_exit_time_threshold_s,
             easy_exit_min_votes=easy_exit_min_votes,

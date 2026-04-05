@@ -328,6 +328,97 @@ class AIMO3Solver:
         base = str(dev_prompt or "").rstrip()
         return rb if not base else base + "\n\n" + rb
 
+    @staticmethod
+    def _attempt_has_failure_signal(result: AttemptResult) -> bool:
+        st = result.stats
+        return bool(
+            int(getattr(st, "python_errors", 0) or 0) > 0
+            or int(getattr(st, "timeout_count", 0) or 0) > 0
+            or bool(getattr(st, "deadline_exceeded", False))
+            or bool(str(getattr(st, "last_error", "") or "").strip())
+        )
+
+    def _should_run_sequential_repair(
+        self,
+        results: list[AttemptResult],
+        *,
+        stopped_early: bool,
+    ) -> bool:
+        if stopped_early or not results:
+            return False
+        if not bool(getattr(self.cfg, "sequential_repair_enabled", True)):
+            return False
+
+        min_attempts = max(1, int(getattr(self.cfg, "sequential_repair_min_attempts", 2) or 2))
+        if len(results) < min_attempts:
+            return False
+
+        fail_count = sum(1 for r in results if self._attempt_has_failure_signal(r))
+        error_rate = fail_count / max(1, len(results))
+        threshold = float(getattr(self.cfg, "sequential_repair_min_error_rate", 0.5) or 0.5)
+        return error_rate >= threshold
+
+    def _run_sequential_repair_attempts(
+        self,
+        *,
+        user_input: str,
+        problem_text: str,
+        used_strategies: list[str] | None,
+        preferred_strategy: str | None,
+        results: list[AttemptResult],
+        deadline: float,
+        problem_start: float,
+        early_stop_target: int,
+        problem_id: str,
+        temperature: float,
+        next_attempt_idx: int,
+    ) -> tuple[bool, int]:
+        max_repairs = max(0, int(getattr(self.cfg, "sequential_repair_max_attempts", 2) or 2))
+        if max_repairs <= 0:
+            return False, next_attempt_idx
+
+        print(f"[Adaptive] Running sequential repair pass ({max_repairs} max attempts)...")
+        for _ in range(max_repairs):
+            if time.time() > deadline:
+                break
+
+            dev_p, tag, strat_n = self._build_attempt_prompt(
+                next_attempt_idx,
+                problem_text,
+                used_strategies,
+                preferred_strategy if next_attempt_idx == 0 else None,
+            )
+
+            runtime_block = self._build_runtime_failure_memory_block(results)
+            if runtime_block and tag != "answer-only":
+                dev_p = self._append_runtime_failure_memory(dev_p, runtime_block)
+
+            r = self._process_attempt(
+                user_input,
+                dev_p,
+                next_attempt_idx,
+                tag,
+                threading.Event(),
+                deadline,
+                problem_id=problem_id,
+                temperature=temperature,
+            )
+            results.append(r)
+            self._record_attempt_trace(problem_id, r)
+            next_attempt_idx += 1
+
+            if used_strategies and strat_n and strat_n not in used_strategies:
+                used_strategies.append(strat_n)
+
+            if self._should_early_stop(
+                results,
+                time.time() - problem_start,
+                early_stop_target,
+            ):
+                return True, next_attempt_idx
+
+        return False, next_attempt_idx
+
     def _prepare_completion_prompt(
         self, prompt_ids: list[int], extra: dict[str, Any]
     ) -> tuple[str | list[int], bool]:
@@ -1237,6 +1328,26 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 temperature=temp_for_prob,
             )
 
+        next_attempt_idx = attempts_for_prob
+
+        if self._should_run_sequential_repair(
+            results,
+            stopped_early=stopped_early,
+        ):
+            stopped_early, next_attempt_idx = self._run_sequential_repair_attempts(
+                user_input=user_input,
+                problem_text=problem,
+                used_strategies=used_strats,
+                preferred_strategy=pref_strat,
+                results=results,
+                deadline=deadline,
+                problem_start=problem_start,
+                early_stop_target=early_stop_prob,
+                problem_id=problem_id,
+                temperature=temp_for_prob,
+                next_attempt_idx=next_attempt_idx,
+            )
+
         if not any(r.answer is not None for r in results):
             time_spent = time.time() - problem_start
             ext = self._budget_tracker.request_no_answer_extension(
@@ -1257,8 +1368,8 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 )
 
                 second_wave_specs = _build_task_specs(
-                    attempts_for_prob,
-                    attempts_for_prob * 2,
+                    next_attempt_idx,
+                    next_attempt_idx + attempts_for_prob,
                 )
                 self._run_attempt_batch(
                     user_input=user_input,
