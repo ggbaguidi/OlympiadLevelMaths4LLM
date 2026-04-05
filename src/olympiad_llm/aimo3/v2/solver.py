@@ -6,7 +6,6 @@ import json
 import math
 import os
 import queue
-import re
 import threading
 import time
 from collections import Counter, defaultdict
@@ -23,7 +22,7 @@ from .sandbox import AIMO3Sandbox
 from .trace import TraceRecorder, stable_problem_id
 from .vllm_server import VLLMServer
 from .require import _require_harmony, _require_openai
-from .template import AIMO3Template, VERIFY_STRATEGIES
+from .template import AIMO3Template
 from .tools import AIMO3Tool
 from .reasoning_framework import augment_prompt_with_reasoning_framework
 from .wickelgren import (
@@ -33,27 +32,6 @@ from .wickelgren import (
 )
 
 _INF = float("inf")
-_VERDICT_RE = re.compile(r"VERDICT\s*:\s*(CORRECT|INCORRECT)", re.IGNORECASE)
-_INC_SIGNALS = frozenset(
-    {
-        "THE ANSWER IS INCORRECT",
-        "THE PROPOSED ANSWER IS INCORRECT",
-        "THE PROPOSED ANSWER IS WRONG",
-        "THIS IS INCORRECT",
-        "ANSWER IS WRONG",
-        "NOT CORRECT",
-    }
-)
-_COR_SIGNALS = frozenset(
-    {
-        "THE ANSWER IS CORRECT",
-        "THE PROPOSED ANSWER IS CORRECT",
-        "CONFIRMED CORRECT",
-        "THIS IS CORRECT",
-        "I CONFIRM THE ANSWER",
-        "ANSWER IS VERIFIED",
-    }
-)
 
 
 def _magnitude_bucket(x: int) -> int:
@@ -237,17 +215,6 @@ class AIMO3Solver:
                     self.close()
                 raise
 
-    @classmethod
-    def _extract_verdict_label(cls, text: str | None) -> str | None:
-        if not text:
-            return None
-        matches = _VERDICT_RE.findall(text)
-        return (
-            matches[-1].upper()
-            if matches and matches[-1].upper() in {"CORRECT", "INCORRECT"}
-            else None
-        )
-
     @staticmethod
     def _truncate(text: str | None, max_chars: int) -> str:
         s = text or ""
@@ -396,308 +363,6 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
         )
         return votes >= target and (need <= 0 or verified >= need)
 
-    def _should_run_verification(self, ranked: list, time_remaining_s: float) -> bool:
-        if (
-            getattr(self, "_verify_runtime_disabled", False)
-            or not self.cfg.verify_phase_enabled
-            or not ranked
-        ):
-            return False
-
-        adaptive_min = min(
-            self.cfg.verify_min_remaining_s, self.cfg.base_problem_timeout * 0.25
-        )
-        if time_remaining_s < adaptive_min:
-            return False
-        return ranked[0][1].get("votes", 0) <= self.cfg.verify_trigger_max_votes
-
-    def _run_verify_attempt(
-        self,
-        problem: str,
-        candidate_answer: int,
-        strategy_template: str,
-        attempt_seed: int,
-        deadline: float,
-        problem_id: str | None = None,
-    ) -> dict:
-        result = {
-            "candidate": candidate_answer,
-            "verdict": "UNKNOWN",
-            "alt_answer": None,
-            "error": None,
-        }
-        _ = problem_id
-        if time.time() > deadline:
-            return result
-
-        sandbox = None
-        try:
-            sandbox = self.sandbox_pool.get(timeout=self.cfg.sandbox_timeout)
-            local_tool = AIMO3Tool(
-                local_jupyter_timeout=self.cfg.jupyter_timeout,
-                tool_prompt=self.cfg.tool_prompt,
-                sandbox=sandbox,
-                z3_enabled=self.cfg.z3_tool_enabled,
-            )
-
-            messages = self.template.apply_chat_template(
-                "Check only whether the proposed integer is correct. "
-                "Use Python to compute, not verbal intuition. Be brief.",
-                strategy_template.format(answer=candidate_answer, problem=problem),
-                local_tool.tool_config,
-            )
-
-            conversation = self._h["Conversation"].from_messages(messages)
-            text_parts, transcript = [], []
-
-            for _ in range(32):
-                if time.time() > deadline:
-                    break
-
-                prompt_ids = self.encoding.render_conversation_for_completion(
-                    conversation, self.Role.ASSISTANT
-                )
-                max_tokens = min(
-                    self.cfg.verify_max_tokens,
-                    self.cfg.context_tokens - len(prompt_ids),
-                )
-                if max_tokens < self.cfg.buffer_tokens:
-                    break
-
-                extra = {
-                    "min_p": self.cfg.min_p,
-                    "top_k": self.cfg.top_k,
-                    "stop_token_ids": self.stop_token_ids,
-                    "return_token_ids": True,
-                }
-                prompt_arg, use_stream = self._prepare_completion_prompt(
-                    prompt_ids, extra
-                )
-
-                token_buffer: list[int] = []
-                text_buffer: list[str] = []
-                stream = None
-                try:
-                    if use_stream:
-                        stream = self.client.completions.create(
-                            model=self.cfg.served_model_name,
-                            temperature=self.cfg.verify_temperature,
-                            top_p=self.cfg.top_p,
-                            max_tokens=max_tokens,
-                            prompt=prompt_arg,
-                            seed=attempt_seed,
-                            stream=True,
-                            extra_body=extra,
-                        )
-
-                        for chunk in stream:
-                            if time.time() > deadline:
-                                break
-                            choice = chunk.choices[0]
-                            new_tokens = getattr(choice, "token_ids", None)
-                            new_text = str(getattr(choice, "text", "") or "")
-                            if new_tokens is None and new_text:
-                                new_tokens = self._completion_tokens_from_text(new_text)
-                            if new_tokens:
-                                token_buffer.extend(new_tokens)
-                            if new_text:
-                                text_buffer.append(new_text)
-                                text_parts.append(new_text)
-                    else:
-                        resp = self.client.completions.create(
-                            model=self.cfg.served_model_name,
-                            temperature=self.cfg.verify_temperature,
-                            top_p=self.cfg.top_p,
-                            max_tokens=max_tokens,
-                            prompt=prompt_arg,
-                            seed=attempt_seed,
-                            stream=False,
-                            extra_body=extra,
-                        )
-                        new_text = str(getattr(resp.choices[0], "text", "") or "")
-                        if new_text:
-                            token_buffer.extend(self._completion_tokens_from_text(new_text))
-                            text_buffer.append(new_text)
-                            text_parts.append(new_text)
-                finally:
-                    if stream is not None:
-                        stream.close()
-
-                if not token_buffer:
-                    break
-
-                new_msgs = None
-                if self._backend_name() == "llama_cpp":
-                    with contextlib.suppress(Exception):
-                        new_msgs = self.encoding.parse_messages_from_completion_tokens(
-                            token_buffer, self.Role.ASSISTANT, strict=False
-                        )
-                    if not new_msgs:
-                        TextContent = self._h["TextContent"]
-                        Author = self._h["Author"]
-                        Message = self._h["Message"]
-                        assistant_text = "".join(text_buffer).strip()
-                        content = (
-                            [TextContent(text=assistant_text)] if assistant_text else []
-                        )
-                        author = Author(role=self.Role.ASSISTANT, name="assistant")
-                        new_msgs = [Message(author=author, content=content)]
-                else:
-                    new_msgs = self.encoding.parse_messages_from_completion_tokens(
-                        token_buffer, self.Role.ASSISTANT
-                    )
-                if not new_msgs:
-                    break
-
-                conversation.messages = conversation.messages + list(new_msgs)
-                last_msg = new_msgs[-1]
-
-                if getattr(last_msg, "recipient", None) == "python":
-                    transcript.append(str(last_msg.content[0].text or ""))
-                    tool_resp = local_tool.process_sync_plus(last_msg)
-                    transcript.append(str(tool_resp[0].content[0].text or ""))
-                    conversation.messages = conversation.messages + list(tool_resp)
-                else:
-                    break
-
-            full_text = "\n".join(
-                filter(str.strip, ("\n".join(transcript), "\n".join(text_parts)))
-            ).upper()
-
-            parsed = self._extract_verdict_label(full_text)
-            if parsed:
-                result["verdict"] = parsed
-            elif any(s in full_text for s in _INC_SIGNALS):
-                result["verdict"] = "INCORRECT"
-            elif any(s in full_text for s in _COR_SIGNALS):
-                result["verdict"] = "CORRECT"
-            else:
-                result["verdict"] = "UNKNOWN"
-                verifier_ans = self._extractor.extract_boxed_int(full_text)
-                if verifier_ans is not None:
-                    result["verdict"] = (
-                        "CORRECT" if verifier_ans == candidate_answer else "INCORRECT"
-                    )
-                    if verifier_ans != candidate_answer:
-                        result["alt_answer"] = verifier_ans
-
-            if result["verdict"] == "INCORRECT" and result["alt_answer"] is None:
-                alt = self._extractor.extract_boxed_int(full_text)
-                if alt is not None and alt != candidate_answer:
-                    result["alt_answer"] = alt
-
-            if result["verdict"] == "UNKNOWN":
-                print(
-                    f"  [Verify UNKNOWN] Candidate {candidate_answer} — full output:\n{full_text}..."
-                )
-
-        except Exception as exc:  # noqa: BLE001
-            result["error"] = f"{type(exc).__name__}: {exc}"
-        finally:
-            if sandbox:
-                with contextlib.suppress(Exception):
-                    sandbox.reset()
-                    self.sandbox_pool.put(sandbox)
-        return result
-
-    def _verify_candidates(
-        self, problem: str, ranked: list, deadline: float, problem_id: str | None = None
-    ) -> list:
-        top_k = min(self.cfg.verify_top_k_candidates, len(ranked))
-        candidates, per_cand = ranked[:top_k], self.cfg.verify_attempts_per_candidate
-        n_strat = len(VERIFY_STRATEGIES)
-
-        tasks = [
-            (
-                ans,
-                VERIFY_STRATEGIES[(i * per_cand + j) % n_strat],
-                (self.cfg.seed + 1000 + i * 100 + j) ** 2,
-            )
-            for i, (ans, _) in enumerate(candidates)
-            for j in range(per_cand)
-        ]
-
-        results = []
-        with ThreadPoolExecutor(max_workers=min(len(tasks), self.cfg.workers)) as ex:
-            futures = [
-                ex.submit(
-                    self._run_verify_attempt,
-                    problem,
-                    ans,
-                    strat,
-                    seed,
-                    deadline,
-                    problem_id,
-                )
-                for ans, strat, seed in tasks
-            ]
-            for f in as_completed(futures):
-                with contextlib.suppress(Exception):
-                    results.append(f.result())
-
-        scores = defaultdict(
-            lambda: {"correct": 0, "incorrect": 0, "unknown": 0, "alt_answers": []}
-        )
-        for r in results:
-            v = r["verdict"]
-            if v == "CORRECT":
-                scores[r["candidate"]]["correct"] += 1
-            elif v == "INCORRECT":
-                scores[r["candidate"]]["incorrect"] += 1
-                if r["alt_answer"] is not None:
-                    scores[r["candidate"]]["alt_answers"].append(r["alt_answer"])
-            else:
-                scores[r["candidate"]]["unknown"] += 1
-
-        for cand, sc in scores.items():
-            print(
-                f"  [Verify] Candidate {cand}: correct={sc['correct']}, incorrect={sc['incorrect']}, unknown={sc['unknown']}"
-            )
-
-        augmented = [
-            (
-                ans,
-                {
-                    **data,
-                    "verify_correct": scores[ans]["correct"],
-                    "verify_incorrect": scores[ans]["incorrect"],
-                },
-            )
-            for ans, data in ranked
-        ]
-
-        augmented.sort(
-            key=lambda kv: (
-                kv[1].get("verify_correct", 0) - kv[1].get("verify_incorrect", 0),
-                kv[1]["verified"],
-                kv[1]["votes"],
-            ),
-            reverse=True,
-        )
-
-        all_alts = [a for vs in scores.values() for a in vs["alt_answers"]]
-        if all_alts:
-            alt_cnt = Counter(all_alts)
-            best_alt, cnt = alt_cnt.most_common(1)[0]
-            if best_alt not in {a for a, _ in augmented} and cnt >= 2:
-                print(
-                    f"  [Verify] Injecting alt answer {best_alt} (proposed by {cnt} verifiers)"
-                )
-                augmented.insert(
-                    0,
-                    (
-                        best_alt,
-                        {
-                            "votes": cnt,
-                            "verified": cnt,
-                            "verify_correct": cnt,
-                            "verify_incorrect": 0,
-                            "entropy_score": 0.0,
-                        },
-                    ),
-                )
-        return augmented
-
     @staticmethod
     def _probe_server_ready(client, attempts: int, sleep_s: float = 0.5) -> bool:
         for _ in range(max(1, attempts)):
@@ -768,7 +433,6 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
             path=self.cfg.trace_path,
             include_problem_text=self.cfg.trace_include_problem_text,
         )
-        self._verify_runtime_disabled = False
         self._meta_embedder = None
         self._adaptive_hparams = None
 
@@ -908,13 +572,9 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
             return
 
         top_ans, top_data = ranked[0]
-        verify_correct = int(top_data.get("verify_correct", 0) or 0)
-        verify_incorrect = int(top_data.get("verify_incorrect", 0) or 0)
         verified_votes = int(top_data.get("verified", 0) or 0)
         top_votes = int(top_data.get("votes", 0) or 0)
-        verification_decisive = verify_correct > verify_incorrect and verify_correct > 0
-        strong_internal_support = verified_votes >= 2 and top_votes >= 3
-        allow_learning = verification_decisive or strong_internal_support
+        allow_learning = verified_votes >= 2 and top_votes >= 3
         if not allow_learning:
             return
         if not any(
@@ -1500,46 +1160,11 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
             ranking_strategy=self.cfg.ranking_strategy,
         )
 
-        ranked_for_v = rank_candidates(
-            results,
-            filter_to_verified_if_any=False,
-            magnitude_aware=self.cfg.magnitude_aware_ranking_enabled,
-            ranking_strategy=self.cfg.ranking_strategy,
-        )
-
-        if self._should_run_verification(
-            ranked_for_v, self._budget_tracker.time_remaining_s - time_used
-        ):
-            v_dead = time.time() + min(
-                self.cfg.verify_timeout_s,
-                (self._budget_tracker.time_remaining_s - time_used) * 0.8,
-            )
-            print("[Verify] Weak consensus — running verification phase...")
-            ranked = self._verify_candidates(problem, ranked_for_v, v_dead, problem_id)
-
-            if (
-                not any(
-                    d.get("verify_correct", 0) + d.get("verify_incorrect", 0) > 0
-                    for _, d in ranked
-                )
-                and self.cfg.verify_disable_globally_if_all_unknown
-            ):
-                self._verify_runtime_disabled = True
-                print(
-                    "[Verify] No decisive verification signal. Disabling for remaining problems."
-                )
-            time_used = time.time() - problem_start
-
         if ranked:
             final_ans = ranked[0][0]
             data = ranked[0][1]
-            vinfo = (
-                f", verify_ok={data['verify_correct']}, verify_fail={data['verify_incorrect']}"
-                if "verify_correct" in data
-                else ""
-            )
             print(
-                f"\nFinal Answer: {final_ans} (votes={data['votes']}, verified={data['verified']}{vinfo})\n"
+                f"\nFinal Answer: {final_ans} (votes={data['votes']}, verified={data['verified']})\n"
             )
         else:
             final_ans = 0

@@ -5,63 +5,6 @@ import contextlib
 from .require import _require_harmony
 
 
-# ---------------------------------------------------------------------------
-# Verification prompt strategies
-# ---------------------------------------------------------------------------
-# Each strategy is a short, focused prompt that tells the model to check
-# a candidate answer via a specific method.  The model gets tool access
-# (Python sandbox) so it can compute.
-
-VERIFY_SUBSTITUTION = (
-    "Proposed answer: {answer}\n"
-    "Problem: {problem}\n\n"
-    "Check it by direct substitution in Python. Compute explicitly; do not skip steps.\n"
-    "At the end print exactly one of:\n"
-    '  print("VERDICT: CORRECT")\n'
-    '  print("VERDICT: INCORRECT")\n'
-    "If incorrect, also print the correct answer as \\boxed{{n}}."
-)
-
-VERIFY_SMALL_CASES = (
-    "Proposed answer: {answer}\n"
-    "Problem: {problem}\n\n"
-    "Check it with small cases and boundary cases in Python. "
-    "Rebuild the answer from scratch on tiny instances, then compare.\n"
-    "At the end print exactly one of:\n"
-    '  print("VERDICT: CORRECT")\n'
-    '  print("VERDICT: INCORRECT")\n'
-    "If incorrect, also print the correct answer as \\boxed{{n}}."
-)
-
-VERIFY_ALTERNATIVE = (
-    "Proposed answer: {answer}\n"
-    "Problem: {problem}\n\n"
-    "Solve it again with a different exact method. Use Python to compute and compare.\n"
-    "At the end print exactly one of:\n"
-    '  print("VERDICT: CORRECT")\n'
-    '  print("VERDICT: INCORRECT")\n'
-    "If incorrect, also print the correct answer as \\boxed{{n}}."
-)
-
-VERIFY_COUNTEREXAMPLE = (
-    "Proposed answer: {answer}\n"
-    "Problem: {problem}\n\n"
-    "Try to find a counterexample in Python. Test sharp cases, edge cases, or contradictions.\n"
-    "At the end print exactly one of:\n"
-    '  print("VERDICT: CORRECT")\n'
-    '  print("VERDICT: INCORRECT")\n'
-    "If incorrect, also print the correct answer as \\boxed{{n}}."
-)
-
-# Ordered list — we rotate through them for each candidate's verification attempts.
-VERIFY_STRATEGIES = [
-    VERIFY_SUBSTITUTION,
-    VERIFY_SMALL_CASES,
-    VERIFY_ALTERNATIVE,
-    VERIFY_COUNTEREXAMPLE,
-]
-
-
 class AIMO3Template:
     """AIMO-3 prompt template management with lazy Harmony imports."""
 

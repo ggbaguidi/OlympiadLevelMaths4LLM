@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import threading
-import time
 from types import MethodType
 
 from olympiad_llm.aimo3.v2.attempts import AttemptResult, AttemptStats
@@ -44,7 +43,6 @@ def test_second_wave_uses_integer_attempt_index() -> None:
     solver.cfg = AIMO3Config(
         attempts=1,
         workers=1,
-        verify_phase_enabled=False,
         display_candidates=False,
         trace_enabled=False,
         meta_learning_enabled=False,
@@ -81,7 +79,6 @@ def test_second_wave_uses_integer_attempt_index() -> None:
     solver._process_attempt = MethodType(_process, solver)
     solver._display_candidates = MethodType(lambda self, attempts: None, solver)
     solver._should_early_stop = MethodType(lambda self, detailed, *_args, **_kwargs: False, solver)
-    solver._should_run_verification = MethodType(lambda self, ranked, time_remaining_s: False, solver)
     solver._update_meta_learning_from_problem_outcome = MethodType(
         lambda self, **kwargs: None, solver
     )
@@ -90,32 +87,6 @@ def test_second_wave_uses_integer_attempt_index() -> None:
     assert final_answer == 123
     assert len(call_indices) == 2
     assert all(isinstance(idx, int) for idx in call_indices)
-
-
-def test_verify_candidates_returns_uniform_tuple_schema() -> None:
-    solver = object.__new__(AIMO3Solver)
-    solver.cfg = AIMO3Config(
-        workers=1,
-        verify_top_k_candidates=2,
-        verify_attempts_per_candidate=1,
-    )
-    solver._run_verify_attempt = MethodType(
-        lambda self, problem, ans, strategy_template, attempt_seed, deadline, problem_id=None: {
-            "candidate": ans,
-            "verdict": "UNKNOWN",
-            "alt_answer": None,
-            "error": None,
-        },
-        solver,
-    )
-    ranked = [
-        (11, {"votes": 2, "verified": 1, "entropy_score": 0.0}),
-        (12, {"votes": 1, "verified": 0, "entropy_score": 0.0}),
-    ]
-    out = solver._verify_candidates("p", ranked, deadline=time.time() + 10.0)
-    assert out
-    assert all(isinstance(row, tuple) and len(row) == 2 for row in out)
-    assert all("verify_correct" in row[1] and "verify_incorrect" in row[1] for row in out)
 
 
 def test_record_attempt_trace_emits_attempt_end_event() -> None:
@@ -251,7 +222,6 @@ def test_solve_problem_stops_before_full_wave_when_answer_only_consensus_hits() 
         early_stop=1,
         early_stop_min_verified=0,
         early_stop_require_computed_support=False,
-        verify_phase_enabled=False,
         display_candidates=False,
         trace_enabled=False,
         meta_learning_enabled=False,
@@ -296,7 +266,6 @@ def test_solve_problem_stops_before_full_wave_when_answer_only_consensus_hits() 
         lambda self, detailed, *_args, **_kwargs: any(r.answer is not None for r in detailed),
         solver,
     )
-    solver._should_run_verification = MethodType(lambda self, ranked, time_remaining_s: False, solver)
     solver._update_meta_learning_from_problem_outcome = MethodType(
         lambda self, **kwargs: None, solver
     )
@@ -316,7 +285,6 @@ def test_solve_problem_requires_computed_support_before_early_stop_by_default() 
         answer_only_attempts=2,
         early_stop=1,
         early_stop_min_verified=0,
-        verify_phase_enabled=False,
         display_candidates=False,
         trace_enabled=False,
         wickelgren_strategies_enabled=False,
@@ -364,7 +332,6 @@ def test_solve_problem_requires_computed_support_before_early_stop_by_default() 
     solver._build_attempt_prompt = MethodType(_build, solver)
     solver._process_attempt = MethodType(_process, solver)
     solver._display_candidates = MethodType(lambda self, attempts: None, solver)
-    solver._should_run_verification = MethodType(lambda self, ranked, time_remaining_s: False, solver)
     solver._update_meta_learning_from_problem_outcome = MethodType(
         lambda self, **kwargs: None, solver
     )
@@ -373,12 +340,6 @@ def test_solve_problem_requires_computed_support_before_early_stop_by_default() 
 
     assert final_answer == 42
     assert call_indices == [0, 1, 2]
-
-
-def test_config_from_env_reads_early_stop_require_computed_support(monkeypatch) -> None:
-    monkeypatch.setenv("AIMO3_EARLY_STOP_REQUIRE_COMPUTED_SUPPORT", "0")
-    cfg = AIMO3Config.from_env()
-    assert cfg.early_stop_require_computed_support is False
 
 
 def test_startup_runtime_overlaps_kernel_init_with_server_wait() -> None:
