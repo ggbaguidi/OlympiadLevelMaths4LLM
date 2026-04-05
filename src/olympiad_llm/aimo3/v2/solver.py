@@ -6,6 +6,7 @@ import json
 import math
 import os
 import queue
+import re
 import threading
 import time
 from collections import Counter, defaultdict
@@ -220,6 +221,112 @@ class AIMO3Solver:
     def _truncate(text: str | None, max_chars: int) -> str:
         s = text or ""
         return s if len(s) <= max_chars else "..." + s[-(max_chars - 3) :]
+
+    @staticmethod
+    def _runtime_failure_hint_for_error(error_text: str) -> tuple[str, str] | None:
+        s = str(error_text or "").strip()
+        if not s:
+            return None
+        lo = s.lower()
+
+        if "timed out" in lo or "timeout" in lo:
+            return (
+                "Timeout hotspot",
+                "Split the computation into smaller exact checks and prune earlier before heavy loops.",
+            )
+        if "syntaxerror" in lo or "indentationerror" in lo or "unmatched" in lo:
+            return (
+                "Generated code must parse",
+                "Check parentheses/indentation and ensure generated code is syntactically valid before execution.",
+            )
+        if "attributeerror" in lo and ("sympy" in lo or "has no attribute" in lo):
+            return (
+                "SymPy API mismatch",
+                "Do not assume helper names exist at top level; verify imports/APIs before use.",
+            )
+        if (
+            "polynomialerror" in lo
+            or "keyerror: 1/x" in lo
+            or ("1/x" in lo and ("poly" in lo or "polynomial" in lo))
+        ):
+            return (
+                "Polynomial cleanup first",
+                "Normalize rational expressions and separate numerator/denominator before Poly/factor routines.",
+            )
+        if "no sign change" in lo or ("findroot" in lo and "valueerror" in lo):
+            return (
+                "Bracket root search first",
+                "Verify a sign-change bracket on an interval before calling root finders.",
+            )
+        if "indexerror" in lo:
+            return (
+                "Index bounds check",
+                "Guard array/list access with explicit bounds checks before indexing.",
+            )
+        if "typeerror" in lo and (
+            "none" in lo
+            or "cannot convert symbols to int" in lo
+            or "not supported between instances" in lo
+        ):
+            return (
+                "Type normalization",
+                "Filter None/symbolic values and normalize types before numeric comparisons/conversions.",
+            )
+        return None
+
+    @staticmethod
+    def _build_runtime_failure_memory_block(
+        results: list[AttemptResult],
+        max_items: int = 3,
+    ) -> str:
+        if not results or max_items <= 0:
+            return ""
+
+        rows: list[tuple[str, str, str]] = []
+        seen_titles: set[str] = set()
+
+        for r in reversed(results):
+            err = str(getattr(r.stats, "last_error", "") or "").strip()
+            if not err and int(getattr(r.stats, "timeout_count", 0) or 0) > 0:
+                err = "[ERROR] Execution timed out"
+            if not err:
+                continue
+
+            hint = AIMO3Solver._runtime_failure_hint_for_error(err)
+            if hint is None:
+                continue
+
+            title, guidance = hint
+            if title in seen_titles:
+                continue
+            seen_titles.add(title)
+
+            evidence = re.sub(r"\s+", " ", err).strip()
+            if len(evidence) > 120:
+                evidence = evidence[:117].rstrip() + "..."
+            rows.append((title, guidance, evidence))
+            if len(rows) >= max_items:
+                break
+
+        if not rows:
+            return ""
+
+        lines = [
+            "[META_RUNTIME_FAILURE_MEMORY]",
+            "From recent attempts in this same problem. Use as guardrails only.",
+        ]
+        for i, (title, guidance, evidence) in enumerate(rows, start=1):
+            lines.append(f"{i}. {title}: {guidance} (seen: {evidence})")
+        lines.append("[/META_RUNTIME_FAILURE_MEMORY]")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _append_runtime_failure_memory(dev_prompt: str, runtime_block: str) -> str:
+        rb = str(runtime_block or "").strip()
+        if not rb:
+            return dev_prompt
+        base = str(dev_prompt or "").rstrip()
+        return rb if not base else base + "\n\n" + rb
 
     def _prepare_completion_prompt(
         self, prompt_ids: list[int], extra: dict[str, Any]
@@ -1090,6 +1197,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
             start_idx: int, end_idx: int
         ) -> list[tuple[str, int, str | None]]:
             specs: list[tuple[str, int, str | None]] = []
+            runtime_block = self._build_runtime_failure_memory_block(results)
             for i in range(start_idx, end_idx):
                 dev_p, tag, strat_n = self._build_attempt_prompt(
                     i,
@@ -1097,6 +1205,8 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                     used_strats,
                     pref_strat if i == 0 else None,
                 )
+                if runtime_block and tag != "answer-only":
+                    dev_p = self._append_runtime_failure_memory(dev_p, runtime_block)
                 specs.append((dev_p, i, tag))
                 if used_strats and strat_n and strat_n not in used_strats:
                     used_strats.append(strat_n)
