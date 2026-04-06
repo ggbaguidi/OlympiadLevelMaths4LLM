@@ -30,6 +30,10 @@ _FINAL_INT_HINT_RE = re.compile(
     r"([+-]?[0-9][0-9,]*)",  # capture integer
     flags=re.IGNORECASE,
 )
+_LATEX_WRAPPED_INT_RE = re.compile(
+    r"\\(?:\(|\[)\s*(?:\\displaystyle\s*)?([+-]?[0-9][0-9,]*)\s*\\(?:\)|\])",
+    flags=re.IGNORECASE,
+)
 _ANY_INT_RE = re.compile(r"\b([+-]?[0-9][0-9,]*)\b")
 
 
@@ -177,11 +181,21 @@ class AnswerExtractor:
 
         t = text or ""
         hinted = list(_FINAL_INT_HINT_RE.findall(t))
+        # Common in final-channel dumps:
+        #   final\(\displaystyle 98449\)
+        #   \(\displaystyle 98449\)
+        # We only inspect the tail to reduce false positives from earlier derivations.
+        tail = t[-2000:]
+        latex_wrapped = list(_LATEX_WRAPPED_INT_RE.findall(tail))
         # If strict_fallback is enabled, only use hint-based matches (avoid random integers)
         if self.strict_fallback:
-            candidates = hinted
+            candidates = hinted + latex_wrapped
         else:
-            candidates = hinted if hinted else list(_ANY_INT_RE.findall(t))
+            candidates = (
+                hinted + latex_wrapped
+                if (hinted or latex_wrapped)
+                else list(_ANY_INT_RE.findall(t))
+            )
         if not candidates:
             return None
 
