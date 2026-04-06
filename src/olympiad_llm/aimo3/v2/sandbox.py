@@ -36,11 +36,6 @@ import os
 _lean_bin = os.environ.get("AIMO3_LEAN_BIN_DIR")
 if _lean_bin and _lean_bin not in os.environ.get("PATH", ""):
     os.environ["PATH"] = _lean_bin + os.pathsep + os.environ.get("PATH", "")
-def aimo3_verify(ok=True):
-    if ok:
-        print("VERIFY_OK")
-    else:
-        print("VERIFY_FAIL")
 import math
 import numpy
 import sympy

@@ -1004,8 +1004,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
         last_error, timeout_count, total_tokens = None, 0, 0
         final_answer, logprobs_buf = None, []
         text_tail, transcript_calls, transcript_outs = [], [], []
-        verification_found, deadline_exceeded = False, False
-        tool_verified = False
+        deadline_exceeded = False
 
         attempt_seed = (self.cfg.seed + attempt_index) ** 2
         temp = self.cfg.temperature if temperature is None else temperature
@@ -1192,9 +1191,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 if getattr(last_msg, "recipient", None) in ("python", "z3"):
                     python_calls += 1
                     transcript_calls.append(str(last_msg.content[0].text or ""))
-                    tool_resp = local_tool.process_sync_plus(
-                        last_msg, expected_answer=final_answer
-                    )
+                    tool_resp = local_tool.process_sync_plus(last_msg)
                     resp_text = str(tool_resp[0].content[0].text or "")
                     transcript_outs.append(resp_text)
 
@@ -1207,19 +1204,6 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                         if "timed out" in resp_text.lower():
                             timeout_count += 1
                         last_error = resp_text[:500]
-
-                    if "VERIFY_OK" in resp_text:
-                        verification_found = True
-                    if "[VERIFICATION NOTICE] TOOL_OUTPUT_VALID" in resp_text:
-                        tool_verified = True
-                    if (
-                        "[VERIFICATION NOTICE] TOOL_OUTPUT_INVALID" in resp_text
-                        and not resp_text.startswith("[ERROR]")
-                    ):
-                        if self.cfg.require_verification_marker:
-                            python_errors += 1
-                        if last_error is None and self.cfg.require_verification_marker:
-                            last_error = "Tool output verification marked invalid."
 
                     conversation.messages = conversation.messages + list(tool_resp)
 
@@ -1251,11 +1235,6 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 python_errors=python_errors,
                 timeout_count=timeout_count,
                 mean_entropy=mean_ent,
-                verification_marker_found=(
-                    True
-                    if (verification_found or tool_verified)
-                    else (False if self.cfg.require_verification_marker else None)
-                ),
                 deadline_exceeded=deadline_exceeded,
                 last_error=last_error,
             ),

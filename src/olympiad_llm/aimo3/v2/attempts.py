@@ -16,21 +16,11 @@ class AttemptStats:
 
     mean_entropy: float = float("inf")
 
-    verification_marker_found: bool | None = None
-
     last_error: str | None = None
 
     @property
     def tool_verified(self) -> bool:
-        if self.verification_marker_found:
-            return True
-
-        if self.python_calls <= 0 or self.python_errors > 0:
-            return False
-
-        if self.verification_marker_found is None:
-            return True
-        return bool(self.verification_marker_found)
+        return self.python_calls > 0 and self.python_errors == 0
 
     @property
     def had_timeout(self) -> bool:

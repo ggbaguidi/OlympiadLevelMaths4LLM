@@ -15,7 +15,6 @@ from olympiad_llm.aimo3.v2.solver import AIMO3Solver
 from olympiad_llm.aimo3.v2.tools import AIMO3Tool
 from olympiad_llm.aimo3.v2.wickelgren import augment_developer_prompt_with_meta
 from olympiad_llm.aimo3.v2.trace import TraceRecorder
-from olympiad_llm.aimo3.v2.verification import ToolOutputVerifier
 from olympiad_llm.aimo3.v2.vllm_server import VLLMServer
 
 
@@ -640,17 +639,6 @@ def test_agent_memory_file_loads_and_retrieves_from_traces() -> None:
     assert meta["skill_results_count"] == 1
     assert meta["results_count"] == 1
     assert "Variable-base digit-sum halving" in prompt
-
-
-def test_tool_output_verification_notice_integration() -> None:
-    tool = object.__new__(AIMO3Tool)
-    tool._enable_verification = True
-    tool._verifier = ToolOutputVerifier()
-    tool._jupyter_session = None
-    tool._owns_session = False
-    out = tool._augment_output_with_verification("answer: 42", expected_answer=42)
-    assert "[VERIFICATION NOTICE] TOOL_OUTPUT_VALID" in out
-    assert "VERIFY_OK" in out
 
 
 def test_vllm_hint_from_logs_explains_load_time_cuda_oom() -> None:

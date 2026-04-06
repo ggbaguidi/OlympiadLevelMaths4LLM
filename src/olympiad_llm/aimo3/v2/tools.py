@@ -7,7 +7,6 @@ import threading
 
 from .sandbox import AIMO3Sandbox
 from .require import _require_harmony
-from .verification import ToolOutputVerifier
 
 _TIMEOUT_DIRECTIVE_RE = re.compile(
     r"^\s*#\s*timeout\s*[:=]\s*(?P<s>\d+(?:\.\d+)?)\s*$",
@@ -35,7 +34,7 @@ class AIMO3Tool:
         sandbox: AIMO3Sandbox | None = None,
         tool_timeout_cap_s: float | None = None,
         z3_enabled: bool = False,
-        enable_verification: bool = True,
+        enable_verification: bool = False,
     ):
         self._h = _require_harmony()
         self._local_jupyter_timeout = float(local_jupyter_timeout)
@@ -48,8 +47,7 @@ class AIMO3Tool:
         self._execution_lock = threading.Lock()
         self._init_lock = threading.Lock()
         self._z3_enabled = z3_enabled
-        self._enable_verification = enable_verification
-        self._verifier = ToolOutputVerifier() if enable_verification else None
+        _ = enable_verification
 
     def _ensure_session(self) -> None:
         if self._jupyter_session is None:
@@ -215,49 +213,6 @@ class AIMO3Tool:
             msg = msg.with_channel(channel)
         return msg
 
-    def _augment_output_with_verification(
-        self, output: str, expected_answer: int | None
-    ) -> str:
-        if not self._enable_verification or self._verifier is None:
-            return output
-
-        try:
-            verdict = self._verifier.verify_output(
-                output, expected_answer=expected_answer
-            )
-        except Exception:  # noqa: BLE001
-            return output
-
-        notices: list[str] = [
-            (
-                "[VERIFICATION NOTICE] TOOL_OUTPUT_VALID"
-                if verdict.is_valid
-                else "[VERIFICATION NOTICE] TOOL_OUTPUT_INVALID"
-            )
-        ]
-        if verdict.error_type:
-            notices.append(f"[VERIFICATION NOTICE] ERROR_TYPE={verdict.error_type}")
-        if verdict.warnings:
-            notices.append(
-                "[VERIFICATION NOTICE] WARNINGS=" + "; ".join(verdict.warnings[:3])
-            )
-
-        if expected_answer is not None and verdict.numerical_value is not None:
-            try:
-                if abs(float(verdict.numerical_value) - float(expected_answer)) < 1e-9:
-                    notices.append("VERIFY_OK")
-                else:
-                    notices.append("VERIFY_FAIL")
-            except Exception:  # noqa: BLE001
-                pass
-
-        suffix = "\n".join(notices)
-        if not suffix:
-            return output
-        if output and not output.endswith("\n"):
-            return output + "\n" + suffix
-        return output + suffix
-
     def process_sync_plus(
         self,
         message,
@@ -272,6 +227,7 @@ class AIMO3Tool:
         final_script = self._ensure_last_print(raw_script)
 
         timeout_s: float | None = None
+        _ = expected_answer
         if timeout_override_s is not None:
             timeout_s = float(timeout_override_s)
         else:
@@ -282,7 +238,6 @@ class AIMO3Tool:
 
         with self._execution_lock:
             output = self._jupyter_session.execute(final_script, timeout=timeout_s)
-        output = self._augment_output_with_verification(output, expected_answer)
 
         return [
             self._make_response(

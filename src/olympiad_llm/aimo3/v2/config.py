@@ -237,13 +237,6 @@ class AIMO3Config:
     # Strict extraction mode
     strict_fallback_extraction: bool = True
 
-    # Verification marker policy.
-    # When False (default), ``tool_verified`` uses the legacy heuristic:
-    #   python_calls > 0 **and** python_errors == 0  →  verified.
-    # When True, the model must explicitly print ``VERIFY_OK`` in its
-    # tool output for the attempt to count as verified.
-    require_verification_marker: bool = False
-
     turns: int = 128
     seed: int = 3
 
@@ -294,10 +287,6 @@ class AIMO3Config:
 
         strict_fallback_extraction = os.getenv(
             "AIMO3_STRICT_FALLBACK_EXTRACTION", "1"
-        ).strip().lower() not in {"0", "false", "no"}
-
-        require_verification_marker = os.getenv(
-            "AIMO3_PYTHON_TOOL_VERIFY_REQUIRE_MARKER", "0"
         ).strip().lower() not in {"0", "false", "no"}
 
         seed = _env_int("AIMO3_SEED", AIMO3Config.seed)
@@ -745,7 +734,6 @@ class AIMO3Config:
             turns=turns,
             min_tokens_before_stream_extraction=min_tokens_before_stream_extraction,
             strict_fallback_extraction=strict_fallback_extraction,
-            require_verification_marker=require_verification_marker,
             z3_tool_enabled=z3_tool_enabled,
             z3_tool_timeout=z3_tool_timeout,
             meta_learning_enabled=meta_learning_enabled,
