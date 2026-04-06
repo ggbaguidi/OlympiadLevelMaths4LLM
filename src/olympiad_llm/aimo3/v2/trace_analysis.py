@@ -46,6 +46,7 @@ class AttemptSummary:
     attempt: int
     tag: str
     answer: int | None
+    extraction_rule: str | None
     token_count: int
     python_calls: int
     python_errors: int
@@ -246,6 +247,11 @@ def _parse_attempt(ev: dict[str, Any]) -> AttemptSummary:
         attempt=_safe_int(ev.get("attempt"), 0),
         tag=str(ev.get("tag") or ""),
         answer=answer,
+        extraction_rule=(
+            str(ev.get("extraction_rule")).strip()
+            if ev.get("extraction_rule")
+            else None
+        ),
         token_count=_safe_int(ev.get("token_count"), 0),
         python_calls=py_calls,
         python_errors=py_errors,
@@ -316,6 +322,7 @@ def print_attempts_for_problem(
     max_attempts: int = 50,
     show_python: bool = False,
     show_reasoning: bool = False,
+    show_extraction_debug: bool = False,
     reasoning_chars: int = 1200,
     snippet_chars: int = 300,
 ) -> None:
@@ -335,6 +342,8 @@ def print_attempts_for_problem(
         if a.last_error:
             err = a.last_error[:snippet_chars]
             print(f"  last_error: {err}")
+        if show_extraction_debug:
+            print(f"  extraction_rule: {a.extraction_rule or 'n/a'}")
         if show_python:
             if a.python_calls_text:
                 code = a.python_calls_text[-1][:snippet_chars]
@@ -481,6 +490,11 @@ def main() -> None:
         default="",
         help="With --show-attempts, export each attempt full reasoning to this directory.",
     )
+    ap.add_argument(
+        "--show-extraction-debug",
+        action="store_true",
+        help="With --show-attempts, print answer extraction rule used for each attempt.",
+    )
     args = ap.parse_args()
 
     trace_path = Path(args.trace)
@@ -504,6 +518,7 @@ def main() -> None:
                 max_attempts=args.max_attempts,
                 show_python=bool(args.show_python),
                 show_reasoning=bool(args.show_reasoning),
+                show_extraction_debug=bool(args.show_extraction_debug),
                 reasoning_chars=args.reasoning_chars,
             )
             if args.dump_reasoning_dir:

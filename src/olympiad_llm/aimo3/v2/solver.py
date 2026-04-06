@@ -921,6 +921,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 "attempt": int(result.attempt),
                 "tag": result.tag,
                 "answer": result.answer,
+                "extraction_rule": result.extraction_rule,
                 "token_count": int(result.stats.token_count),
                 "python_calls": int(result.stats.python_calls),
                 "python_errors": int(result.stats.python_errors),
@@ -1013,6 +1014,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
         sandbox, python_calls, python_errors = None, 0, 0
         last_error, timeout_count, total_tokens = None, 0, 0
         final_answer, logprobs_buf = None, []
+        extraction_rule = None
         text_tail, transcript_calls, transcript_outs = [], [], []
         deadline_exceeded = False
         capture_full_reasoning = bool(
@@ -1142,11 +1144,12 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                                 and total_tokens
                                 >= self.cfg.min_tokens_before_stream_extraction
                             ):
-                                ans = self._extractor.extract_boxed_int(
+                                ans, rule = self._extractor.extract_boxed_int_with_rule(
                                     "".join(text_buf[-self.cfg.search_tokens :])
                                 )
                                 if ans is not None:
                                     final_answer = ans
+                                    extraction_rule = rule
                                     break
                     else:
                         resp = self.client.completions.create(
@@ -1173,11 +1176,12 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                                 and total_tokens
                                 >= self.cfg.min_tokens_before_stream_extraction
                             ):
-                                ans = self._extractor.extract_boxed_int(
+                                ans, rule = self._extractor.extract_boxed_int_with_rule(
                                     new_text[-self.cfg.search_tokens :]
                                 )
                                 if ans is not None:
                                     final_answer = ans
+                                    extraction_rule = rule
                 finally:
                     if stream is not None:
                         stream.close()
@@ -1224,9 +1228,18 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                             full_reasoning_parts.append(
                                 "[ASSISTANT_FINAL]\n" + str(last_msg.content[0].text or "")
                             )
-                    final_answer = self._extractor.extract_boxed_int(
+                    boxed_ans, boxed_rule = self._extractor.extract_boxed_int_with_rule(
                         last_msg.content[0].text
-                    ) or self._extractor.extract_int_fallback(last_msg.content[0].text)
+                    )
+                    if boxed_ans is not None:
+                        final_answer = boxed_ans
+                        extraction_rule = boxed_rule
+                    else:
+                        fallback_ans, fallback_rule = self._extractor.extract_int_fallback_with_rule(
+                            last_msg.content[0].text
+                        )
+                        final_answer = fallback_ans
+                        extraction_rule = fallback_rule
                     break
 
                 if getattr(last_msg, "recipient", None) in ("python", "z3"):
@@ -1270,9 +1283,16 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
 
         if final_answer is None and text_tail:
             full = "".join(text_tail)
-            final_answer = self._extractor.extract_boxed_int(
-                full
-            ) or self._extractor.extract_int_fallback(full)
+            boxed_ans, boxed_rule = self._extractor.extract_boxed_int_with_rule(full)
+            if boxed_ans is not None:
+                final_answer = boxed_ans
+                extraction_rule = boxed_rule
+            else:
+                fallback_ans, fallback_rule = self._extractor.extract_int_fallback_with_rule(
+                    full
+                )
+                final_answer = fallback_ans
+                extraction_rule = fallback_rule
 
         mean_ent = self._compute_mean_entropy(logprobs_buf)
         full_reasoning_text = None
@@ -1282,6 +1302,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
         return AttemptResult(
             attempt=attempt_index + 1,
             answer=final_answer,
+            extraction_rule=extraction_rule,
             stats=AttemptStats(
                 token_count=total_tokens,
                 python_calls=python_calls,

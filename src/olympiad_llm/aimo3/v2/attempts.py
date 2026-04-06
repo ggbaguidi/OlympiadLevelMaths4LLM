@@ -33,6 +33,7 @@ class AttemptResult:
 
     attempt: int
     answer: int | str | None
+    extraction_rule: str | None = None
     stats: AttemptStats = AttemptStats()
     output_text: str | None = None
     full_reasoning_text: str | None = None
