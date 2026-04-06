@@ -48,7 +48,14 @@ import numpy as np
 import mpmath as mp
 from fractions import Fraction
 import mpmath
-mpmath.mp.dps = 64
+try:
+    _mp_dps_raw = os.environ.get("AIMO3_SANDBOX_MPMATH_DPS", "32")
+    _mp_dps = int(float(_mp_dps_raw))
+    if _mp_dps <= 0:
+        _mp_dps = 32
+except Exception:
+    _mp_dps = 32
+mpmath.mp.dps = _mp_dps  # default decimal places for mpmath (env-overridable)
 try:
     import ortools  # noqa: F401
     from ortools.sat.python import cp_model  # noqa: F401
@@ -59,6 +66,13 @@ try:
     z3_available = True
 except Exception:
     z3_available = False
+
+_preload_append = os.environ.get("AIMO3_SANDBOX_PRELOAD_APPEND", "")
+if _preload_append and _preload_append.strip():
+    try:
+        exec(_preload_append, globals(), globals())
+    except Exception as _preload_err:
+        print(f"[WARN] AIMO3_SANDBOX_PRELOAD_APPEND failed: {_preload_err}")
 """
 
 
@@ -157,7 +171,17 @@ class AIMO3Sandbox:
             )
 
         # Preload common math stack.
-        self.execute(_PRELOAD_CODE)
+        # Notebook env control:
+        # - AIMO3_SANDBOX_PRELOAD_OVERRIDE: full preload code replacement
+        # - AIMO3_SANDBOX_MPMATH_DPS: default mpmath precision
+        # - AIMO3_SANDBOX_PRELOAD_APPEND: extra Python snippet appended/executed
+        preload_override = os.getenv("AIMO3_SANDBOX_PRELOAD_OVERRIDE", "")
+        preload_code = (
+            preload_override
+            if isinstance(preload_override, str) and preload_override.strip()
+            else _PRELOAD_CODE
+        )
+        self.execute(preload_code)
 
     @staticmethod
     def _format_error(traceback: list[str]) -> str:
