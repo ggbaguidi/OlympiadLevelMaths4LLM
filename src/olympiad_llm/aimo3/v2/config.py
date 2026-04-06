@@ -23,14 +23,15 @@ class AIMO3Config:
         "For counting, ordering, and divisibility problems, derive the exact expression and prime valuations exactly. "
         "Use Python early for exact integer arithmetic, small cases, and the final exact computation. "
         "Avoid floats, asymptotics, long proofs, and large brute force. "
-        "Return only \\boxed{n} with 0 <= n <= 99999."
+        "As soon as the exact integer is established, stop and return only \\boxed{n} with 0 <= n <= 99999."
     )
     tool_prompt: str = (
         "Use this stateful Python notebook to derive and verify an exact answer. "
         "Work with exact integer or rational arithmetic; avoid floats unless they are provably safe. "
         "For counting or divisibility, compute recurrences, products, factorizations, and p-adic valuations exactly. "
         "Start with tiny cases or symbolic simplification, then code the exact algorithm. "
-        "Check complexity before loops, keep code short, print only decisive results, and always use print()."
+        "Check complexity before loops, keep code short, print only decisive results, and always use print(). "
+        "When a final integer is decisively computed, print exactly FINAL_ANSWER=<n> on its own line immediately."
     )
     # Z3-specific tool prompt (used when z3_tool_enabled is True)
     z3_tool_prompt: str = (
@@ -219,6 +220,11 @@ class AIMO3Config:
     # still caught *after* the turn loop via the "final" channel and the
     # last-resort scan, so easy problems are not affected.
     min_tokens_before_stream_extraction: int = 1500
+    # If enabled, allow stream-time boxed extraction immediately (no token floor).
+    early_boxed_exit_enabled: bool = False
+    # If enabled, parse python/z3 tool outputs for `FINAL_ANSWER=<int>` and
+    # terminate the attempt immediately when valid.
+    tool_final_answer_marker_enabled: bool = True
 
     attempts: int = 8
     workers: int = 16
@@ -243,6 +249,18 @@ class AIMO3Config:
     strict_fallback_extraction: bool = True
 
     turns: int = 128
+    # Repetition watchdog for long/stalled reasoning loops.
+    repetition_watchdog_enabled: bool = True
+    # Similarity threshold in [0, 1] used to detect near-duplicate assistant turns.
+    repetition_similarity_threshold: float = 0.94
+    # First streak length that triggers a soft nudge (coach message).
+    repetition_soft_streak: int = 2
+    # Streak length that triggers hard abort of the current attempt.
+    repetition_hard_streak: int = 3
+    # If the exact same python/z3 tool call is repeated this many times, abort.
+    repetition_tool_repeat_hard_streak: int = 2
+    # Ignore tiny assistant snippets when detecting repetition.
+    repetition_min_chars: int = 120
     seed: int = 3
 
     gpu_memory_utilization: float = 0.90
@@ -537,6 +555,35 @@ class AIMO3Config:
         ).strip().lower() not in {"0", "false", "no"}
 
         turns = _env_int("AIMO3_TURNS", AIMO3Config.turns)
+        early_boxed_exit_enabled = os.getenv(
+            "AIMO3_EARLY_BOXED_EXIT_ENABLED", "0"
+        ).strip().lower() not in {"0", "false", "no"}
+        tool_final_answer_marker_enabled = os.getenv(
+            "AIMO3_TOOL_FINAL_ANSWER_MARKER_ENABLED", "1"
+        ).strip().lower() not in {"0", "false", "no"}
+        repetition_watchdog_enabled = os.getenv(
+            "AIMO3_REPETITION_WATCHDOG_ENABLED", "1"
+        ).strip().lower() not in {"0", "false", "no"}
+        repetition_similarity_threshold = _env_float(
+            "AIMO3_REPETITION_SIMILARITY_THRESHOLD",
+            AIMO3Config.repetition_similarity_threshold,
+        )
+        repetition_soft_streak = _env_int(
+            "AIMO3_REPETITION_SOFT_STREAK",
+            AIMO3Config.repetition_soft_streak,
+        )
+        repetition_hard_streak = _env_int(
+            "AIMO3_REPETITION_HARD_STREAK",
+            AIMO3Config.repetition_hard_streak,
+        )
+        repetition_tool_repeat_hard_streak = _env_int(
+            "AIMO3_REPETITION_TOOL_REPEAT_HARD_STREAK",
+            AIMO3Config.repetition_tool_repeat_hard_streak,
+        )
+        repetition_min_chars = _env_int(
+            "AIMO3_REPETITION_MIN_CHARS",
+            AIMO3Config.repetition_min_chars,
+        )
         min_tokens_before_stream_extraction = _env_int(
             "AIMO3_MIN_TOKENS_BEFORE_STREAM_EXTRACTION",
             AIMO3Config.min_tokens_before_stream_extraction,
@@ -735,6 +782,18 @@ class AIMO3Config:
             easy_exit_time_threshold_s=easy_exit_time_threshold_s,
             easy_exit_min_votes=easy_exit_min_votes,
             easy_exit_min_verified=easy_exit_min_verified_ee,
+            repetition_watchdog_enabled=repetition_watchdog_enabled,
+            repetition_similarity_threshold=max(
+                0.0, min(1.0, float(repetition_similarity_threshold))
+            ),
+            repetition_soft_streak=max(1, int(repetition_soft_streak)),
+            repetition_hard_streak=max(1, int(repetition_hard_streak)),
+            repetition_tool_repeat_hard_streak=max(
+                1, int(repetition_tool_repeat_hard_streak)
+            ),
+            repetition_min_chars=max(0, int(repetition_min_chars)),
+            early_boxed_exit_enabled=early_boxed_exit_enabled,
+            tool_final_answer_marker_enabled=tool_final_answer_marker_enabled,
             base_problem_timeout=base_problem_timeout,
             high_problem_timeout=high_problem_timeout,
             notebook_limit=notebook_limit,

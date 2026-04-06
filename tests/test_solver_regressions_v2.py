@@ -548,6 +548,106 @@ def test_config_from_env_reads_sequential_repair_timeout_only_knob(monkeypatch) 
     assert cfg.sequential_repair_only_on_timeout is True
 
 
+def test_config_from_env_reads_repetition_watchdog_knobs(monkeypatch) -> None:
+    monkeypatch.setenv("AIMO3_REPETITION_WATCHDOG_ENABLED", "1")
+    monkeypatch.setenv("AIMO3_REPETITION_SIMILARITY_THRESHOLD", "0.97")
+    monkeypatch.setenv("AIMO3_REPETITION_SOFT_STREAK", "2")
+    monkeypatch.setenv("AIMO3_REPETITION_HARD_STREAK", "4")
+    monkeypatch.setenv("AIMO3_REPETITION_TOOL_REPEAT_HARD_STREAK", "3")
+    monkeypatch.setenv("AIMO3_REPETITION_MIN_CHARS", "80")
+
+    cfg = AIMO3Config.from_env()
+
+    assert cfg.repetition_watchdog_enabled is True
+    assert cfg.repetition_similarity_threshold == 0.97
+    assert cfg.repetition_soft_streak == 2
+    assert cfg.repetition_hard_streak == 4
+    assert cfg.repetition_tool_repeat_hard_streak == 3
+    assert cfg.repetition_min_chars == 80
+
+
+def test_config_from_env_reads_fast_exit_knobs(monkeypatch) -> None:
+    monkeypatch.setenv("AIMO3_EARLY_BOXED_EXIT_ENABLED", "1")
+    monkeypatch.setenv("AIMO3_TOOL_FINAL_ANSWER_MARKER_ENABLED", "0")
+
+    cfg = AIMO3Config.from_env()
+
+    assert cfg.early_boxed_exit_enabled is True
+    assert cfg.tool_final_answer_marker_enabled is False
+
+
+def test_repetition_watchdog_action_coach_then_abort() -> None:
+    solver = object.__new__(AIMO3Solver)
+    solver.cfg = AIMO3Config(
+        repetition_watchdog_enabled=True,
+        repetition_soft_streak=2,
+        repetition_hard_streak=3,
+        repetition_tool_repeat_hard_streak=2,
+        meta_learning_enabled=False,
+    )
+
+    assert (
+        solver._repetition_watchdog_action(
+            assistant_repetition_streak=1,
+            tool_repeat_streak=0,
+            coached=False,
+        )
+        is None
+    )
+    assert (
+        solver._repetition_watchdog_action(
+            assistant_repetition_streak=2,
+            tool_repeat_streak=0,
+            coached=False,
+        )
+        == "coach"
+    )
+    assert (
+        solver._repetition_watchdog_action(
+            assistant_repetition_streak=3,
+            tool_repeat_streak=0,
+            coached=True,
+        )
+        == "abort"
+    )
+    assert (
+        solver._repetition_watchdog_action(
+            assistant_repetition_streak=0,
+            tool_repeat_streak=2,
+            coached=False,
+        )
+        == "abort"
+    )
+
+
+def test_extract_tool_final_answer_parses_marker() -> None:
+    solver = object.__new__(AIMO3Solver)
+    solver.cfg = AIMO3Config(
+        tool_final_answer_marker_enabled=True,
+        meta_learning_enabled=False,
+    )
+
+    ans, rule = solver._extract_tool_final_answer("done\nFINAL_ANSWER=12345\n")
+    assert ans == 12345
+    assert rule == "tool_final_marker"
+
+    ans2, rule2 = solver._extract_tool_final_answer("FINAL_ANSWER=-7")
+    assert ans2 is None
+    assert rule2 is None
+
+
+def test_extract_tool_final_answer_respects_toggle() -> None:
+    solver = object.__new__(AIMO3Solver)
+    solver.cfg = AIMO3Config(
+        tool_final_answer_marker_enabled=False,
+        meta_learning_enabled=False,
+    )
+
+    ans, rule = solver._extract_tool_final_answer("FINAL_ANSWER=4242")
+    assert ans is None
+    assert rule is None
+
+
 def test_should_run_sequential_repair_requires_error_density() -> None:
     solver = object.__new__(AIMO3Solver)
     solver.cfg = AIMO3Config(

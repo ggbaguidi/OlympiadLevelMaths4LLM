@@ -52,6 +52,7 @@ class AttemptSummary:
     python_errors: int
     timeout_count: int
     deadline_exceeded: bool
+    early_exit_reason: str | None
     is_verified: bool
     last_error: str | None
     python_calls_text: list[str]
@@ -257,6 +258,11 @@ def _parse_attempt(ev: dict[str, Any]) -> AttemptSummary:
         python_errors=py_errors,
         timeout_count=_safe_int(ev.get("timeout_count"), 0),
         deadline_exceeded=bool(ev.get("deadline_exceeded", False)),
+        early_exit_reason=(
+            str(ev.get("early_exit_reason")).strip()
+            if ev.get("early_exit_reason")
+            else None
+        ),
         is_verified=(py_calls > 0 and py_errors == 0),
         last_error=(
             str(ev.get("last_error")).strip() if ev.get("last_error") else None
@@ -333,11 +339,13 @@ def print_attempts_for_problem(
 
     print()
     print(f"Attempts for problem_id={pid}")
-    print("attempt | answer | verified | py_calls | py_err | timeout | tokens | tag")
+    print(
+        "attempt | answer | verified | py_calls | py_err | timeout | tokens | tag | early_exit"
+    )
     for a in attempts[: max(1, int(max_attempts))]:
         print(
             f"{a.attempt} | {a.answer} | {a.is_verified} | {a.python_calls} | "
-            f"{a.python_errors} | {a.timeout_count} | {a.token_count} | {a.tag}"
+            f"{a.python_errors} | {a.timeout_count} | {a.token_count} | {a.tag} | {a.early_exit_reason or 'n/a'}"
         )
         if a.last_error:
             err = a.last_error[:snippet_chars]

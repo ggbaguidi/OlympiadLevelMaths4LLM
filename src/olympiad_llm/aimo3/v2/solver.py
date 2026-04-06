@@ -2,6 +2,7 @@
 """AIMO-3 multi-attempt solver (optimized)."""
 from __future__ import annotations
 import contextlib
+import difflib
 import json
 import math
 import os
@@ -222,6 +223,73 @@ class AIMO3Solver:
     def _truncate(text: str | None, max_chars: int) -> str:
         s = text or ""
         return s if len(s) <= max_chars else "..." + s[-(max_chars - 3) :]
+
+    @staticmethod
+    def _normalize_repetition_text(text: str, *, tail_chars: int = 1200) -> str:
+        s = str(text or "").strip().lower()
+        if not s:
+            return ""
+        s = re.sub(r"\s+", " ", s)
+        if len(s) > tail_chars:
+            s = s[-tail_chars:]
+        return s
+
+    @staticmethod
+    def _text_similarity(a: str, b: str) -> float:
+        if not a or not b:
+            return 0.0
+        return float(difflib.SequenceMatcher(a=a, b=b).ratio())
+
+    def _repetition_watchdog_action(
+        self,
+        *,
+        assistant_repetition_streak: int,
+        tool_repeat_streak: int,
+        coached: bool,
+    ) -> str | None:
+        if not bool(getattr(self.cfg, "repetition_watchdog_enabled", True)):
+            return None
+
+        hard = max(1, int(getattr(self.cfg, "repetition_hard_streak", 3) or 3))
+        soft_raw = max(1, int(getattr(self.cfg, "repetition_soft_streak", 2) or 2))
+        soft = min(soft_raw, hard)
+        tool_hard = max(
+            1,
+            int(
+                getattr(self.cfg, "repetition_tool_repeat_hard_streak", 2)
+                or 2
+            ),
+        )
+
+        if assistant_repetition_streak >= hard or tool_repeat_streak >= tool_hard:
+            return "abort"
+        if (not coached) and assistant_repetition_streak >= soft:
+            return "coach"
+        return None
+
+    def _can_try_stream_boxed_extraction(self, new_text: str, total_tokens: int) -> bool:
+        if "}" not in str(new_text or ""):
+            return False
+        if bool(getattr(self.cfg, "early_boxed_exit_enabled", False)):
+            return True
+        return int(total_tokens) >= int(
+            getattr(self.cfg, "min_tokens_before_stream_extraction", 1500) or 1500
+        )
+
+    def _extract_tool_final_answer(self, text: str) -> tuple[int | None, str | None]:
+        if not bool(getattr(self.cfg, "tool_final_answer_marker_enabled", True)):
+            return None, None
+        raw = str(text or "")
+        match = re.search(r"FINAL_ANSWER\s*[:=]\s*(-?\d+)", raw, flags=re.IGNORECASE)
+        if not match:
+            return None, None
+        try:
+            val = int(match.group(1))
+        except Exception:  # noqa: BLE001
+            return None, None
+        if not (0 <= val <= 99999):
+            return None, None
+        return val, "tool_final_marker"
 
     @staticmethod
     def _runtime_failure_hint_for_error(error_text: str) -> tuple[str, str] | None:
@@ -922,6 +990,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 "tag": result.tag,
                 "answer": result.answer,
                 "extraction_rule": result.extraction_rule,
+                "early_exit_reason": result.early_exit_reason,
                 "token_count": int(result.stats.token_count),
                 "python_calls": int(result.stats.python_calls),
                 "python_errors": int(result.stats.python_errors),
@@ -1015,8 +1084,14 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
         last_error, timeout_count, total_tokens = None, 0, 0
         final_answer, logprobs_buf = None, []
         extraction_rule = None
+        early_exit_reason = None
         text_tail, transcript_calls, transcript_outs = [], [], []
         deadline_exceeded = False
+        recent_assistant_norm: list[str] = []
+        recent_tool_call_norm: str | None = None
+        assistant_repetition_streak = 0
+        tool_repeat_streak = 0
+        repetition_coached = False
         capture_full_reasoning = bool(
             getattr(self.cfg, "trace_full_reasoning_enabled", False)
         )
@@ -1139,10 +1214,8 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                                 if self.cfg.entropy_weighting_enabled and choice.logprobs:
                                     logprobs_buf.extend(choice.logprobs.top_logprobs or [])
 
-                            if (
-                                "}" in new_text
-                                and total_tokens
-                                >= self.cfg.min_tokens_before_stream_extraction
+                            if self._can_try_stream_boxed_extraction(
+                                new_text, total_tokens
                             ):
                                 ans, rule = self._extractor.extract_boxed_int_with_rule(
                                     "".join(text_buf[-self.cfg.search_tokens :])
@@ -1150,6 +1223,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                                 if ans is not None:
                                     final_answer = ans
                                     extraction_rule = rule
+                                    early_exit_reason = "stream_boxed"
                                     break
                     else:
                         resp = self.client.completions.create(
@@ -1171,10 +1245,8 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                                 token_buf.extend(new_tokens)
                                 total_tokens += len(new_tokens)
 
-                            if (
-                                "}" in new_text
-                                and total_tokens
-                                >= self.cfg.min_tokens_before_stream_extraction
+                            if self._can_try_stream_boxed_extraction(
+                                new_text, total_tokens
                             ):
                                 ans, rule = self._extractor.extract_boxed_int_with_rule(
                                     new_text[-self.cfg.search_tokens :]
@@ -1182,6 +1254,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                                 if ans is not None:
                                     final_answer = ans
                                     extraction_rule = rule
+                                    early_exit_reason = "stream_boxed"
                 finally:
                     if stream is not None:
                         stream.close()
@@ -1192,6 +1265,60 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                         full_reasoning_parts.append(
                             "[ASSISTANT_RAW]\n" + assistant_raw
                         )
+
+                    norm = self._normalize_repetition_text(assistant_raw)
+                    min_chars = max(
+                        0,
+                        int(getattr(self.cfg, "repetition_min_chars", 120) or 120),
+                    )
+                    if len(norm) >= min_chars and recent_assistant_norm:
+                        sim = self._text_similarity(norm, recent_assistant_norm[-1])
+                        threshold = max(
+                            0.0,
+                            min(
+                                1.0,
+                                float(
+                                    getattr(
+                                        self.cfg,
+                                        "repetition_similarity_threshold",
+                                        0.94,
+                                    )
+                                    or 0.94
+                                ),
+                            ),
+                        )
+                        if sim >= threshold:
+                            assistant_repetition_streak += 1
+                        else:
+                            assistant_repetition_streak = 0
+                    else:
+                        assistant_repetition_streak = 0
+
+                    recent_assistant_norm.append(norm)
+                    if len(recent_assistant_norm) > 3:
+                        recent_assistant_norm.pop(0)
+
+                    action = self._repetition_watchdog_action(
+                        assistant_repetition_streak=assistant_repetition_streak,
+                        tool_repeat_streak=tool_repeat_streak,
+                        coached=repetition_coached,
+                    )
+                    if action == "abort":
+                        last_error = (
+                            "[REPETITION_GUARD] Aborted attempt due to repeated reasoning pattern."
+                        )
+                        early_exit_reason = "repetition_guard"
+                        break
+                    if action == "coach":
+                        repetition_coached = True
+                        coach_msg = self._h["Message"].from_role_and_content(
+                            self.Role.USER,
+                            "You are repeating prior reasoning. Do not restate. "
+                            "Either (1) run a materially different Python/Z3 check, or "
+                            "(2) give final answer as \\boxed{n} now.",
+                        )
+                        conversation.messages = conversation.messages + [coach_msg]
+                        continue
 
                 if final_answer is not None or not token_buf:
                     break
@@ -1234,17 +1361,41 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                     if boxed_ans is not None:
                         final_answer = boxed_ans
                         extraction_rule = boxed_rule
+                        early_exit_reason = "final_channel_boxed"
                     else:
                         fallback_ans, fallback_rule = self._extractor.extract_int_fallback_with_rule(
                             last_msg.content[0].text
                         )
                         final_answer = fallback_ans
                         extraction_rule = fallback_rule
+                        if final_answer is not None:
+                            early_exit_reason = "final_channel_fallback"
                     break
 
                 if getattr(last_msg, "recipient", None) in ("python", "z3"):
                     python_calls += 1
                     tool_call_text = str(last_msg.content[0].text or "")
+                    norm_tool_call = self._normalize_repetition_text(
+                        tool_call_text, tail_chars=2000
+                    )
+                    if norm_tool_call and recent_tool_call_norm == norm_tool_call:
+                        tool_repeat_streak += 1
+                    else:
+                        tool_repeat_streak = 0
+                    recent_tool_call_norm = norm_tool_call
+
+                    action = self._repetition_watchdog_action(
+                        assistant_repetition_streak=assistant_repetition_streak,
+                        tool_repeat_streak=tool_repeat_streak,
+                        coached=repetition_coached,
+                    )
+                    if action == "abort":
+                        last_error = (
+                            "[REPETITION_GUARD] Aborted attempt due to repeated tool-call pattern."
+                        )
+                        early_exit_reason = "repetition_guard"
+                        break
+
                     transcript_calls.append(tool_call_text)
                     if capture_full_reasoning and tool_call_text:
                         full_reasoning_parts.append("[TOOL_CALL]\n" + tool_call_text)
@@ -1265,6 +1416,13 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                         last_error = resp_text[:500]
 
                     conversation.messages = conversation.messages + list(tool_resp)
+
+                    marker_ans, marker_rule = self._extract_tool_final_answer(resp_text)
+                    if marker_ans is not None:
+                        final_answer = marker_ans
+                        extraction_rule = marker_rule
+                        early_exit_reason = "tool_final_marker"
+                        break
 
         except Exception as exc:  # noqa: BLE001
             if last_error is None:
@@ -1287,12 +1445,15 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
             if boxed_ans is not None:
                 final_answer = boxed_ans
                 extraction_rule = boxed_rule
+                early_exit_reason = "tail_boxed"
             else:
                 fallback_ans, fallback_rule = self._extractor.extract_int_fallback_with_rule(
                     full
                 )
                 final_answer = fallback_ans
                 extraction_rule = fallback_rule
+                if final_answer is not None:
+                    early_exit_reason = "tail_fallback"
 
         mean_ent = self._compute_mean_entropy(logprobs_buf)
         full_reasoning_text = None
@@ -1303,6 +1464,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
             attempt=attempt_index + 1,
             answer=final_answer,
             extraction_rule=extraction_rule,
+            early_exit_reason=early_exit_reason,
             stats=AttemptStats(
                 token_count=total_tokens,
                 python_calls=python_calls,
