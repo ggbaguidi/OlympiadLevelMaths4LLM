@@ -25,6 +25,12 @@ def test_extract_int_fallback_rejects_out_of_range_latex_wrapped_int() -> None:
     assert extractor.extract_int_fallback(text) is None
 
 
+def test_extract_int_fallback_parses_thus_answer_should_be_phrase() -> None:
+    extractor = AnswerExtractor(strict_fallback=True)
+    text = "Thus the answer should be 8687."
+    assert extractor.extract_int_fallback(text) == 8687
+
+
 @pytest.mark.parametrize(
     "text,expected",
     [
