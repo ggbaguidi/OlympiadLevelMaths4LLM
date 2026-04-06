@@ -55,6 +55,7 @@ class AttemptSummary:
     last_error: str | None
     python_calls_text: list[str]
     python_outputs_text: list[str]
+    full_reasoning_text: str | None
 
 
 def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
@@ -256,6 +257,11 @@ def _parse_attempt(ev: dict[str, Any]) -> AttemptSummary:
         ),
         python_calls_text=[str(x) for x in calls_text if x is not None],
         python_outputs_text=[str(x) for x in outs_text if x is not None],
+        full_reasoning_text=(
+            str(ev.get("full_reasoning_text"))
+            if ev.get("full_reasoning_text") is not None
+            else None
+        ),
     )
 
 
@@ -309,6 +315,8 @@ def print_attempts_for_problem(
     *,
     max_attempts: int = 50,
     show_python: bool = False,
+    show_reasoning: bool = False,
+    reasoning_chars: int = 1200,
     snippet_chars: int = 300,
 ) -> None:
     attempts = attempts_by_pid.get(pid, [])
@@ -334,6 +342,32 @@ def print_attempts_for_problem(
             if a.python_outputs_text:
                 out = a.python_outputs_text[-1][:snippet_chars]
                 print(f"  last_py_out: {out}")
+        if show_reasoning and a.full_reasoning_text:
+            reasoning = a.full_reasoning_text[: max(1, int(reasoning_chars))]
+            print("  full_reasoning_preview:")
+            for line in reasoning.splitlines()[:80]:
+                print(f"    {line}")
+
+
+def export_full_reasoning_for_problem(
+    pid: str,
+    attempts_by_pid: dict[str, list[AttemptSummary]],
+    out_dir: Path,
+) -> int:
+    attempts = attempts_by_pid.get(pid, [])
+    if not attempts:
+        return 0
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    exported = 0
+    for a in attempts:
+        txt = str(a.full_reasoning_text or "")
+        if not txt:
+            continue
+        p = out_dir / f"{pid}_attempt{int(a.attempt):02d}.txt"
+        p.write_text(txt, encoding="utf-8")
+        exported += 1
+    return exported
 
 
 def print_report(
@@ -430,6 +464,23 @@ def main() -> None:
         action="store_true",
         help="With --show-attempts, include a short snippet of last python code/output.",
     )
+    ap.add_argument(
+        "--show-reasoning",
+        action="store_true",
+        help="With --show-attempts, include a preview of full prompt→end reasoning text.",
+    )
+    ap.add_argument(
+        "--reasoning-chars",
+        type=int,
+        default=1200,
+        help="Preview chars for --show-reasoning (default: 1200).",
+    )
+    ap.add_argument(
+        "--dump-reasoning-dir",
+        type=str,
+        default="",
+        help="With --show-attempts, export each attempt full reasoning to this directory.",
+    )
     args = ap.parse_args()
 
     trace_path = Path(args.trace)
@@ -452,7 +503,17 @@ def main() -> None:
                 attempts_by_pid,
                 max_attempts=args.max_attempts,
                 show_python=bool(args.show_python),
+                show_reasoning=bool(args.show_reasoning),
+                reasoning_chars=args.reasoning_chars,
             )
+            if args.dump_reasoning_dir:
+                out_dir = Path(args.dump_reasoning_dir)
+                n = export_full_reasoning_for_problem(
+                    args.problem_id,
+                    attempts_by_pid,
+                    out_dir,
+                )
+                print(f"Exported {n} reasoning files to {out_dir}")
 
 
 if __name__ == "__main__":

@@ -905,6 +905,15 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
         if remaining > 0:
             text_payload = self._truncate(result.output_text, remaining)
 
+        full_reasoning_payload = None
+        if bool(getattr(self.cfg, "trace_full_reasoning_enabled", False)):
+            fr = str(getattr(result, "full_reasoning_text", "") or "")
+            max_chars = int(getattr(self.cfg, "trace_full_reasoning_max_chars", 0) or 0)
+            if max_chars > 0 and len(fr) > max_chars:
+                keep = max(0, max_chars - 3)
+                fr = ("..." + fr[-keep:]) if keep > 0 else ""
+            full_reasoning_payload = fr
+
         self._trace.record(
             {
                 "event": "attempt_end",
@@ -922,6 +931,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 "python_calls_text": calls,
                 "python_outputs_text": outs,
                 "output_text": text_payload,
+                "full_reasoning_text": full_reasoning_payload,
             }
         )
 
@@ -1005,6 +1015,25 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
         final_answer, logprobs_buf = None, []
         text_tail, transcript_calls, transcript_outs = [], [], []
         deadline_exceeded = False
+        capture_full_reasoning = bool(
+            getattr(self.cfg, "trace_full_reasoning_enabled", False)
+        )
+        full_reasoning_parts: list[str] = []
+
+        if capture_full_reasoning:
+            full_reasoning_parts.append(
+                "[ATTEMPT_META]\n"
+                f"attempt={attempt_index + 1}\n"
+                f"tag={attempt_tag or ''}"
+            )
+            full_reasoning_parts.append(
+                "[PROMPT_DEVELOPER]\n" + str(developer_prompt or "")
+            )
+            full_reasoning_parts.append("[PROMPT_USER]\n" + str(problem or ""))
+            if continuation_context:
+                full_reasoning_parts.append(
+                    "[CONTINUATION_CONTEXT]\n" + str(continuation_context)
+                )
 
         attempt_seed = (self.cfg.seed + attempt_index) ** 2
         temp = self.cfg.temperature if temperature is None else temperature
@@ -1153,6 +1182,13 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                     if stream is not None:
                         stream.close()
 
+                if capture_full_reasoning and text_buf:
+                    assistant_raw = "".join(text_buf).strip()
+                    if assistant_raw:
+                        full_reasoning_parts.append(
+                            "[ASSISTANT_RAW]\n" + assistant_raw
+                        )
+
                 if final_answer is not None or not token_buf:
                     break
 
@@ -1183,6 +1219,11 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 last_msg = new_msgs[-1]
 
                 if getattr(last_msg, "channel", None) == "final":
+                    if capture_full_reasoning:
+                        with contextlib.suppress(Exception):
+                            full_reasoning_parts.append(
+                                "[ASSISTANT_FINAL]\n" + str(last_msg.content[0].text or "")
+                            )
                     final_answer = self._extractor.extract_boxed_int(
                         last_msg.content[0].text
                     ) or self._extractor.extract_int_fallback(last_msg.content[0].text)
@@ -1190,10 +1231,15 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
 
                 if getattr(last_msg, "recipient", None) in ("python", "z3"):
                     python_calls += 1
-                    transcript_calls.append(str(last_msg.content[0].text or ""))
+                    tool_call_text = str(last_msg.content[0].text or "")
+                    transcript_calls.append(tool_call_text)
+                    if capture_full_reasoning and tool_call_text:
+                        full_reasoning_parts.append("[TOOL_CALL]\n" + tool_call_text)
                     tool_resp = local_tool.process_sync_plus(last_msg)
                     resp_text = str(tool_resp[0].content[0].text or "")
                     transcript_outs.append(resp_text)
+                    if capture_full_reasoning and resp_text:
+                        full_reasoning_parts.append("[TOOL_OUTPUT]\n" + resp_text)
 
                     if (
                         resp_text.startswith("[ERROR]")
@@ -1210,6 +1256,10 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
         except Exception as exc:  # noqa: BLE001
             if last_error is None:
                 last_error = f"[INTERNAL_ERROR] {type(exc).__name__}: {exc}"[:500]
+            if capture_full_reasoning:
+                full_reasoning_parts.append(
+                    f"[INTERNAL_ERROR]\n{type(exc).__name__}: {exc}"
+                )
         finally:
             if sandbox:
                 if self.cfg.sandbox_reset_between_attempts:
@@ -1225,6 +1275,9 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
             ) or self._extractor.extract_int_fallback(full)
 
         mean_ent = self._compute_mean_entropy(logprobs_buf)
+        full_reasoning_text = None
+        if capture_full_reasoning and full_reasoning_parts:
+            full_reasoning_text = "\n\n".join(full_reasoning_parts)
 
         return AttemptResult(
             attempt=attempt_index + 1,
@@ -1239,6 +1292,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 last_error=last_error,
             ),
             output_text="".join(text_tail),
+            full_reasoning_text=full_reasoning_text,
             tag=attempt_tag,
             python_calls_text=tuple(transcript_calls),
             python_outputs_text=tuple(transcript_outs),

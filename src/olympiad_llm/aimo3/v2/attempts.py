@@ -35,6 +35,7 @@ class AttemptResult:
     answer: int | str | None
     stats: AttemptStats = AttemptStats()
     output_text: str | None = None
+    full_reasoning_text: str | None = None
     tag: str | None = None
     python_calls_text: tuple[str, ...] = ()
     python_outputs_text: tuple[str, ...] = ()

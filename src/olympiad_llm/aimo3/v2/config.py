@@ -93,6 +93,11 @@ class AIMO3Config:
     trace_attempts_enabled: bool = False
     # Hard cap on total characters stored per attempt transcript payload.
     trace_attempts_max_chars: int = 20000
+    # If enabled, persist a dedicated field with the model's full reasoning text
+    # (assistant output stream) for each attempt_end event.
+    trace_full_reasoning_enabled: bool = False
+    # Optional cap for full reasoning text field; <= 0 means unlimited.
+    trace_full_reasoning_max_chars: int = 0
 
     # If True, delete (reset) the trace file at solver startup.
     # Useful in notebooks where you want a fresh trace on each kernel restart.
@@ -450,6 +455,13 @@ class AIMO3Config:
         trace_attempts_max_chars = _env_int(
             "AIMO3_TRACE_ATTEMPTS_MAX_CHARS", AIMO3Config.trace_attempts_max_chars
         )
+        trace_full_reasoning_enabled = os.getenv(
+            "AIMO3_TRACE_FULL_REASONING", "0"
+        ).strip().lower() not in {"0", "false", "no"}
+        trace_full_reasoning_max_chars = _env_int(
+            "AIMO3_TRACE_FULL_REASONING_MAX_CHARS",
+            AIMO3Config.trace_full_reasoning_max_chars,
+        )
         trace_env_packages = (
             os.getenv("AIMO3_TRACE_ENV_PACKAGES", AIMO3Config.trace_env_packages) or ""
         ).strip() or AIMO3Config.trace_env_packages
@@ -693,6 +705,8 @@ class AIMO3Config:
             trace_include_problem_text=trace_include_problem_text,
             trace_attempts_enabled=trace_attempts_enabled,
             trace_attempts_max_chars=trace_attempts_max_chars,
+            trace_full_reasoning_enabled=trace_full_reasoning_enabled,
+            trace_full_reasoning_max_chars=trace_full_reasoning_max_chars,
             trace_reset_on_start=trace_reset_on_start,
             trace_env_enabled=trace_env_enabled,
             trace_env_packages=trace_env_packages,
