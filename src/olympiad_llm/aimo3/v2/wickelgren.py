@@ -612,18 +612,23 @@ def augment_developer_prompt_with_meta(
     meta_learning_exploration: float = 1.0,
     meta_learning_similarity_threshold: float = 0.7,
     preferred_strategy: str | None = None,
+    include_strategy_card: bool = True,
 ) -> tuple[str, dict[str, Any]]:
-    card, strategy_meta = select_strategy(
-        int(attempt_index),
-        problem_text,
-        used_strategies,
-        meta_learning_enabled=bool(meta_learning_enabled),
-        meta_learning_experience_file=meta_learning_experience_file,
-        meta_learning_exploration=float(meta_learning_exploration),
-        meta_learning_similarity_threshold=float(meta_learning_similarity_threshold),
-        preferred_strategy=preferred_strategy,
-    )
-    strategy_block = render_strategy_card(card)
+    card = None
+    strategy_meta: dict[str, Any] = {}
+    strategy_block = ""
+    if include_strategy_card:
+        card, strategy_meta = select_strategy(
+            int(attempt_index),
+            problem_text,
+            used_strategies,
+            meta_learning_enabled=bool(meta_learning_enabled),
+            meta_learning_experience_file=meta_learning_experience_file,
+            meta_learning_exploration=float(meta_learning_exploration),
+            meta_learning_similarity_threshold=float(meta_learning_similarity_threshold),
+            preferred_strategy=preferred_strategy,
+        )
+        strategy_block = render_strategy_card(card)
 
     memory_block = ""
     memory_meta: dict[str, Any] = {}
@@ -664,10 +669,10 @@ def augment_developer_prompt_with_meta(
     extra = "\n\n".join(blocks)
     out = extra if not base_prompt else base_prompt.rstrip() + "\n\n" + extra
     meta = {
-        "card": card.name,
-        "strategy_selection_method": strategy_meta.get("method", "rotation"),
+        "card": (card.name if card is not None else ""),
+        "strategy_selection_method": strategy_meta.get("method", "disabled"),
         "strategy_exploration": strategy_meta.get("exploration", False),
-        "strategy_cluster": strategy_meta.get("cluster", "unknown"),
+        "strategy_cluster": strategy_meta.get("cluster", "disabled"),
         "agent_memory_used": bool(memory_block),
         "agent_memory_backend": str(memory_meta.get("backend", "")),
         "agent_memory_results": int(memory_meta.get("results_count", 0) or 0),

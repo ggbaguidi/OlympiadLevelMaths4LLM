@@ -241,6 +241,42 @@ def test_augment_developer_prompt_includes_agent_memory_when_enabled() -> None:
     assert meta["agent_memory_results"] == 2
 
 
+def test_build_attempt_prompt_skips_strategy_card_when_wickelgren_disabled() -> None:
+    class _MemoryStub:
+        def retrieve_for_problem(self, **kwargs):
+            _ = kwargs
+            return (
+                "[META_AGENT_MEMORY]\n[SKILL_MEMORY]\n1. [0.900] Exact modular arithmetic: reduce exactly.\n[/SKILL_MEMORY]\n[/META_AGENT_MEMORY]",
+                {
+                    "backend": "builtin",
+                    "results_count": 1,
+                    "skill_results_count": 1,
+                    "failure_results_count": 0,
+                    "avg_score": 0.9,
+                },
+            )
+
+    solver = object.__new__(AIMO3Solver)
+    solver.cfg = AIMO3Config(
+        system_prompt="full-prompt",
+        reasoning_framework_enabled=False,
+        wickelgren_strategies_enabled=False,
+        agent_memory_enabled=True,
+        meta_learning_enabled=False,
+    )
+    solver._wickelgren_retriever = None
+    solver._agent_memory_retriever = _MemoryStub()
+
+    prompt, tag, strategy = solver._build_attempt_prompt(
+        0, problem_text="Find the remainder modulo 7."
+    )
+
+    assert "[META_AGENT_MEMORY]" in prompt
+    assert "[META_STRATEGY_CARD]" not in prompt
+    assert tag is None
+    assert strategy is None
+
+
 def test_runtime_failure_memory_block_summarizes_recent_errors() -> None:
     solver = object.__new__(AIMO3Solver)
     results = [

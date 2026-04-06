@@ -760,11 +760,13 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 meta_learning_exploration=self.cfg.meta_learning_exploration,
                 meta_learning_similarity_threshold=self.cfg.meta_learning_similarity_threshold,
                 preferred_strategy=preferred_strategy,
+                include_strategy_card=self.cfg.wickelgren_strategies_enabled,
             )
             strat_name = (meta.get("card") or "").strip() or None
-            tag = f"wickelgren:{strat_name or 'unknown'}"
-            if meta.get("retriever_used"):
-                tag += f"|rag={meta.get('retriever_results', 0)}|rag_backend={meta.get('retriever_backend', 'unknown')}"
+            if strat_name:
+                tag = f"wickelgren:{strat_name}"
+                if meta.get("retriever_used"):
+                    tag += f"|rag={meta.get('retriever_results', 0)}|rag_backend={meta.get('retriever_backend', 'unknown')}"
         return dev_prompt, tag, strat_name
 
     @staticmethod
