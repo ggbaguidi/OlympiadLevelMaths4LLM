@@ -431,6 +431,81 @@ class AIMO3Solver:
             return 0.0
         return float(difflib.SequenceMatcher(a=a, b=b).ratio())
 
+    @staticmethod
+    def _detect_stream_suffix_repetition(
+        text: str,
+        *,
+        min_unit_chars: int = 4,
+        max_unit_chars: int = 80,
+        min_repeats: int = 6,
+        tail_chars: int = 1800,
+    ) -> tuple[str | None, int]:
+        raw = str(text or "")
+        if not raw or min_repeats < 2:
+            return None, 0
+
+        tail = raw[-max(0, int(tail_chars)) :]
+        if len(tail) < max(1, min_unit_chars * min_repeats):
+            return None, 0
+
+        best_unit: str | None = None
+        best_repeats = 0
+        max_len = min(max_unit_chars, len(tail) // min_repeats)
+
+        for unit_len in range(max(1, min_unit_chars), max_len + 1):
+            unit = tail[-unit_len:]
+            if not unit.strip():
+                continue
+            repeats = 1
+            idx = len(tail) - unit_len
+            while idx - unit_len >= 0 and tail[idx - unit_len : idx] == unit:
+                repeats += 1
+                idx -= unit_len
+            if repeats >= min_repeats and (
+                repeats > best_repeats
+                or (repeats == best_repeats and best_unit is not None and len(unit) > len(best_unit))
+            ):
+                best_unit = unit
+                best_repeats = repeats
+
+        return best_unit, best_repeats
+
+    @staticmethod
+    def _trim_repeated_suffix(text: str, unit: str | None, repeats: int, *, keep_repeats: int = 2) -> str:
+        raw = str(text or "")
+        u = str(unit or "")
+        if not raw or not u or repeats <= max(1, keep_repeats):
+            return raw
+        suffix = u * int(repeats)
+        if not raw.endswith(suffix):
+            return raw
+        return raw[: -len(suffix)] + (u * max(1, keep_repeats))
+
+    def _build_plain_assistant_message(self, assistant_text: str) -> list:
+        text = str(assistant_text or "").strip()
+        if not text:
+            return []
+        TextContent = self._h["TextContent"]
+        Author = self._h["Author"]
+        Message = self._h["Message"]
+        content = [TextContent(text=text)]
+        author = Author(role=self.Role.ASSISTANT, name="assistant")
+        return [Message(author=author, content=content)]
+
+    def _parse_completion_messages(self, token_buf: list[int], assistant_text: str) -> list:
+        new_msgs = None
+        strict = self._backend_name() != "llama_cpp"
+        if token_buf:
+            with contextlib.suppress(Exception):
+                new_msgs = self.encoding.parse_messages_from_completion_tokens(
+                    token_buf,
+                    self.Role.ASSISTANT,
+                    strict=strict,
+                )
+        if new_msgs:
+            return list(new_msgs)
+        return self._build_plain_assistant_message(assistant_text)
+
     def _repetition_watchdog_action(
         self,
         *,
@@ -1412,6 +1487,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
         assistant_repetition_streak = 0
         tool_repeat_streak = 0
         repetition_coached = False
+        stream_repetition_count = 0
         capture_full_reasoning = bool(
             getattr(self.cfg, "trace_full_reasoning_enabled", False)
         )
@@ -1498,6 +1574,9 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 token_buf: list[int] = []
                 text_buf: list[str] = []
                 stream = None
+                stream_repetition_unit: str | None = None
+                stream_repetition_repeats = 0
+                turn_text_tail_start = len(text_tail)
                 try:
                     if use_stream:
                         stream = self.client.completions.create(
@@ -1533,6 +1612,16 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                                 text_tail.append(new_text)
                                 if self.cfg.entropy_weighting_enabled and choice.logprobs:
                                     logprobs_buf.extend(choice.logprobs.top_logprobs or [])
+                                stream_repetition_unit, stream_repetition_repeats = (
+                                    self._detect_stream_suffix_repetition("".join(text_buf))
+                                )
+                                if stream_repetition_unit is not None:
+                                    last_error = (
+                                        "[REPETITION_GUARD] Intra-turn token loop detected near: "
+                                        f"{self._clip_single_line(stream_repetition_unit, max_chars=80)!r} "
+                                        f"x{stream_repetition_repeats}"
+                                    )[:500]
+                                    break
 
                             if self._can_try_stream_boxed_extraction(
                                 new_text, total_tokens
@@ -1564,6 +1653,9 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                             if new_tokens:
                                 token_buf.extend(new_tokens)
                                 total_tokens += len(new_tokens)
+                            stream_repetition_unit, stream_repetition_repeats = (
+                                self._detect_stream_suffix_repetition("".join(text_buf))
+                            )
 
                             if self._can_try_stream_boxed_extraction(
                                 new_text, total_tokens
@@ -1575,16 +1667,32 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                                     final_answer = ans
                                     extraction_rule = rule
                                     early_exit_reason = "stream_boxed"
+                            if stream_repetition_unit is not None:
+                                last_error = (
+                                    "[REPETITION_GUARD] Intra-turn token loop detected near: "
+                                    f"{self._clip_single_line(stream_repetition_unit, max_chars=80)!r} "
+                                    f"x{stream_repetition_repeats}"
+                                )[:500]
                 finally:
                     if stream is not None:
                         stream.close()
 
-                if capture_full_reasoning and text_buf:
-                    assistant_raw = "".join(text_buf).strip()
+                assistant_raw = "".join(text_buf).strip()
+                if assistant_raw and stream_repetition_unit is not None:
+                    assistant_raw = self._trim_repeated_suffix(
+                        assistant_raw,
+                        stream_repetition_unit,
+                        stream_repetition_repeats,
+                    ).strip()
+                    text_buf = [assistant_raw] if assistant_raw else []
+                    text_tail[turn_text_tail_start:] = [assistant_raw] if assistant_raw else []
+
+                if text_buf:
                     if assistant_raw:
-                        full_reasoning_parts.append(
-                            "[ASSISTANT_RAW]\n" + assistant_raw
-                        )
+                        if capture_full_reasoning:
+                            full_reasoning_parts.append(
+                                "[ASSISTANT_RAW]\n" + assistant_raw
+                            )
 
                     norm = self._normalize_repetition_text(assistant_raw)
                     min_chars = max(
@@ -1640,29 +1748,34 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                         conversation.messages = conversation.messages + [coach_msg]
                         continue
 
-                if final_answer is not None or not token_buf:
+                if stream_repetition_unit is not None and final_answer is None:
+                    stream_repetition_count += 1
+                    assistant_msgs = self._build_plain_assistant_message(assistant_raw)
+                    if assistant_msgs:
+                        conversation.messages = conversation.messages + assistant_msgs
+                    if stream_repetition_count >= 2:
+                        if last_error is None:
+                            last_error = (
+                                "[REPETITION_GUARD] Aborted attempt after repeated intra-turn token loops."
+                            )
+                        early_exit_reason = "repetition_guard"
+                        break
+                    coach_msg = self._h["Message"].from_role_and_content(
+                        self.Role.USER,
+                        "Your last response started looping tokens near: "
+                        f"{self._clip_single_line(stream_repetition_unit, max_chars=80)!r}. "
+                        "Continue only from the valid prefix. Do not repeat text. "
+                        "Either (1) run one decisive Python/Z3 computation now, "
+                        "(2) give one concise exact next step, or "
+                        "(3) return \\boxed{n} if the answer is already established.",
+                    )
+                    conversation.messages = conversation.messages + [coach_msg]
+                    continue
+
+                if final_answer is not None or (not token_buf and not assistant_raw):
                     break
 
-                new_msgs = None
-                if self._backend_name() == "llama_cpp":
-                    with contextlib.suppress(Exception):
-                        new_msgs = self.encoding.parse_messages_from_completion_tokens(
-                            token_buf, self.Role.ASSISTANT, strict=False
-                        )
-                    if not new_msgs:
-                        TextContent = self._h["TextContent"]
-                        Author = self._h["Author"]
-                        Message = self._h["Message"]
-                        assistant_text = "".join(text_buf).strip()
-                        content = (
-                            [TextContent(text=assistant_text)] if assistant_text else []
-                        )
-                        author = Author(role=self.Role.ASSISTANT, name="assistant")
-                        new_msgs = [Message(author=author, content=content)]
-                else:
-                    new_msgs = self.encoding.parse_messages_from_completion_tokens(
-                        token_buf, self.Role.ASSISTANT
-                    )
+                new_msgs = self._parse_completion_messages(token_buf, assistant_raw)
                 if not new_msgs:
                     break
 

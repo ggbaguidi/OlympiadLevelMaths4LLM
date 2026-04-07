@@ -657,6 +657,27 @@ def test_repetition_watchdog_action_coach_then_abort() -> None:
     )
 
 
+def test_detect_stream_suffix_repetition_finds_looping_suffix() -> None:
+    solver = object.__new__(AIMO3Solver)
+    text = "Now we need to compute 2^k mod 5^7. " + ("5^7 = " * 8)
+
+    unit, repeats = solver._detect_stream_suffix_repetition(text)
+
+    assert unit == "5^7 = "
+    assert repeats == 8
+
+
+def test_trim_repeated_suffix_keeps_small_valid_prefix() -> None:
+    solver = object.__new__(AIMO3Solver)
+    text = "Now we need to compute 2^k mod 5^7. " + ("5^7 = " * 8)
+
+    trimmed = solver._trim_repeated_suffix(text, "5^7 = ", 8, keep_repeats=2)
+
+    assert trimmed.endswith("5^7 = 5^7 = ")
+    assert trimmed.count("5^7 = ") == 2
+    assert "Now we need to compute 2^k mod 5^7." in trimmed
+
+
 def test_extract_tool_final_answer_parses_marker() -> None:
     solver = object.__new__(AIMO3Solver)
     solver.cfg = AIMO3Config(
