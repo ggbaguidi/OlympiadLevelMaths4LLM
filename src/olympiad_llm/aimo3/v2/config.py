@@ -202,6 +202,16 @@ class AIMO3Config:
     # Optional comma-separated per-attempt temperature schedule, e.g.
     # "0.0,0.05,0.18,0.30". When empty, all attempts use `temperature`.
     portfolio_temperature_schedule: str = ""
+    # Optional System 2 controller: score partial trajectories, keep a diverse
+    # top set, and pass only the most promising branch states to later attempts.
+    system2_enabled: bool = False
+    system2_scout_attempts: int = 0
+    system2_top_branches: int = 2
+    system2_summary_max_chars: int = 2600
+    system2_prior_weight: float = 0.35
+    system2_process_reward_weight: float = 1.0
+    system2_diversity_weight: float = 0.30
+    system2_error_penalty_weight: float = 0.75
 
     # Sequential repair pass (modular, error-driven adaptation).
     # If enabled, the solver can run a few extra attempts sequentially when the
@@ -561,6 +571,37 @@ class AIMO3Config:
             )
             or ""
         ).strip()
+        system2_enabled = os.getenv(
+            "AIMO3_SYSTEM2_ENABLED", "0"
+        ).strip().lower() not in {"0", "false", "no"}
+        system2_scout_attempts = _env_int(
+            "AIMO3_SYSTEM2_SCOUT_ATTEMPTS",
+            AIMO3Config.system2_scout_attempts,
+        )
+        system2_top_branches = _env_int(
+            "AIMO3_SYSTEM2_TOP_BRANCHES",
+            AIMO3Config.system2_top_branches,
+        )
+        system2_summary_max_chars = _env_int(
+            "AIMO3_SYSTEM2_SUMMARY_MAX_CHARS",
+            AIMO3Config.system2_summary_max_chars,
+        )
+        system2_prior_weight = _env_float(
+            "AIMO3_SYSTEM2_PRIOR_WEIGHT",
+            AIMO3Config.system2_prior_weight,
+        )
+        system2_process_reward_weight = _env_float(
+            "AIMO3_SYSTEM2_PROCESS_REWARD_WEIGHT",
+            AIMO3Config.system2_process_reward_weight,
+        )
+        system2_diversity_weight = _env_float(
+            "AIMO3_SYSTEM2_DIVERSITY_WEIGHT",
+            AIMO3Config.system2_diversity_weight,
+        )
+        system2_error_penalty_weight = _env_float(
+            "AIMO3_SYSTEM2_ERROR_PENALTY_WEIGHT",
+            AIMO3Config.system2_error_penalty_weight,
+        )
         sequential_repair_enabled = os.getenv(
             "AIMO3_SEQUENTIAL_REPAIR_ENABLED", "1"
         ).strip().lower() not in {"0", "false", "no"}
@@ -803,6 +844,18 @@ class AIMO3Config:
             portfolio_scout_attempts=max(0, portfolio_scout_attempts),
             portfolio_summary_max_chars=max(400, int(portfolio_summary_max_chars)),
             portfolio_temperature_schedule=portfolio_temperature_schedule,
+            system2_enabled=system2_enabled,
+            system2_scout_attempts=max(0, system2_scout_attempts),
+            system2_top_branches=max(1, int(system2_top_branches)),
+            system2_summary_max_chars=max(600, int(system2_summary_max_chars)),
+            system2_prior_weight=max(0.0, float(system2_prior_weight)),
+            system2_process_reward_weight=max(
+                0.0, float(system2_process_reward_weight)
+            ),
+            system2_diversity_weight=max(0.0, float(system2_diversity_weight)),
+            system2_error_penalty_weight=max(
+                0.0, float(system2_error_penalty_weight)
+            ),
             sequential_repair_enabled=sequential_repair_enabled,
             sequential_repair_max_attempts=max(0, sequential_repair_max_attempts),
             sequential_repair_min_attempts=max(1, sequential_repair_min_attempts),

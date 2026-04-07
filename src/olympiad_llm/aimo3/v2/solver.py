@@ -177,6 +177,22 @@ class AttemptPortfolioProfile:
     instructions: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class System2BranchState:
+    attempt: int
+    tag: str | None
+    profile: str
+    answer: int | str | None
+    prior_score: float
+    process_score: float
+    support_score: float
+    penalty_score: float
+    total_score: float
+    artifact: str | None
+    summary: str
+    signals: tuple[str, ...]
+
+
 @dataclass
 class AIMO3Solver:
     cfg: AIMO3Config
@@ -424,6 +440,18 @@ class AIMO3Solver:
                 return float(temps[idx])
 
         return float(base_temperature)
+
+    @staticmethod
+    def _render_system2_policy() -> str:
+        lines = [
+            "[META_SYSTEM2_POLICY]",
+            "Optimize for a promising exact trajectory, not for locally plausible filler.",
+            "Leave behind reusable state: invariant, reduction, candidate formula, decisive computation, or exact tool artifact.",
+            "Prefer one short exact separator or computation over long prose.",
+            "If continuation state is provided, either complete one branch exactly or compute a quantity that distinguishes the branches.",
+            "[/META_SYSTEM2_POLICY]",
+        ]
+        return "\n".join(lines)
 
     @staticmethod
     def _text_similarity(a: str, b: str) -> float:
@@ -773,6 +801,358 @@ class AIMO3Solver:
             clipped = clipped.rsplit("\n", 1)[0]
         return clipped + "\n[/META_PORTFOLIO_STATE]"
 
+    def _system2_reasoning_summary(
+        self,
+        result: AttemptResult,
+        *,
+        max_lines: int = 2,
+        max_chars: int = 260,
+    ) -> str:
+        raw = str(result.output_text or result.full_reasoning_text or "").strip()
+        lines = [
+            re.sub(r"\s+", " ", line).strip()
+            for line in raw.splitlines()
+            if str(line).strip()
+        ]
+        if lines:
+            return self._clip_single_line(" | ".join(lines[-max_lines:]), max_chars=max_chars)
+        artifact = self._extract_useful_tool_output(result)
+        return self._clip_single_line(artifact, max_chars=max_chars) if artifact else ""
+
+    def _system2_prior_score(self, result: AttemptResult, *, has_text: bool) -> float:
+        ent = float(getattr(result.stats, "mean_entropy", _INF))
+        score = 0.12 if has_text else 0.0
+        if math.isfinite(ent) and ent >= 0:
+            score = max(score, 1.0 / (1.0 + ent))
+        tok = int(getattr(result.stats, "token_count", 0) or 0)
+        if tok > 0:
+            score += min(0.18, math.log1p(tok) / 36.0)
+        return min(1.0, max(0.0, score))
+
+    @staticmethod
+    def _system2_support_score(
+        result: AttemptResult,
+        answer_support: dict[int, dict[str, float | int]],
+    ) -> float:
+        if not isinstance(result.answer, int):
+            return 0.0
+        data = answer_support.get(result.answer)
+        if not data:
+            return 0.0
+        votes = int(data.get("votes", 0) or 0)
+        verified = int(data.get("verified", 0) or 0)
+        return min(0.60, 0.12 * votes + 0.08 * verified)
+
+    def _system2_process_reward(
+        self,
+        result: AttemptResult,
+        *,
+        summary: str,
+        artifact: str | None,
+    ) -> tuple[float, float, tuple[str, ...]]:
+        raw_text = " ".join(
+            part
+            for part in (
+                summary,
+                artifact or "",
+                self._clip_single_line(result.output_text, max_chars=600),
+            )
+            if part
+        )
+        text = self._normalize_repetition_text(raw_text, tail_chars=2400)
+        signals: list[str] = []
+
+        exact_terms = (
+            "mod",
+            "congru",
+            "invariant",
+            "valuation",
+            "factor",
+            "gcd",
+            "lcm",
+            "recurr",
+            "bijection",
+            "symmetr",
+            "coordinate",
+            "triangle",
+            "circle",
+            "angle",
+            "polynomial",
+            "root",
+            "reduce",
+            "suffices",
+            "exact",
+            "count",
+            "case",
+            "contradiction",
+            "divis",
+            "parity",
+        )
+        exact_hits = sum(1 for term in exact_terms if term in text)
+        process = min(1.0, 0.08 * exact_hits)
+        if exact_hits > 0:
+            signals.append("exact-reduction")
+
+        equation_hits = len(re.findall(r"(?:=|≡|->|=>|\bmod\b)", text))
+        if equation_hits > 0:
+            process += min(0.25, 0.04 * equation_hits)
+            signals.append("equational-state")
+
+        if int(getattr(result.stats, "python_calls", 0) or 0) > 0 and int(
+            getattr(result.stats, "python_errors", 0) or 0
+        ) == 0:
+            process += 0.35
+            signals.append("clean-python")
+
+        if artifact:
+            process += 0.18
+            signals.append("exact-artifact")
+
+        if isinstance(result.answer, int):
+            process += 0.10
+            signals.append("candidate-answer")
+
+        vague_terms = (
+            "maybe",
+            "probably",
+            "likely",
+            "perhaps",
+            "seems",
+            "guess",
+            "pattern",
+            "approximately",
+            "i think",
+        )
+        vague_hits = sum(text.count(term) for term in vague_terms)
+
+        penalty = min(0.35, 0.07 * vague_hits)
+        penalty += min(0.45, 0.22 * int(getattr(result.stats, "python_errors", 0) or 0))
+        penalty += min(0.45, 0.20 * int(getattr(result.stats, "timeout_count", 0) or 0))
+        if bool(getattr(result.stats, "deadline_exceeded", False)):
+            penalty += 0.25
+        if str(getattr(result, "early_exit_reason", "") or "") == "repetition_guard":
+            penalty += 0.35
+        if len(text) > 1800 and not bool(getattr(result.stats, "tool_verified", False)):
+            penalty += 0.18
+        if not summary and not artifact and result.answer is None:
+            penalty += 0.20
+
+        return min(2.0, process), min(2.0, penalty), tuple(signals[:5])
+
+    def _system2_state_from_result(
+        self,
+        result: AttemptResult,
+        answer_support: dict[int, dict[str, float | int]],
+    ) -> System2BranchState | None:
+        artifact = self._extract_useful_tool_output(result)
+        summary = self._system2_reasoning_summary(result)
+        has_text = bool(summary or artifact or result.answer is not None)
+        if not has_text:
+            return None
+
+        prior_score = self._system2_prior_score(result, has_text=has_text)
+        process_score, penalty_score, signals = self._system2_process_reward(
+            result,
+            summary=summary,
+            artifact=artifact,
+        )
+        support_score = self._system2_support_score(result, answer_support)
+        total_score = (
+            float(getattr(self.cfg, "system2_prior_weight", 0.35) or 0.35)
+            * prior_score
+            + float(
+                getattr(self.cfg, "system2_process_reward_weight", 1.0) or 1.0
+            )
+            * process_score
+            + support_score
+            - float(
+                getattr(self.cfg, "system2_error_penalty_weight", 0.75) or 0.75
+            )
+            * penalty_score
+        )
+
+        profile = (
+            self._portfolio_name_from_tag(result.tag)
+            or self._strategy_from_attempt_tag(result.tag)
+            or "default"
+        )
+        return System2BranchState(
+            attempt=int(result.attempt),
+            tag=result.tag,
+            profile=profile,
+            answer=result.answer,
+            prior_score=prior_score,
+            process_score=process_score,
+            support_score=support_score,
+            penalty_score=penalty_score,
+            total_score=total_score,
+            artifact=artifact,
+            summary=summary,
+            signals=signals,
+        )
+
+    def _select_system2_branch_states(
+        self,
+        states: list[System2BranchState],
+    ) -> list[System2BranchState]:
+        if not states:
+            return []
+
+        keep = max(
+            1,
+            min(
+                len(states),
+                int(getattr(self.cfg, "system2_top_branches", 2) or 2),
+            ),
+        )
+        diversity_weight = max(
+            0.0,
+            float(getattr(self.cfg, "system2_diversity_weight", 0.30) or 0.30),
+        )
+
+        remaining = sorted(states, key=lambda s: s.total_score, reverse=True)
+        selected: list[System2BranchState] = []
+        while remaining and len(selected) < keep:
+            best_idx = 0
+            best_score = -_INF
+            for idx, state in enumerate(remaining):
+                state_text = state.summary or state.artifact or str(state.answer or "")
+                similarity = 0.0
+                if selected and state_text:
+                    similarity = max(
+                        self._text_similarity(
+                            state_text,
+                            prev.summary or prev.artifact or str(prev.answer or ""),
+                        )
+                        for prev in selected
+                    )
+                adjusted = state.total_score + diversity_weight * (1.0 - similarity)
+                if adjusted > best_score:
+                    best_idx = idx
+                    best_score = adjusted
+            selected.append(remaining.pop(best_idx))
+        return selected
+
+    @staticmethod
+    def _merge_continuation_contexts(*blocks: str) -> str:
+        parts = [str(block or "").strip() for block in blocks if str(block or "").strip()]
+        return "\n\n".join(parts)
+
+    def _build_system2_continuation_context(self, results: list[AttemptResult]) -> str:
+        if not bool(getattr(self.cfg, "system2_enabled", False)):
+            return ""
+        if not results:
+            return ""
+
+        ranked = rank_candidates(
+            results,
+            filter_to_verified_if_any=False,
+            magnitude_aware=self.cfg.magnitude_aware_ranking_enabled,
+            ranking_strategy=self.cfg.ranking_strategy,
+        )
+        answer_support = {
+            int(ans): data
+            for ans, data in ranked
+            if isinstance(ans, int)
+        }
+        states = [
+            state
+            for state in (
+                self._system2_state_from_result(result, answer_support)
+                for result in results
+            )
+            if state is not None
+        ]
+        selected = self._select_system2_branch_states(states)
+        if not selected:
+            return ""
+
+        lines = [
+            "[META_SYSTEM2_STATE]",
+            "System 2 controller: optimize promising partial trajectories, not just locally likely prose.",
+        ]
+
+        if ranked:
+            lines.append("Current answer support:")
+            for idx, (ans, data) in enumerate(ranked[:3], start=1):
+                support_bits = [f"votes={int(data.get('votes', 0) or 0)}"]
+                verified = int(data.get("verified", 0) or 0)
+                if verified > 0:
+                    support_bits.append(f"clean_python={verified}")
+                lines.append(f"{idx}. {ans} ({', '.join(support_bits)})")
+
+        lines.append("Selected branch states:")
+        for idx, state in enumerate(selected, start=1):
+            score_bits = [
+                f"score={state.total_score:.2f}",
+                f"prior={state.prior_score:.2f}",
+                f"process={state.process_score:.2f}",
+            ]
+            if state.support_score > 0:
+                score_bits.append(f"support={state.support_score:.2f}")
+            if state.penalty_score > 0:
+                score_bits.append(f"penalty={state.penalty_score:.2f}")
+
+            label = f"{idx}. attempt {state.attempt} [{state.profile}]"
+            if isinstance(state.answer, int):
+                label += f" -> {state.answer}"
+            lines.append(label + f" ({', '.join(score_bits)})")
+            if state.signals:
+                lines.append("   signals: " + ", ".join(state.signals))
+            if state.artifact:
+                lines.append("   exact artifact: " + state.artifact)
+            if state.summary:
+                lines.append("   branch tail: " + state.summary)
+
+        lines.append("Exploit rules:")
+        lines.append("1. Treat each branch as a hypothesis, not ground truth.")
+        lines.append(
+            "2. Either complete one branch to FINAL_ANSWER=<n> or \\boxed{n}, or compute a short exact separator between branches."
+        )
+        lines.append(
+            "3. Prefer decisive Python/Z3 checks, invariant reductions, or algebraic elimination over new long prose."
+        )
+        lines.append("[/META_SYSTEM2_STATE]")
+
+        block = "\n".join(lines)
+        max_chars = max(
+            600,
+            int(getattr(self.cfg, "system2_summary_max_chars", 2600) or 2600),
+        )
+        if len(block) <= max_chars:
+            return block
+
+        clipped = block[: max(0, max_chars - 30)].rstrip()
+        if "\n" in clipped:
+            clipped = clipped.rsplit("\n", 1)[0]
+        return clipped + "\n[/META_SYSTEM2_STATE]"
+
+    def _build_controller_continuation_context(
+        self,
+        results: list[AttemptResult],
+        *,
+        problem_id: str | None = None,
+    ) -> str:
+        portfolio_context = self._build_portfolio_continuation_context(results)
+        system2_context = self._build_system2_continuation_context(results)
+        merged = self._merge_continuation_contexts(
+            portfolio_context,
+            system2_context,
+        )
+        if merged and problem_id:
+            self._trace.record(
+                {
+                    "event": "controller_context",
+                    "problem_id": problem_id,
+                    "portfolio_enabled": bool(
+                        getattr(self.cfg, "portfolio_enabled", False)
+                    ),
+                    "system2_enabled": bool(getattr(self.cfg, "system2_enabled", False)),
+                    "continuation_context": self._truncate(merged, 4000),
+                }
+            )
+        return merged
+
     @staticmethod
     def _attempt_has_failure_signal(result: AttemptResult) -> bool:
         st = result.stats
@@ -854,7 +1234,10 @@ class AIMO3Solver:
             runtime_block = self._build_runtime_failure_memory_block(results)
             if runtime_block and tag != "answer-only":
                 dev_p = self._append_runtime_failure_memory(dev_p, runtime_block)
-            continuation_context = self._build_portfolio_continuation_context(results)
+            continuation_context = self._build_controller_continuation_context(
+                results,
+                problem_id=problem_id,
+            )
 
             r = self._process_attempt(
                 user_input,
@@ -1230,6 +1613,13 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 else dev_prompt.rstrip() + "\n\n" + profile_block
             )
             tag = self._attach_portfolio_tag(tag, profile.name)
+        if bool(getattr(self.cfg, "system2_enabled", False)):
+            system2_block = self._render_system2_policy()
+            dev_prompt = (
+                system2_block
+                if not dev_prompt
+                else dev_prompt.rstrip() + "\n\n" + system2_block
+            )
         return dev_prompt, tag, strat_name
 
     @staticmethod
@@ -1955,6 +2345,8 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
             max(0, self.cfg.answer_only_attempts),
             attempts_for_prob,
         )
+        portfolio_enabled = bool(getattr(self.cfg, "portfolio_enabled", False))
+        system2_enabled = bool(getattr(self.cfg, "system2_enabled", False))
 
         def _build_task_specs(
             start_idx: int, end_idx: int
@@ -1991,16 +2383,27 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
         if not stopped_early and answer_only_count < attempts_for_prob:
             remaining_full_attempts = attempts_for_prob - answer_only_count
             scout_attempts = remaining_full_attempts
-            if bool(getattr(self.cfg, "portfolio_enabled", False)):
-                configured_scouts = int(
-                    getattr(self.cfg, "portfolio_scout_attempts", 0) or 0
-                )
-                scout_attempts = (
-                    min(remaining_full_attempts, configured_scouts)
-                    if configured_scouts > 0
-                    else min(remaining_full_attempts, 2)
-                )
-                scout_attempts = max(1, scout_attempts)
+            if portfolio_enabled or system2_enabled:
+                requested_scouts: list[int] = []
+                if portfolio_enabled:
+                    configured_portfolio_scouts = int(
+                        getattr(self.cfg, "portfolio_scout_attempts", 0) or 0
+                    )
+                    requested_scouts.append(
+                        min(remaining_full_attempts, configured_portfolio_scouts)
+                        if configured_portfolio_scouts > 0
+                        else min(remaining_full_attempts, 2)
+                    )
+                if system2_enabled:
+                    configured_system2_scouts = int(
+                        getattr(self.cfg, "system2_scout_attempts", 0) or 0
+                    )
+                    requested_scouts.append(
+                        min(remaining_full_attempts, configured_system2_scouts)
+                        if configured_system2_scouts > 0
+                        else min(remaining_full_attempts, 2)
+                    )
+                scout_attempts = max(1, max(requested_scouts or [remaining_full_attempts]))
 
             scout_end = answer_only_count + scout_attempts
             stopped_early = self._run_attempt_batch(
@@ -2015,7 +2418,10 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
             next_attempt_idx = scout_end
 
             if not stopped_early and scout_end < attempts_for_prob:
-                continuation_context = self._build_portfolio_continuation_context(results)
+                continuation_context = self._build_controller_continuation_context(
+                    results,
+                    problem_id=problem_id,
+                )
                 stopped_early = self._run_attempt_batch(
                     user_input=user_input,
                     task_specs=_build_task_specs(scout_end, attempts_for_prob),
@@ -2058,7 +2464,10 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                     key=lambda r: (r.stats.python_calls, r.stats.token_count),
                     default=None,
                 )
-                cont = self._build_portfolio_continuation_context(results)
+                cont = self._build_controller_continuation_context(
+                    results,
+                    problem_id=problem_id,
+                )
                 if not cont and best_w1 is not None:
                     cont = best_w1.output_text
 

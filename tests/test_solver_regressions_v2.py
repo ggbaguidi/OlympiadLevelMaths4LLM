@@ -299,6 +299,28 @@ def test_build_attempt_prompt_adds_portfolio_profile_when_enabled() -> None:
     assert strategy is None
 
 
+def test_build_attempt_prompt_adds_system2_policy_when_enabled() -> None:
+    solver = object.__new__(AIMO3Solver)
+    solver.cfg = AIMO3Config(
+        system_prompt="full-prompt",
+        reasoning_framework_enabled=False,
+        wickelgren_strategies_enabled=False,
+        system2_enabled=True,
+        meta_learning_enabled=False,
+    )
+    solver._wickelgren_retriever = None
+    solver._agent_memory_retriever = None
+
+    prompt, tag, strategy = solver._build_attempt_prompt(
+        0, problem_text="Find the remainder modulo 7."
+    )
+
+    assert "[META_SYSTEM2_POLICY]" in prompt
+    assert "promising exact trajectory" in prompt
+    assert tag is None
+    assert strategy is None
+
+
 def test_runtime_failure_memory_block_summarizes_recent_errors() -> None:
     solver = object.__new__(AIMO3Solver)
     results = [
@@ -613,6 +635,28 @@ def test_config_from_env_reads_portfolio_knobs(monkeypatch) -> None:
     assert cfg.portfolio_temperature_schedule == "0.0,0.1,0.2"
 
 
+def test_config_from_env_reads_system2_knobs(monkeypatch) -> None:
+    monkeypatch.setenv("AIMO3_SYSTEM2_ENABLED", "1")
+    monkeypatch.setenv("AIMO3_SYSTEM2_SCOUT_ATTEMPTS", "3")
+    monkeypatch.setenv("AIMO3_SYSTEM2_TOP_BRANCHES", "2")
+    monkeypatch.setenv("AIMO3_SYSTEM2_SUMMARY_MAX_CHARS", "2100")
+    monkeypatch.setenv("AIMO3_SYSTEM2_PRIOR_WEIGHT", "0.4")
+    monkeypatch.setenv("AIMO3_SYSTEM2_PROCESS_REWARD_WEIGHT", "1.2")
+    monkeypatch.setenv("AIMO3_SYSTEM2_DIVERSITY_WEIGHT", "0.35")
+    monkeypatch.setenv("AIMO3_SYSTEM2_ERROR_PENALTY_WEIGHT", "0.8")
+
+    cfg = AIMO3Config.from_env()
+
+    assert cfg.system2_enabled is True
+    assert cfg.system2_scout_attempts == 3
+    assert cfg.system2_top_branches == 2
+    assert cfg.system2_summary_max_chars == 2100
+    assert cfg.system2_prior_weight == 0.4
+    assert cfg.system2_process_reward_weight == 1.2
+    assert cfg.system2_diversity_weight == 0.35
+    assert cfg.system2_error_penalty_weight == 0.8
+
+
 def test_repetition_watchdog_action_coach_then_abort() -> None:
     solver = object.__new__(AIMO3Solver)
     solver.cfg = AIMO3Config(
@@ -676,6 +720,51 @@ def test_trim_repeated_suffix_keeps_small_valid_prefix() -> None:
     assert trimmed.endswith("5^7 = 5^7 = ")
     assert trimmed.count("5^7 = ") == 2
     assert "Now we need to compute 2^k mod 5^7." in trimmed
+
+
+def test_build_system2_continuation_context_prefers_exact_clean_branch() -> None:
+    solver = object.__new__(AIMO3Solver)
+    solver.cfg = AIMO3Config(
+        system2_enabled=True,
+        system2_top_branches=1,
+        system2_summary_max_chars=1600,
+        meta_learning_enabled=False,
+    )
+
+    results = [
+        AttemptResult(
+            attempt=1,
+            answer=17,
+            stats=AttemptStats(
+                token_count=300,
+                python_calls=1,
+                python_errors=0,
+            ),
+            output_text="Reduce modulo 17 and compute the multiplicative order exactly.",
+            python_outputs_text=("ord_17(2)=8 | candidate=17",),
+            tag="portfolio:direct_exact",
+        ),
+        AttemptResult(
+            attempt=2,
+            answer=None,
+            stats=AttemptStats(
+                token_count=450,
+                python_calls=0,
+                python_errors=1,
+                timeout_count=1,
+                last_error="[ERROR] timed out",
+            ),
+            output_text="Maybe the answer follows a pattern from small cases, so I guess it is around 19.",
+            tag="portfolio:alternative_reframe",
+        ),
+    ]
+
+    context = solver._build_system2_continuation_context(results)
+
+    assert "[META_SYSTEM2_STATE]" in context
+    assert "attempt 1 [direct_exact] -> 17" in context
+    assert "clean-python" in context
+    assert "attempt 2 [alternative_reframe]" not in context
 
 
 def test_extract_tool_final_answer_parses_marker() -> None:
@@ -844,6 +933,73 @@ def test_solve_problem_portfolio_second_wave_receives_compact_context() -> None:
     assert seen_contexts[1] is None
     assert seen_contexts[2] is not None
     assert "[META_PORTFOLIO_STATE]" in str(seen_contexts[2])
+
+
+def test_solve_problem_system2_second_wave_receives_controller_context() -> None:
+    solver = object.__new__(AIMO3Solver)
+    solver.cfg = AIMO3Config(
+        attempts=4,
+        workers=4,
+        answer_only_attempts=0,
+        early_stop=99,
+        early_stop_min_verified=0,
+        display_candidates=False,
+        trace_enabled=False,
+        wickelgren_strategies_enabled=False,
+        system2_enabled=True,
+        system2_scout_attempts=2,
+        system2_top_branches=1,
+        meta_learning_enabled=False,
+    )
+    solver._budget_tracker = _DummyBudget()
+    solver._trace = TraceRecorder(enabled=False, path="tmp_ignore.jsonl")
+    solver.problems_remaining = 50
+
+    seen_contexts: dict[int, str | None] = {}
+
+    def _adapt(self, problem: str) -> tuple[None, dict]:
+        _ = problem
+        return None, {}
+
+    def _process(
+        self,
+        problem: str,
+        developer_prompt: str,
+        attempt_index: int,
+        attempt_tag: str | None,
+        stop_event,
+        deadline: float,
+        **kwargs,
+    ) -> AttemptResult:
+        _ = problem
+        _ = developer_prompt
+        _ = attempt_tag
+        _ = stop_event
+        _ = deadline
+        seen_contexts[attempt_index] = kwargs.get("continuation_context")
+        return AttemptResult(
+            attempt=attempt_index + 1,
+            answer=17,
+            stats=AttemptStats(python_calls=1, python_errors=0),
+            output_text="Reduce modulo 17 and compute the multiplicative order exactly.",
+            python_outputs_text=(f"candidate={17}",),
+            tag=attempt_tag,
+        )
+
+    solver._adapt_problem_hyperparameters = MethodType(_adapt, solver)
+    solver._process_attempt = MethodType(_process, solver)
+    solver._display_candidates = MethodType(lambda self, attempts: None, solver)
+    solver._update_meta_learning_from_problem_outcome = MethodType(
+        lambda self, **kwargs: None, solver
+    )
+
+    final_answer = solver.solve_problem("Find the remainder when 2^100 is divided by 17.")
+
+    assert final_answer == 17
+    assert seen_contexts[0] is None
+    assert seen_contexts[1] is None
+    assert seen_contexts[2] is not None
+    assert "[META_SYSTEM2_STATE]" in str(seen_contexts[2])
 
 
 def test_agent_memory_file_loads_and_retrieves_from_traces() -> None:
