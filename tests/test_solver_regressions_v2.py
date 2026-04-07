@@ -276,6 +276,29 @@ def test_build_attempt_prompt_skips_strategy_card_when_wickelgren_disabled() -> 
     assert strategy is None
 
 
+def test_build_attempt_prompt_adds_portfolio_profile_when_enabled() -> None:
+    solver = object.__new__(AIMO3Solver)
+    solver.cfg = AIMO3Config(
+        system_prompt="full-prompt",
+        reasoning_framework_enabled=False,
+        wickelgren_strategies_enabled=False,
+        portfolio_enabled=True,
+        portfolio_scout_attempts=2,
+        meta_learning_enabled=False,
+    )
+    solver._wickelgren_retriever = None
+    solver._agent_memory_retriever = None
+
+    prompt, tag, strategy = solver._build_attempt_prompt(
+        2, problem_text="Find the remainder when N is divided by 7."
+    )
+
+    assert "[META_PORTFOLIO_PROFILE]" in prompt
+    assert "Alternative Reframing" in prompt
+    assert tag == "portfolio:alternative_reframe"
+    assert strategy is None
+
+
 def test_runtime_failure_memory_block_summarizes_recent_errors() -> None:
     solver = object.__new__(AIMO3Solver)
     results = [
@@ -576,6 +599,20 @@ def test_config_from_env_reads_fast_exit_knobs(monkeypatch) -> None:
     assert cfg.tool_final_answer_marker_enabled is False
 
 
+def test_config_from_env_reads_portfolio_knobs(monkeypatch) -> None:
+    monkeypatch.setenv("AIMO3_PORTFOLIO_ENABLED", "1")
+    monkeypatch.setenv("AIMO3_PORTFOLIO_SCOUT_ATTEMPTS", "2")
+    monkeypatch.setenv("AIMO3_PORTFOLIO_SUMMARY_MAX_CHARS", "1800")
+    monkeypatch.setenv("AIMO3_PORTFOLIO_TEMPERATURE_SCHEDULE", "0.0,0.1,0.2")
+
+    cfg = AIMO3Config.from_env()
+
+    assert cfg.portfolio_enabled is True
+    assert cfg.portfolio_scout_attempts == 2
+    assert cfg.portfolio_summary_max_chars == 1800
+    assert cfg.portfolio_temperature_schedule == "0.0,0.1,0.2"
+
+
 def test_repetition_watchdog_action_coach_then_abort() -> None:
     solver = object.__new__(AIMO3Solver)
     solver.cfg = AIMO3Config(
@@ -720,6 +757,72 @@ def test_should_run_sequential_repair_timeout_only_ignores_non_timeout_errors() 
         solver._should_run_sequential_repair(timeout_heavy, stopped_early=False)
         is True
     )
+
+
+def test_solve_problem_portfolio_second_wave_receives_compact_context() -> None:
+    solver = object.__new__(AIMO3Solver)
+    solver.cfg = AIMO3Config(
+        attempts=4,
+        workers=4,
+        answer_only_attempts=0,
+        early_stop=99,
+        early_stop_min_verified=0,
+        display_candidates=False,
+        trace_enabled=False,
+        wickelgren_strategies_enabled=False,
+        portfolio_enabled=True,
+        portfolio_scout_attempts=2,
+        portfolio_summary_max_chars=1200,
+        meta_learning_enabled=False,
+    )
+    solver._budget_tracker = _DummyBudget()
+    solver._trace = TraceRecorder(enabled=False, path="tmp_ignore.jsonl")
+    solver.problems_remaining = 50
+
+    seen_contexts: dict[int, str | None] = {}
+
+    def _adapt(self, problem: str) -> tuple[None, dict]:
+        _ = problem
+        return None, {}
+
+    def _process(
+        self,
+        problem: str,
+        developer_prompt: str,
+        attempt_index: int,
+        attempt_tag: str | None,
+        stop_event,
+        deadline: float,
+        **kwargs,
+    ) -> AttemptResult:
+        _ = problem
+        _ = developer_prompt
+        _ = attempt_tag
+        _ = stop_event
+        _ = deadline
+        seen_contexts[attempt_index] = kwargs.get("continuation_context")
+        return AttemptResult(
+            attempt=attempt_index + 1,
+            answer=17,
+            stats=AttemptStats(python_calls=1, python_errors=0),
+            python_outputs_text=(f"candidate={17}",),
+            tag=attempt_tag,
+        )
+
+    solver._adapt_problem_hyperparameters = MethodType(_adapt, solver)
+    solver._process_attempt = MethodType(_process, solver)
+    solver._display_candidates = MethodType(lambda self, attempts: None, solver)
+    solver._update_meta_learning_from_problem_outcome = MethodType(
+        lambda self, **kwargs: None, solver
+    )
+
+    final_answer = solver.solve_problem("Find the remainder when 2^100 is divided by 17.")
+
+    assert final_answer == 17
+    assert seen_contexts[0] is None
+    assert seen_contexts[1] is None
+    assert seen_contexts[2] is not None
+    assert "[META_PORTFOLIO_STATE]" in str(seen_contexts[2])
 
 
 def test_agent_memory_file_loads_and_retrieves_from_traces() -> None:

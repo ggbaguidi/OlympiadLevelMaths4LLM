@@ -170,6 +170,13 @@ def rank_candidates(
     )
 
 
+@dataclass(frozen=True)
+class AttemptPortfolioProfile:
+    name: str
+    title: str
+    instructions: tuple[str, ...]
+
+
 @dataclass
 class AIMO3Solver:
     cfg: AIMO3Config
@@ -233,6 +240,190 @@ class AIMO3Solver:
         if len(s) > tail_chars:
             s = s[-tail_chars:]
         return s
+
+    @staticmethod
+    def _clip_single_line(text: str | None, max_chars: int = 180) -> str:
+        s = re.sub(r"\s+", " ", str(text or "")).strip()
+        if len(s) <= max_chars:
+            return s
+        return s[: max(0, max_chars - 3)].rstrip() + "..."
+
+    @staticmethod
+    def _infer_problem_domain(problem_text: str | None) -> str:
+        text = (problem_text or "").lower()
+        if any(
+            token in text
+            for token in (
+                "triangle",
+                "circle",
+                "angle",
+                "tangent",
+                "circumcircle",
+                "incircle",
+                "perpendicular",
+                "geometry",
+            )
+        ):
+            return "geometry"
+        if any(
+            token in text
+            for token in (
+                "count",
+                "ways",
+                "permutation",
+                "arrangement",
+                "subset",
+                "coloring",
+                "tournament",
+            )
+        ):
+            return "combinatorics"
+        if any(
+            token in text
+            for token in (
+                "mod",
+                "modulo",
+                "remainder",
+                "divisible",
+                "prime",
+                "gcd",
+                "lcm",
+                "valuation",
+            )
+        ):
+            return "number_theory"
+        if any(
+            token in text
+            for token in ("sequence", "recurrence", "term", "a_n", "f_n", "recursive")
+        ):
+            return "recurrence"
+        return "general"
+
+    def _portfolio_profile_for_attempt(
+        self, attempt_index: int, problem_text: str | None = None
+    ) -> AttemptPortfolioProfile:
+        domain = self._infer_problem_domain(problem_text)
+        direct_exact = AttemptPortfolioProfile(
+            name="direct_exact",
+            title="Primary Exact Route",
+            instructions=(
+                "Find the shortest exact derivation first: invariant, recurrence, factorization, or exact reduction.",
+                "Do not open with broad exploration; commit quickly to one exact route and compute its decisive quantity.",
+            ),
+        )
+        constructive_program = AttemptPortfolioProfile(
+            name="constructive_program",
+            title="Program-First Exact Search",
+            instructions=(
+                "Translate the problem into the smallest exact program that can expose the real structure.",
+                "Use tiny cases only to discover a recurrence/state compression, then jump to the exact full computation.",
+            ),
+        )
+        alternative_reframe = AttemptPortfolioProfile(
+            name="alternative_reframe",
+            title="Alternative Reframing",
+            instructions=(
+                "Assume the first obvious formulation is a trap; seek a different model such as complement counting, reverse process, or different variables.",
+                "Do not repeat the default route unless it becomes exact and decisive very quickly.",
+            ),
+        )
+
+        if domain == "geometry":
+            specialist = AttemptPortfolioProfile(
+                name="geometry_specialist",
+                title="Geometry Reduction",
+                instructions=(
+                    "Normalize the figure aggressively: coordinates, vectors, directed lengths, or exact trig only if they simplify the geometry.",
+                    "Target one eliminable quantity and derive a compact exact relation before any large symbolic expansion.",
+                ),
+            )
+        elif domain == "combinatorics":
+            specialist = AttemptPortfolioProfile(
+                name="combinatorics_specialist",
+                title="Combinatorics Structure",
+                instructions=(
+                    "Model the objects with a recurrence, bijection, inclusion-exclusion, or generating-function style state description.",
+                    "Avoid raw enumeration unless it immediately collapses to a tiny state space.",
+                ),
+            )
+        elif domain in {"number_theory", "recurrence"}:
+            specialist = AttemptPortfolioProfile(
+                name="number_theory_specialist",
+                title="Arithmetic Structure",
+                instructions=(
+                    "Lean on valuations, congruences, multiplicative structure, or exact recurrence transformations.",
+                    "Prefer exact integer algorithms such as CRT, matrix powering, or divisor structure over symbolic wandering.",
+                ),
+            )
+        else:
+            specialist = AttemptPortfolioProfile(
+                name="algebra_specialist",
+                title="Algebraic Reduction",
+                instructions=(
+                    "Choose a substitution or normalization that reduces the problem to one exact polynomial, recurrence, or invariant.",
+                    "Keep the symbolic object small and compute only what decides the final integer.",
+                ),
+            )
+
+        profiles = (
+            direct_exact,
+            constructive_program,
+            alternative_reframe,
+            specialist,
+        )
+        return profiles[int(attempt_index) % len(profiles)]
+
+    @staticmethod
+    def _render_portfolio_profile(profile: AttemptPortfolioProfile) -> str:
+        lines = [
+            "[META_PORTFOLIO_PROFILE]",
+            "Use this as attempt-specific steering only.",
+            f"Profile: {profile.name}",
+            f"Focus: {profile.title}",
+        ]
+        for idx, item in enumerate(profile.instructions, start=1):
+            lines.append(f"{idx}. {item}")
+        lines.append("[/META_PORTFOLIO_PROFILE]")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _attach_portfolio_tag(tag: str | None, profile_name: str) -> str:
+        base = (tag or "").strip()
+        if not base:
+            return f"portfolio:{profile_name}"
+        return base + f"|profile={profile_name}"
+
+    @staticmethod
+    def _portfolio_name_from_tag(tag: str | None) -> str | None:
+        raw = (tag or "").strip()
+        if raw.startswith("portfolio:"):
+            return raw.split(":", 1)[-1].split("|", 1)[0].strip() or None
+        match = re.search(r"(?:^|\|)profile=([^|]+)", raw)
+        if match:
+            name = (match.group(1) or "").strip()
+            return name or None
+        return None
+
+    def _temperature_for_attempt(self, base_temperature: float, attempt_index: int) -> float:
+        answer_only_count = max(0, getattr(self.cfg, "answer_only_attempts", 0))
+        if attempt_index < answer_only_count:
+            return float(base_temperature)
+        relative_attempt_index = max(0, int(attempt_index) - int(answer_only_count))
+
+        raw = str(getattr(self.cfg, "portfolio_temperature_schedule", "") or "").strip()
+        if raw:
+            temps: list[float] = []
+            for part in raw.split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                with contextlib.suppress(Exception):
+                    temps.append(max(0.0, float(part)))
+            if temps:
+                idx = min(relative_attempt_index, len(temps) - 1)
+                return float(temps[idx])
+
+        return float(base_temperature)
 
     @staticmethod
     def _text_similarity(a: str, b: str) -> float:
@@ -397,6 +588,116 @@ class AIMO3Solver:
         base = str(dev_prompt or "").rstrip()
         return rb if not base else base + "\n\n" + rb
 
+    def _extract_useful_tool_output(self, result: AttemptResult) -> str | None:
+        for raw in reversed(tuple(result.python_outputs_text or ())):
+            s = str(raw or "").strip()
+            if not s:
+                continue
+            if (
+                s.startswith("[ERROR]")
+                or "Traceback" in s
+                or "Error:" in s
+                or "Exception" in s
+            ):
+                continue
+            lines = [line.strip() for line in s.splitlines() if line.strip()]
+            if not lines:
+                continue
+            sample = " | ".join(lines[-2:])
+            return self._clip_single_line(sample, 220)
+        return None
+
+    def _build_portfolio_continuation_context(self, results: list[AttemptResult]) -> str:
+        if not bool(getattr(self.cfg, "portfolio_enabled", False)):
+            return ""
+        if not results:
+            return ""
+
+        ranked = rank_candidates(
+            results,
+            filter_to_verified_if_any=False,
+            magnitude_aware=self.cfg.magnitude_aware_ranking_enabled,
+            ranking_strategy=self.cfg.ranking_strategy,
+        )
+
+        lines = [
+            "[META_PORTFOLIO_STATE]",
+            "Hints from earlier attempts. Treat them as hypotheses, not ground truth.",
+        ]
+
+        if ranked:
+            lines.append("Candidate answers so far:")
+            for idx, (ans, data) in enumerate(ranked[:3], start=1):
+                support_bits = [f"votes={data['votes']}"]
+                if int(data.get("verified", 0) or 0) > 0:
+                    support_bits.append(f"clean_python={data['verified']}")
+                if int(data.get("timeout_attempts", 0) or 0) > 0:
+                    support_bits.append(f"timeouts={data['timeout_attempts']}")
+                lines.append(f"{idx}. {ans} ({', '.join(support_bits)})")
+
+        useful_rows: list[str] = []
+        seen_outputs: set[str] = set()
+        scored_results = sorted(
+            results,
+            key=lambda r: (
+                int(bool(r.stats.tool_verified)),
+                int(bool(r.answer is not None)),
+                int(r.stats.python_calls),
+                -int(r.attempt),
+            ),
+            reverse=True,
+        )
+        for r in scored_results:
+            sample = self._extract_useful_tool_output(r)
+            if not sample or sample in seen_outputs:
+                continue
+            seen_outputs.add(sample)
+            profile = self._portfolio_name_from_tag(r.tag) or "default"
+            label = f"attempt {r.attempt} [{profile}]"
+            if isinstance(r.answer, int):
+                label += f" -> {r.answer}"
+            useful_rows.append(f"{len(useful_rows) + 1}. {label}: {sample}")
+            if len(useful_rows) >= 3:
+                break
+
+        if useful_rows:
+            lines.append("Useful exact artifacts:")
+            lines.extend(useful_rows)
+
+        failure_block = self._build_runtime_failure_memory_block(results, max_items=2)
+        if failure_block:
+            failure_lines = [
+                line
+                for line in failure_block.splitlines()
+                if line
+                and not line.startswith("[META_RUNTIME_FAILURE_MEMORY]")
+                and not line.startswith("[/META_RUNTIME_FAILURE_MEMORY]")
+                and not line.startswith("From recent attempts")
+            ]
+            if failure_lines:
+                lines.append("Failure modes already seen:")
+                lines.extend(failure_lines)
+
+        lines.append("Next attempt requirements:")
+        lines.append("1. Do not repeat prior code or prose verbatim.")
+        lines.append(
+            "2. Either derive the leading candidate by a materially different exact route or compute a quantity that decisively separates the candidates."
+        )
+        lines.append(
+            "3. Prefer a short exact program that prints the deciding quantity or FINAL_ANSWER=<n>."
+        )
+        lines.append("[/META_PORTFOLIO_STATE]")
+
+        block = "\n".join(lines)
+        max_chars = max(400, int(getattr(self.cfg, "portfolio_summary_max_chars", 2200) or 2200))
+        if len(block) <= max_chars:
+            return block
+
+        clipped = block[: max(0, max_chars - 32)].rstrip()
+        if "\n" in clipped:
+            clipped = clipped.rsplit("\n", 1)[0]
+        return clipped + "\n[/META_PORTFOLIO_STATE]"
+
     @staticmethod
     def _attempt_has_failure_signal(result: AttemptResult) -> bool:
         st = result.stats
@@ -478,6 +779,7 @@ class AIMO3Solver:
             runtime_block = self._build_runtime_failure_memory_block(results)
             if runtime_block and tag != "answer-only":
                 dev_p = self._append_runtime_failure_memory(dev_p, runtime_block)
+            continuation_context = self._build_portfolio_continuation_context(results)
 
             r = self._process_attempt(
                 user_input,
@@ -487,6 +789,7 @@ class AIMO3Solver:
                 threading.Event(),
                 deadline,
                 problem_id=problem_id,
+                continuation_context=continuation_context or None,
                 temperature=temperature,
             )
             results.append(r)
@@ -835,6 +1138,23 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 tag = f"wickelgren:{strat_name}"
                 if meta.get("retriever_used"):
                     tag += f"|rag={meta.get('retriever_results', 0)}|rag_backend={meta.get('retriever_backend', 'unknown')}"
+
+        if bool(getattr(self.cfg, "portfolio_enabled", False)):
+            portfolio_attempt_index = max(
+                0,
+                int(attempt_index)
+                - max(0, int(getattr(self.cfg, "answer_only_attempts", 0) or 0)),
+            )
+            profile = self._portfolio_profile_for_attempt(
+                portfolio_attempt_index, problem_text=problem_text
+            )
+            profile_block = self._render_portfolio_profile(profile)
+            dev_prompt = (
+                profile_block
+                if not dev_prompt
+                else dev_prompt.rstrip() + "\n\n" + profile_block
+            )
+            tag = self._attach_portfolio_tag(tag, profile.name)
         return dev_prompt, tag, strat_name
 
     @staticmethod
@@ -1009,7 +1329,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
         self,
         *,
         user_input: str,
-        task_specs: list[tuple[str, int, str | None]],
+        task_specs: list[tuple[str, int, str | None, float]],
         results: list[AttemptResult],
         deadline: float,
         problem_start: float,
@@ -1036,9 +1356,9 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                     deadline,
                     problem_id=problem_id,
                     continuation_context=continuation_context,
-                    temperature=temperature,
+                    temperature=(task_temp if temperature is None else temperature),
                 )
-                for dev_p, idx, tag in task_specs
+                for dev_p, idx, tag, task_temp in task_specs
             ]
 
             for f in as_completed(futures):
@@ -1525,8 +1845,8 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
 
         def _build_task_specs(
             start_idx: int, end_idx: int
-        ) -> list[tuple[str, int, str | None]]:
-            specs: list[tuple[str, int, str | None]] = []
+        ) -> list[tuple[str, int, str | None, float]]:
+            specs: list[tuple[str, int, str | None, float]] = []
             runtime_block = self._build_runtime_failure_memory_block(results)
             for i in range(start_idx, end_idx):
                 dev_p, tag, strat_n = self._build_attempt_prompt(
@@ -1537,7 +1857,7 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 )
                 if runtime_block and tag != "answer-only":
                     dev_p = self._append_runtime_failure_memory(dev_p, runtime_block)
-                specs.append((dev_p, i, tag))
+                specs.append((dev_p, i, tag, self._temperature_for_attempt(temp_for_prob, i)))
                 if used_strats and strat_n and strat_n not in used_strats:
                     used_strats.append(strat_n)
             return specs
@@ -1552,22 +1872,48 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                 problem_start=problem_start,
                 early_stop_target=early_stop_prob,
                 problem_id=problem_id,
-                temperature=temp_for_prob,
             )
 
+        next_attempt_idx = answer_only_count
         if not stopped_early and answer_only_count < attempts_for_prob:
+            remaining_full_attempts = attempts_for_prob - answer_only_count
+            scout_attempts = remaining_full_attempts
+            if bool(getattr(self.cfg, "portfolio_enabled", False)):
+                configured_scouts = int(
+                    getattr(self.cfg, "portfolio_scout_attempts", 0) or 0
+                )
+                scout_attempts = (
+                    min(remaining_full_attempts, configured_scouts)
+                    if configured_scouts > 0
+                    else min(remaining_full_attempts, 2)
+                )
+                scout_attempts = max(1, scout_attempts)
+
+            scout_end = answer_only_count + scout_attempts
             stopped_early = self._run_attempt_batch(
                 user_input=user_input,
-                task_specs=_build_task_specs(answer_only_count, attempts_for_prob),
+                task_specs=_build_task_specs(answer_only_count, scout_end),
                 results=results,
                 deadline=deadline,
                 problem_start=problem_start,
                 early_stop_target=early_stop_prob,
                 problem_id=problem_id,
-                temperature=temp_for_prob,
             )
+            next_attempt_idx = scout_end
 
-        next_attempt_idx = attempts_for_prob
+            if not stopped_early and scout_end < attempts_for_prob:
+                continuation_context = self._build_portfolio_continuation_context(results)
+                stopped_early = self._run_attempt_batch(
+                    user_input=user_input,
+                    task_specs=_build_task_specs(scout_end, attempts_for_prob),
+                    results=results,
+                    deadline=deadline,
+                    problem_start=problem_start,
+                    early_stop_target=early_stop_prob,
+                    problem_id=problem_id,
+                    continuation_context=continuation_context or None,
+                )
+                next_attempt_idx = attempts_for_prob
 
         if self._should_run_sequential_repair(
             results,
@@ -1599,7 +1945,9 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                     key=lambda r: (r.stats.python_calls, r.stats.token_count),
                     default=None,
                 )
-                cont = best_w1.output_text if best_w1 else None
+                cont = self._build_portfolio_continuation_context(results)
+                if not cont and best_w1 is not None:
+                    cont = best_w1.output_text
 
                 print(
                     f"[Adaptive] No answer found — granted {ext:.0f}s extension. Running second wave "
@@ -1619,7 +1967,6 @@ print(json.dumps({{'python': {{'version': sys.version[:400], 'executable': sys.e
                     early_stop_target=early_stop_prob,
                     problem_id=problem_id,
                     continuation_context=cont,
-                    temperature=temp_for_prob,
                 )
 
         time_used = time.time() - problem_start

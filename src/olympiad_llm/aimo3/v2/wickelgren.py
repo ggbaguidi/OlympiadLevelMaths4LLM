@@ -444,17 +444,17 @@ GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
     StrategyCard(
         name="brute_force_first",
         instructions=[
-            "Code tiny cases first.",
-            "Print key values and look for a pattern.",
-            "Make a conjecture, then test more cases.",
+            "Code only tiny exact cases first.",
+            "Use them to expose an invariant, recurrence, or obstruction.",
+            "Do not extrapolate a pattern unless you can turn it into an exact derivation.",
         ],
     ),
     StrategyCard(
         name="closed_form_hunt",
         instructions=[
             "Compute a few exact values.",
-            "Check standard sequences or formulas.",
-            "Verify the form on all sampled cases.",
+            "Check whether they match a standard exact formula, recurrence, or factorization.",
+            "Once a form appears, derive it cleanly before committing to the final answer.",
         ],
     ),
     StrategyCard(
@@ -469,40 +469,40 @@ GENERIC_STRATEGY_CARDS: list[StrategyCard] = [
         name="case_analysis",
         instructions=[
             "Split by parity, sign, or divisibility.",
-            "Solve each case and check with Python.",
-            "Recombine carefully and cover edge cases.",
+            "Solve each case exactly, preferably with one decisive quantity per case.",
+            "Recombine carefully and keep the coverage exhaustive.",
         ],
     ),
     StrategyCard(
         name="work_backwards",
         instructions=[
-            "Guess the answer structure first.",
-            "Work backward to necessary constraints.",
-            "Check candidates with Python.",
+            "Work backward from necessary structural constraints, not from a guessed numeric answer.",
+            "Use inverse transformations or extremal obstructions to narrow the possibilities.",
+            "Finish with an exact forward computation once the structure is pinned down.",
         ],
     ),
     StrategyCard(
         name="reduce_to_known",
         instructions=[
             "Rewrite it in known objects or formulas.",
-            "Use sympy helpers when helpful.",
-            "Test the reduction on small examples.",
+            "Use SymPy helpers only when the reduced object is already well defined.",
+            "Validate the reduction on tiny exact examples, then compute the full target exactly.",
         ],
     ),
     StrategyCard(
         name="generate_and_test",
         instructions=[
-            "Enumerate small valid objects.",
-            "Filter or count by the constraints.",
-            "Infer a rule from the small data.",
+            "Enumerate only a tiny exact state space or representative objects.",
+            "Turn the output into a recurrence, transfer matrix, or counting identity.",
+            "Use the generated data to derive the exact rule, not as the final justification.",
         ],
     ),
     StrategyCard(
         name="algebraic_manipulation",
         instructions=[
             "Use sympy to expand, factor, or solve.",
-            "Prefer exact algebra over long manual steps.",
-            "Check identities on small samples.",
+            "Prefer exact algebraic normalization over long symbolic wandering.",
+            "Check candidate identities on tiny exact samples, then finish with the exact reduction.",
         ],
     ),
 ]

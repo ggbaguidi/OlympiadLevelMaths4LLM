@@ -194,6 +194,14 @@ class AIMO3Config:
     # This prevents answer-only agreement from locking a final answer too early.
     early_stop_require_computed_support: bool = True
     answer_only_attempts: int = 0
+    # Optional portfolio mode: split the full-attempt wave into an initial scout
+    # batch and a later exploit batch that receives a compact continuation summary.
+    portfolio_enabled: bool = False
+    portfolio_scout_attempts: int = 0
+    portfolio_summary_max_chars: int = 2200
+    # Optional comma-separated per-attempt temperature schedule, e.g.
+    # "0.0,0.05,0.18,0.30". When empty, all attempts use `temperature`.
+    portfolio_temperature_schedule: str = ""
 
     # Sequential repair pass (modular, error-driven adaptation).
     # If enabled, the solver can run a few extra attempts sequentially when the
@@ -535,6 +543,24 @@ class AIMO3Config:
         answer_only_attempts = _env_int(
             "AIMO3_ANSWER_ONLY_ATTEMPTS", AIMO3Config.answer_only_attempts
         )
+        portfolio_enabled = os.getenv(
+            "AIMO3_PORTFOLIO_ENABLED", "0"
+        ).strip().lower() not in {"0", "false", "no"}
+        portfolio_scout_attempts = _env_int(
+            "AIMO3_PORTFOLIO_SCOUT_ATTEMPTS",
+            AIMO3Config.portfolio_scout_attempts,
+        )
+        portfolio_summary_max_chars = _env_int(
+            "AIMO3_PORTFOLIO_SUMMARY_MAX_CHARS",
+            AIMO3Config.portfolio_summary_max_chars,
+        )
+        portfolio_temperature_schedule = (
+            os.getenv(
+                "AIMO3_PORTFOLIO_TEMPERATURE_SCHEDULE",
+                AIMO3Config.portfolio_temperature_schedule,
+            )
+            or ""
+        ).strip()
         sequential_repair_enabled = os.getenv(
             "AIMO3_SEQUENTIAL_REPAIR_ENABLED", "1"
         ).strip().lower() not in {"0", "false", "no"}
@@ -773,6 +799,10 @@ class AIMO3Config:
             early_stop_min_verified=early_stop_min_verified,
             early_stop_require_computed_support=early_stop_require_computed_support,
             answer_only_attempts=max(0, answer_only_attempts),
+            portfolio_enabled=portfolio_enabled,
+            portfolio_scout_attempts=max(0, portfolio_scout_attempts),
+            portfolio_summary_max_chars=max(400, int(portfolio_summary_max_chars)),
+            portfolio_temperature_schedule=portfolio_temperature_schedule,
             sequential_repair_enabled=sequential_repair_enabled,
             sequential_repair_max_attempts=max(0, sequential_repair_max_attempts),
             sequential_repair_min_attempts=max(1, sequential_repair_min_attempts),
