@@ -767,6 +767,46 @@ def test_build_system2_continuation_context_prefers_exact_clean_branch() -> None
     assert "attempt 2 [alternative_reframe]" not in context
 
 
+def test_system2_prefers_multi_scale_exact_evidence_over_single_shortcut() -> None:
+    solver = object.__new__(AIMO3Solver)
+    solver.cfg = AIMO3Config(
+        system2_enabled=True,
+        system2_top_branches=1,
+        system2_summary_max_chars=1800,
+        meta_learning_enabled=False,
+    )
+
+    results = [
+        AttemptResult(
+            attempt=1,
+            answer=21818,
+            stats=AttemptStats(token_count=18000, python_calls=4, python_errors=0),
+            output_text="The small-n counts suggest a Catalan recursion for the number of valid orderings.",
+            python_outputs_text=(
+                "2 [(3, 2, 1, 0), (3, 1, 2, 0)]",
+                "56",
+                "121818",
+            ),
+            tag="portfolio:direct_exact",
+        ),
+        AttemptResult(
+            attempt=2,
+            answer=62140,
+            stats=AttemptStats(token_count=9000, python_calls=3, python_errors=0),
+            output_text="Any permutation of labels is possible, so N=(2^20)! and the task is just v5((2^20)!).",
+            python_outputs_text=("262140", "62140", "262140 1048575"),
+            tag="portfolio:constructive_program",
+        ),
+    ]
+
+    context = solver._build_system2_continuation_context(results)
+
+    assert "attempt 1 [direct_exact] -> 21818" in context
+    assert "multi-scale-evidence" in context
+    assert "2 [(3, 2, 1, 0), (3, 1, 2, 0)]" in context
+    assert "attempt 2 [constructive_program] -> 62140" not in context
+
+
 def test_extract_tool_final_answer_parses_marker() -> None:
     solver = object.__new__(AIMO3Solver)
     solver.cfg = AIMO3Config(

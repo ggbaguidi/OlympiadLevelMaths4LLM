@@ -31,6 +31,12 @@ def test_extract_int_fallback_parses_thus_answer_should_be_phrase() -> None:
     assert extractor.extract_int_fallback(text) == 8687
 
 
+def test_extract_int_fallback_parses_answer_is_indeed_phrase() -> None:
+    extractor = AnswerExtractor(strict_fallback=True)
+    text = "the answer is indeed 520,"
+    assert extractor.extract_int_fallback(text) == 520
+
+
 @pytest.mark.parametrize(
     "text,expected",
     [

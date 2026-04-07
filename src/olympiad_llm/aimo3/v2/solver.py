@@ -710,6 +710,52 @@ class AIMO3Solver:
             return self._clip_single_line(sample, 220)
         return None
 
+    def _extract_tool_evidence_bundle(
+        self,
+        result: AttemptResult,
+        *,
+        max_items: int = 3,
+        max_chars: int = 360,
+    ) -> str | None:
+        outputs = []
+        for raw in tuple(result.python_outputs_text or ()):
+            s = str(raw or "").strip()
+            if not s:
+                continue
+            if (
+                s.startswith("[ERROR]")
+                or "Traceback" in s
+                or "Error:" in s
+                or "Exception" in s
+            ):
+                continue
+            compact = self._clip_single_line(" | ".join(line.strip() for line in s.splitlines() if line.strip()), 220)
+            if compact:
+                outputs.append(compact)
+        if not outputs:
+            return None
+
+        def _score(sample: str) -> tuple[int, int]:
+            num_count = len(re.findall(r"-?\d+", sample))
+            structural = int(any(ch in sample for ch in "[](){}"))
+            small_case = int(bool(re.search(r"\b(?:2|6|14|24|56|70|84|210)\b", sample)))
+            final_marker = int("FINAL_ANSWER" in sample or "\\boxed{" in sample)
+            exact_words = int(
+                any(
+                    token in sample.lower()
+                    for token in ("catalan", "factor", "valuation", "recurr", "count")
+                )
+            )
+            return (
+                2 * structural + min(3, num_count) + 2 * small_case + exact_words - final_marker,
+                -len(sample),
+            )
+
+        ranked = sorted(dict.fromkeys(outputs), key=_score, reverse=True)
+        chosen = ranked[: max(1, int(max_items))]
+        bundle = " || ".join(chosen)
+        return self._clip_single_line(bundle, max_chars=max_chars)
+
     def _build_portfolio_continuation_context(self, results: list[AttemptResult]) -> str:
         if not bool(getattr(self.cfg, "portfolio_enabled", False)):
             return ""
@@ -816,7 +862,7 @@ class AIMO3Solver:
         ]
         if lines:
             return self._clip_single_line(" | ".join(lines[-max_lines:]), max_chars=max_chars)
-        artifact = self._extract_useful_tool_output(result)
+        artifact = self._extract_tool_evidence_bundle(result, max_items=2, max_chars=max_chars)
         return self._clip_single_line(artifact, max_chars=max_chars) if artifact else ""
 
     def _system2_prior_score(self, result: AttemptResult, *, has_text: bool) -> float:
@@ -907,6 +953,9 @@ class AIMO3Solver:
         if artifact:
             process += 0.18
             signals.append("exact-artifact")
+            if "||" in artifact:
+                process += 0.18
+                signals.append("multi-scale-evidence")
 
         if isinstance(result.answer, int):
             process += 0.10
@@ -944,7 +993,7 @@ class AIMO3Solver:
         result: AttemptResult,
         answer_support: dict[int, dict[str, float | int]],
     ) -> System2BranchState | None:
-        artifact = self._extract_useful_tool_output(result)
+        artifact = self._extract_tool_evidence_bundle(result)
         summary = self._system2_reasoning_summary(result)
         has_text = bool(summary or artifact or result.answer is not None)
         if not has_text:
